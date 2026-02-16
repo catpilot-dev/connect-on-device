@@ -1213,10 +1213,12 @@ async def handle_spa(request: web.Request) -> web.Response:
         if file_path.is_relative_to(static_dir) and file_path.is_file():
             return web.FileResponse(file_path)
 
-    # Fall back to index.html for SPA client-side routing
+    # Fall back to index.html for SPA client-side routing — no-cache so updates are immediate
     index = static_dir / "index.html"
     if index.exists():
-        return web.FileResponse(index)
+        resp = web.FileResponse(index)
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        return resp
     return web.Response(
         text="<html><body><h1>Connect on Device</h1>"
              "<p>Frontend not built yet.</p>"

@@ -20,6 +20,7 @@ export type ModelV2 = {
   Position: Pos
   LaneLines: Pos[]
   RoadEdges: Pos[]
+  AccelerationX?: number[]
 }
 
 export type DriverStateV2 = {

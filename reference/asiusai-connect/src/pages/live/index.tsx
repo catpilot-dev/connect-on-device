@@ -124,6 +124,7 @@ export const Component = () => {
               RoadEdges: d.roadEdges?.map((e: any) => ({
                 X: e.x, Y: e.y, Z: e.z,
               })) ?? [],
+              AccelerationX: d.acceleration?.x,
             },
             CarState: latestCarState.current ?? undefined,
             LiveCalibration: latestCalibration.current ?? undefined,

@@ -37,30 +37,78 @@ function hslToRgb(h: number, s: number, l: number): [number, number, number] {
   return [Math.round((r + m) * 255), Math.round((g + m) * 255), Math.round((b + m) * 255)]
 }
 
-// Path color from openpilot experimental mode formula (model_renderer.py:194-232)
+// Per-point color from openpilot (model_renderer.py:210-219)
 // hue = clamp(60 + accel*35, 0, 120): red(braking) → yellow(coast) → green(accel)
-function getPathColor(data: FrameData): [string, string] {
-  const aEgo = data.CarState?.AEgo ?? 0
-  const hue = Math.max(Math.min(60 + aEgo * 35, 120), 0)
-  const sat = Math.min(Math.abs(aEgo) * 1.5, 1.0)
-  const light = 0.95 - sat * 0.33
+function accelToRgba(accel: number, alpha: number): string {
+  const hue = Math.max(Math.min(60 + accel * 35, 120), 0)
+  const sat = Math.max(Math.min(Math.abs(accel) * 1.5, 1.0), 0.5)
+  const light = 0.82 - sat * 0.2
   const [r, g, b] = hslToRgb(hue, sat, light)
-  return [`rgba(${r}, ${g}, ${b}, 0.4)`, `rgba(${r}, ${g}, ${b}, 0.0)`]
+  return `rgba(${r}, ${g}, ${b}, ${alpha.toFixed(3)})`
 }
 
-function drawPathGradient(ctx: CanvasRenderingContext2D, points: [number, number][], nearColor: string, farColor: string) {
+// Draw path polygon with per-point acceleration coloring using vertical gradient
+// Uses safe 2-stop gradient per color band to avoid issues with multi-stop ordering
+function drawPathWithAccel(ctx: CanvasRenderingContext2D, points: [number, number][], accelX: number[]) {
+  if (points.length < 4) return
+
+  // Compute Y range across all polygon points
+  let minY = Infinity, maxY = -Infinity
+  for (const [, y] of points) {
+    if (y < minY) minY = y
+    if (y > maxY) maxY = y
+  }
+  const range = maxY - minY
+  if (range < 1) return
+
+  // Sample ~15 bands along the acceleration array
+  const nAccel = accelX.length
+  const bands = Math.min(nAccel, 15)
+  const bandStep = nAccel / bands
+
+  // Build gradient with one stop per band
+  const grad = ctx.createLinearGradient(0, maxY, 0, minY)
+  let lastT = -1
+  for (let b = 0; b < bands; b++) {
+    const idx = Math.min(Math.floor(b * bandStep), nAccel - 1)
+    const t = b / (bands - 1)  // 0=near, 1=far (evenly spaced)
+
+    // Avoid duplicate stops
+    if (t <= lastT) continue
+    lastT = t
+
+    // Alpha: solid near, fades far
+    let alpha: number
+    if (t <= 0.5) alpha = 0.7
+    else if (t >= 0.85) alpha = 0.0
+    else alpha = 0.7 * (1 - (t - 0.5) / 0.35)
+
+    grad.addColorStop(t, accelToRgba(accelX[idx], alpha))
+  }
+
+  // Draw the polygon with gradient fill
+  ctx.beginPath()
+  ctx.moveTo(points[0][0], points[0][1])
+  for (let i = 1; i < points.length; i++) ctx.lineTo(points[i][0], points[i][1])
+  ctx.closePath()
+  ctx.fillStyle = grad
+  ctx.fill()
+}
+
+// Fallback: single-color gradient when acceleration data is not available
+function drawPathFallback(ctx: CanvasRenderingContext2D, points: [number, number][], aEgo: number) {
   if (points.length < 3) return
 
-  let minY = Infinity,
-    maxY = -Infinity
+  let minY = Infinity, maxY = -Infinity
   for (const [, y] of points) {
     if (y < minY) minY = y
     if (y > maxY) maxY = y
   }
 
   const grad = ctx.createLinearGradient(0, maxY, 0, minY)
-  grad.addColorStop(0, nearColor)
-  grad.addColorStop(1, farColor)
+  grad.addColorStop(0, accelToRgba(aEgo, 0.7))
+  grad.addColorStop(0.5, accelToRgba(aEgo, 0.7))
+  grad.addColorStop(1, accelToRgba(aEgo, 0.0))
 
   ctx.beginPath()
   ctx.moveTo(points[0][0], points[0][1])
@@ -95,11 +143,19 @@ function renderFrame(ctx: CanvasRenderingContext2D, data: FrameData, T: number[]
     }
   }
 
-  // Draw driving path with acceleration-based coloring
+  // Draw driving path with per-point acceleration coloring (matches openpilot experimental mode)
   if (showPath) {
     const pathPoly = mapLineToPolygon(T, data.ModelV2.Position, 0.9, 1.22, maxIdx)
-    const [nearColor, farColor] = getPathColor(data)
-    drawPathGradient(ctx, pathPoly, nearColor, farColor)
+    const accel = data.ModelV2.AccelerationX
+    if (accel?.length) {
+      try {
+        drawPathWithAccel(ctx, pathPoly, accel)
+      } catch {
+        drawPathFallback(ctx, pathPoly, data.CarState?.AEgo ?? 0)
+      }
+    } else {
+      drawPathFallback(ctx, pathPoly, data.CarState?.AEgo ?? 0)
+    }
   }
 }
 
