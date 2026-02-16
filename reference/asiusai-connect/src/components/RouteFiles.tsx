@@ -1,0 +1,334 @@
+import { FileType, Route, SegmentFiles } from '../types'
+import { RefObject, useState } from 'react'
+import { FILE_INFO, parseRouteName, saveFile, getRouteUploadStatus, getSegmentUploadStatus, UploadStatus } from '../utils/helpers'
+import { api } from '../api'
+import { callAthena } from '../api/athena'
+import { useFiles, useShareSignature } from '../api/queries'
+import clsx from 'clsx'
+import { useRouteParams, useUploadProgress } from '../utils/hooks'
+import { Icon } from './Icon'
+import { ButtonBase } from './ButtonBase'
+import { HlsPlayerRef } from './HlsPlayer'
+import { IconButton } from './IconButton'
+
+type UploadProgressInfo = ReturnType<typeof useUploadProgress>
+
+const PRIORITY = 1
+const EXPIRES_IN_SECONDS = 60 * 60 * 24 * 7
+
+const uploadSegments = async (routeName: string, segments: number[], types: FileType[], files: SegmentFiles) => {
+  const { dongleId, routeId } = parseRouteName(routeName)
+
+  const paths: string[] = []
+  for (const i of segments) {
+    for (const type of types) {
+      const name = FILE_INFO[type].name
+      if (!files[type][i]) paths.push(`${routeId}--${i}/${name}`)
+    }
+  }
+
+  const presignedUrls = await api.device.uploadFiles.mutate({ params: { dongleId }, body: { expiry_days: 7, paths } })
+  if (presignedUrls.status !== 200) throw new Error()
+
+  if (paths.length === 0) return []
+  return await callAthena({
+    type: 'uploadFilesToUrls',
+    dongleId,
+    params: {
+      files_data: paths.map((fn, i) => ({
+        allow_cellular: false,
+        fn,
+        priority: PRIORITY,
+        ...presignedUrls.body[i],
+      })),
+    },
+    expiry: Math.floor(Date.now() / 1000) + EXPIRES_IN_SECONDS,
+  })
+}
+
+const FileAction = ({
+  icon,
+  label,
+  onClick,
+  href,
+  download,
+  loading,
+  uploadButton,
+}: {
+  icon: string
+  label: string
+  onClick?: () => void
+  href?: string
+  download?: string
+  loading?: number | boolean
+  uploadButton?: boolean
+}) => {
+  return (
+    <ButtonBase
+      onClick={onClick}
+      href={href}
+      download={download}
+      disabled={!!loading}
+      className={clsx(
+        'flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors text-xs font-medium disabled:opacity-50',
+        uploadButton ? 'bg-white text-black hover:bg-white/90' : 'bg-white/5 hover:bg-white/10 text-white',
+      )}
+    >
+      {loading ? (
+        <div
+          className={clsx('w-4 h-4 border-2 rounded-full animate-spin', uploadButton ? 'border-black/20 border-t-black' : 'border-white/20 border-t-white')}
+        />
+      ) : (
+        <Icon name={icon as any} className="text-[16px]" />
+      )}
+      <span>{label}</span>
+    </ButtonBase>
+  )
+}
+
+const Upload = ({
+  type,
+  files,
+  route,
+  segment,
+  uploadProgress,
+}: {
+  type: FileType
+  files: SegmentFiles
+  route: Route
+  segment: number
+  uploadProgress: UploadProgressInfo
+}) => {
+  const [isLoading, setIsLoading] = useState(false)
+
+  const disabled = segment === -1 ? files[type].every(Boolean) : !!files[type][segment]
+  if (disabled) return null
+
+  const fileName = FILE_INFO[type].name
+  const segments = segment === -1 ? Array.from({ length: files.length }, (_, i) => i) : [segment]
+  const isCurrentlyUploading = segments.some((s) => uploadProgress.isUploading(s, fileName))
+
+  const uploadingProgress = segments.map((s) => uploadProgress.getProgress(s, fileName)).filter((p): p is number => p !== undefined)
+  const avgProgress = uploadingProgress.length > 0 ? uploadingProgress.reduce((a, b) => a + b, 0) / uploadingProgress.length : undefined
+
+  return (
+    <FileAction
+      label={isCurrentlyUploading && avgProgress !== undefined ? `${Math.round(avgProgress * 100)}%` : 'Upload'}
+      icon={isCurrentlyUploading ? 'cloud_upload' : 'upload'}
+      uploadButton
+      loading={isLoading || isCurrentlyUploading}
+      onClick={async () => {
+        setIsLoading(true)
+        await uploadSegments(route.fullname, segments, [type], files)
+        setIsLoading(false)
+        uploadProgress.refetch()
+      }}
+    />
+  )
+}
+
+const QCameraDownload = () => {
+  const { routeName } = useRouteParams()
+  const [signature] = useShareSignature(routeName)
+  return (
+    <FileAction
+      label={FILE_INFO.qcameras.processed!}
+      icon="movie"
+      download={`${routeName}--${FILE_INFO.qcameras.name}`}
+      href={signature ? `${routeName.replace('/', '|')}/qcamera.m3u8` : undefined}
+    />
+  )
+}
+const FullRouteDownload = ({ type, files }: { type: FileType; files: SegmentFiles }) => {
+  const { dongleId, date, routeName } = useRouteParams()
+  const [progress, setProgress] = useState<Record<number, number>>({})
+
+  const values = Object.values(progress)
+  const loading = values.length ? values.reduce((a, b) => a + b, 0) / values.length : undefined
+  if (!files[type].every(Boolean)) return null
+
+  if (type === 'logs' || type === 'qlogs')
+    return <FileAction label={FILE_INFO[type].processed || 'View'} icon="open_in_new" href={`/${dongleId}/${date}/${type}`} />
+
+  if (type === 'qcameras') return <QCameraDownload />
+
+  return (
+    <FileAction
+      label={FILE_INFO[type].processed || 'Download'}
+      icon="movie"
+      loading={loading}
+      onClick={async () => {
+        // Download raw files without FFmpeg conversion
+        setProgress({})
+        const urls = files[type].filter(Boolean) as string[]
+        for (const url of urls) {
+          const a = document.createElement('a')
+          a.href = url
+          a.download = url.split('/').pop() || 'download'
+          a.click()
+        }
+      }}
+    />
+  )
+}
+
+const DownloadSegment = ({ type, files, segment }: { segment: number; type: FileType; files: SegmentFiles }) => {
+  const { routeName } = useRouteParams()
+  const file = files[type][segment]
+  if (!file) return null
+  return <FileAction label={FILE_INFO[type].raw} icon="raw_on" href={file} download={`${routeName}--${segment}--${FILE_INFO[type].name}`} />
+}
+
+const ProcessSegment = ({ type, files, segment }: { segment: number; type: FileType; files: SegmentFiles }) => {
+  const { dongleId, date } = useRouteParams()
+  const file = files[type][segment]
+
+  if (!file) return null
+  if (type === 'qcameras') return null
+
+  if (type === 'logs' || type === 'qlogs')
+    return <FileAction label={FILE_INFO[type].processed || 'View'} icon="open_in_new" href={`/${dongleId}/${date}/${type}?segment=${segment}`} />
+
+  // For HEVC files, offer raw download instead of FFmpeg conversion
+  return <FileAction label={FILE_INFO[type].raw} icon="download" href={file} download={file.split('/').pop()} />
+}
+
+const SegmentDetails = ({
+  segment,
+  files,
+  route,
+  setSegment,
+  uploadProgress,
+}: {
+  segment: number
+  files: SegmentFiles
+  route: Route
+  setSegment: (v: number) => void
+  uploadProgress: UploadProgressInfo
+}) => {
+  const isRoute = segment === -1
+
+  return (
+    <div className="flex flex-col gap-2">
+      {FileType.options.map((type) => {
+        const fileName = FILE_INFO[type].name
+        return (
+          <div key={`${type}-${segment}`} className="flex flex-col gap-2 py-2 relative">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium text-white/80">{FILE_INFO[type].label}</span>
+              <div className="flex gap-2 items-center">
+                {isRoute ? (
+                  <FullRouteDownload type={type} files={files} />
+                ) : (
+                  <>
+                    <DownloadSegment type={type} files={files} segment={segment} />
+                    <ProcessSegment type={type} files={files} segment={segment} />
+                  </>
+                )}
+                <Upload type={type} files={files} route={route} segment={segment} uploadProgress={uploadProgress} />
+              </div>
+              <div title="1" className="h-[3px] w-full absolute bottom-0 translate-y-1/2 rounded-full overflow-hidden flex">
+                {Array.from({ length: files.length }).map((_, i) => {
+                  const isSegmentUploading = uploadProgress.isUploading(i, fileName)
+                  const segmentProgress = uploadProgress.getProgress(i, fileName)
+                  return (
+                    <div
+                      key={i}
+                      title={isSegmentUploading ? `Segment ${i} - ${Math.round((segmentProgress ?? 0) * 100)}%` : `Segment ${i}`}
+                      onClick={() => setSegment(i)}
+                      className={clsx(
+                        'h-full cursor-pointer relative',
+                        !files[type][i] ? 'bg-white/80' : type.startsWith('q') ? 'bg-blue-400' : 'bg-green-400',
+                        segment !== i ? 'opacity-40' : 'opacity-80',
+                        isSegmentUploading && 'animate-upload-pulse bg-yellow-400',
+                      )}
+                      style={{ width: `${(1 / files.length) * 100}%` }}
+                    />
+                  )
+                })}
+              </div>
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+const getStatusColor = (status: UploadStatus) => {
+  return {
+    all: 'bg-green-500/20 text-green-400 border-green-500/30',
+    quantized: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
+    loading: 'bg-white/30 text-white/70 border-white/30',
+  }[status]
+}
+
+const SegmentGrid = ({ files, selectedSegment, onSelect }: { files: SegmentFiles; selectedSegment: number | null; onSelect: (i: number) => void }) => {
+  return (
+    <div className="flex flex-wrap gap-1.5 p-1">
+      <button
+        className={clsx(
+          'h-8 px-3 flex items-center justify-center rounded-lg text-xs font-bold border transition-all',
+          getStatusColor(getRouteUploadStatus(files)),
+          selectedSegment === -1 && 'ring-2 ring-white border-transparent bg-white text-black',
+        )}
+        onClick={() => onSelect(-1)}
+      >
+        All
+      </button>
+
+      {Array.from({ length: files.length }).map((_, i) => {
+        return (
+          <button
+            key={i}
+            className={clsx(
+              'h-8 w-8 flex items-center justify-center rounded-lg text-xs font-medium border transition-all',
+              getStatusColor(getSegmentUploadStatus(files, i)),
+              selectedSegment === i && 'ring-2 ring-white border-transparent bg-white text-black',
+            )}
+            onClick={() => onSelect(i)}
+          >
+            {i}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+export const RouteFiles = ({ route, className, playerRef }: { playerRef: RefObject<HlsPlayerRef | null>; route: Route; className?: string }) => {
+  const { dongleId } = useRouteParams()
+  const [files, { refetch, isRefetching }] = useFiles(route.fullname, route)
+  const [segment, _setSegment] = useState<number>(-1)
+  const setSegment = (value: number) => {
+    _setSegment(value)
+    if (value !== -1) playerRef.current?.seek(value * 60)
+  }
+
+  const routeId = route.fullname.split(/[|/]/)[1] || ''
+  const uploadProgress = useUploadProgress(dongleId, routeId, refetch)
+
+  return (
+    <div className={clsx('flex flex-col gap-2 bg-background-alt rounded-xl p-4', className)}>
+      <div className="flex items-center justify-between">
+        <h3 className="text-xs font-bold uppercase tracking-wider text-white/40">
+          Files
+          {uploadProgress.queue.length > 0 && <span className="ml-2 text-yellow-400 animate-pulse">({uploadProgress.queue.length} uploading)</span>}
+        </h3>
+        <IconButton
+          title="Refresh"
+          onClick={() => void refetch()}
+          name="refresh"
+          className={clsx('text-xl text-white/40 hover:text-white transition-colors', isRefetching && 'animate-spin')}
+        />
+      </div>
+      {files && (
+        <>
+          <SegmentGrid files={files} selectedSegment={segment} onSelect={setSegment} />
+
+          <SegmentDetails segment={segment} files={files} route={route} setSegment={setSegment} uploadProgress={uploadProgress} />
+        </>
+      )}
+    </div>
+  )
+}

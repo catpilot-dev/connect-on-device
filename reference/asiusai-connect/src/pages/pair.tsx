@@ -1,0 +1,133 @@
+import QrScanner from 'qr-scanner'
+
+import { ButtonBase } from '../components/ButtonBase'
+import { Icon } from '../components/Icon'
+import { TopAppBar } from '../components/TopAppBar'
+import { BackButton } from '../components/BackButton'
+
+import { useEffect, useRef } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useDevices } from '../api/queries'
+import { api } from '../api'
+
+const Scanning = () => {
+  let videoRef = useRef<HTMLVideoElement>(null)
+  const navigate = useNavigate()
+
+  useEffect(() => {
+    if (!videoRef.current) return
+    const qrScanner = new QrScanner(
+      videoRef.current,
+      (result) => {
+        const token = new URL(result.data).searchParams.get('pair')
+        navigate(`/pair?pair=${token}`)
+      },
+      {},
+    )
+    void qrScanner.start().catch((reason) => {
+      console.error('Error starting QR scanner', reason)
+      navigate(`/pair?error=QR code scanner failed`)
+    })
+    return () => qrScanner.destroy()
+  }, [videoRef.current])
+
+  return (
+    <div className="flex-1 flex flex-col items-center justify-center p-4 gap-8">
+      <div className="relative w-full max-w-sm aspect-square bg-black rounded-3xl overflow-hidden shadow-2xl border border-white/10">
+        <video className="w-full h-full object-cover" ref={videoRef} />
+        <div className="absolute inset-0 border-[2px] border-white/20 rounded-3xl pointer-events-none" />
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <div className="w-64 h-64 border-2 border-white/50 rounded-3xl relative">
+            <div className="absolute top-0 left-0 w-4 h-4 border-t-4 border-l-4 border-white -mt-1 -ml-1" />
+            <div className="absolute top-0 right-0 w-4 h-4 border-t-4 border-r-4 border-white -mt-1 -mr-1" />
+            <div className="absolute bottom-0 left-0 w-4 h-4 border-b-4 border-l-4 border-white -mb-1 -ml-1" />
+            <div className="absolute bottom-0 right-0 w-4 h-4 border-b-4 border-r-4 border-white -mb-1 -mr-1" />
+          </div>
+        </div>
+      </div>
+      <div className="flex flex-col items-center gap-2 text-center max-w-xs">
+        <h2 className="text-xl font-bold">Scan QR Code</h2>
+        <p className="text-sm text-white/60">Point your camera at the QR code displayed on your device screen.</p>
+      </div>
+    </div>
+  )
+}
+
+const getErrorMessage = (code: number) =>
+  ({
+    400: 'invalid request',
+    401: 'could not decode token - make sure your comma device is connected to the internet',
+    403: 'device paired with different owner - make sure you signed in with the correct account',
+    404: 'tried to pair invalid device',
+    417: 'pair token not true',
+  })[code] ?? 'unable to pair'
+
+const Pairing = ({ token }: { token: string }) => {
+  const navigate = useNavigate()
+  const [_, devices] = useDevices()
+
+  useEffect(() => {
+    const effect = async () => {
+      try {
+        const res = await api.devices.pair.mutate({ body: { pair_token: token } })
+        if (res.status !== 200) return navigate(`/pair?error=${getErrorMessage(res.status)}`)
+
+        navigate(`/${res.body.dongle_id}`)
+        devices.refetch()
+      } catch (error) {
+        console.error('Error pairing device', error)
+        navigate(`/pair?error=Checking the code failed`)
+      }
+    }
+    effect()
+  }, [token])
+
+  return (
+    <div className="min-h-screen w-full bg-background text-foreground flex flex-col items-center justify-center p-4">
+      <div className="bg-background-alt p-8 rounded-2xl shadow-xl border border-white/5 flex flex-col items-center gap-6 max-w-sm w-full">
+        <div className="relative">
+          <div className="absolute inset-0 bg-white/10 blur-xl rounded-full" />
+          <Icon name="autorenew" className="animate-spin text-white relative z-10 text-5xl" />
+        </div>
+        <div className="flex flex-col items-center gap-1 text-center">
+          <h2 className="text-xl font-bold">Pairing device...</h2>
+          <p className="text-sm text-white/60">Please wait while we verify your device.</p>
+        </div>
+      </div>
+    </div>
+  )
+}
+const Err = ({ error }: { error: string }) => {
+  const navigate = useNavigate()
+  return (
+    <div className="min-h-screen w-full bg-background text-foreground flex flex-col items-center justify-center p-4">
+      <div className="bg-background-alt p-8 rounded-2xl shadow-xl border border-white/5 flex flex-col items-center gap-6 max-w-sm w-full text-center">
+        <div className="w-16 h-16 rounded-full bg-red-500/10 flex items-center justify-center">
+          <Icon name="error" className="text-red-400 text-4xl" />
+        </div>
+        <div className="flex flex-col gap-2">
+          <h2 className="text-xl font-bold">Pairing Failed</h2>
+          <p className="text-sm text-white/60">{error}</p>
+        </div>
+        <ButtonBase onClick={() => navigate(`/pair`)} className="w-full py-3 rounded-xl bg-white text-black font-bold hover:bg-white/90 transition-colors">
+          Try Again
+        </ButtonBase>
+        <ButtonBase href="/" className="w-full py-3 rounded-xl bg-white/5 text-white font-medium hover:bg-white/10 transition-colors">
+          Cancel
+        </ButtonBase>
+      </div>
+    </div>
+  )
+}
+export const Component = () => {
+  const [params] = useSearchParams()
+  const token = params.get('pair')
+  const error = params.get('error')
+
+  return (
+    <div className="flex flex-col min-h-screen bg-background text-foreground">
+      <TopAppBar leading={<BackButton href="/" />}>Pair Device</TopAppBar>
+      {error ? <Err error={error} /> : token ? <Pairing token={token} /> : <Scanning />}
+    </div>
+  )
+}

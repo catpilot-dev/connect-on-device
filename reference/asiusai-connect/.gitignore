@@ -1,0 +1,59 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+bundle.yaml
+
+dist
+worker
+.output
+.vercel
+.netlify
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.js
+
+# testing
+/coverage
+
+# production
+stats.html
+
+# misc
+.DS_Store
+*.pem
+Thumbs.db
+
+# debug
+*.log*
+
+# local env files
+.env*.local
+
+# typescript
+*.tsbuildinfo
+
+# editors
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.iml
+*.swp
+.project
+.classpath
+*.launch
+.settings/
+
+out/
+
+output/
+__pycache__/
+screenshots/
+/openpilot
+qlog
+rlog
+qlog.zst
+rlog.zst
+build
+user-content/
+.env

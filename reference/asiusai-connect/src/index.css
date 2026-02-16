@@ -1,0 +1,63 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root,
+  .dark,
+  [data-theme="dark"] {
+    --color-primary: 81 255 0;
+    --color-primary-x: 36 43 97;
+    --color-primary-alt: 59 66 121;
+    --color-primary-alt-x: 223 224 255;
+
+    --color-secondary: 196 197 221;
+    --color-secondary-x: 45 47 66;
+    --color-secondary-alt: 67 69 89;
+    --color-secondary-alt-x: 224 225 249;
+
+    --color-tertiary: 168 210 147;
+    --color-tertiary-x: 21 56 9;
+    --color-tertiary-alt: 43 79 30;
+    --color-tertiary-alt-x: 195 239 173;
+
+    --color-error: 255 180 171;
+    --color-error-x: 105 0 5;
+    --color-error-alt: 147 0 10;
+    --color-error-alt-x: 255 218 214;
+
+    --color-background: 19 19 24;
+    --color-background-x: 228 225 233;
+    --color-background-alt: 27 27 33;
+    --color-background-alt-x: 199 197 208;
+  }
+
+  button {
+    /* revert user-agent style */
+    text-align: unset;
+  }
+}
+@layer utilities {
+  @keyframes shimmer {
+    100% {
+      transform: translateX(100%);
+    }
+  }
+}
+.skeleton-loader {
+  @apply relative isolate overflow-hidden;
+
+  &::after {
+    @apply absolute inset-0 bg-gradient-to-r from-transparent via-rose-100/10 to-transparent -translate-x-full animate-[shimmer_2s_infinite];
+    content: "";
+  }
+}
+
+select {
+  @apply bg-transparent rounded-md p-2;
+}
+
+html {
+  overflow-x: hidden;
+  width: 100vw;
+}

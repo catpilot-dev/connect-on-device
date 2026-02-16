@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "jsx": "preserve",
+    "jsxImportSource": "react",
+    "allowJs": true,
+    "noEmit": true,
+    "strict": true,
+    "types": ["bun", "vite/client", "vite-plugin-pwa/client", "vite-plugin-pwa/pwa-assets"],
+    "skipLibCheck": true,
+    "incremental": true
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "templates/**/*.ts", "templates/**/*.tsx"],
+  "exclude": ["node_modules", "dist"]
+}
