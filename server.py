@@ -1185,6 +1185,20 @@ async def handle_auth(request: web.Request) -> web.Response:
     return web.json_response({"access_token": "local-device-token"})
 
 
+async def handle_webrtc(request: web.Request) -> web.Response:
+    """POST /api/webrtc — proxy WebRTC signaling to local webrtcd."""
+    import aiohttp
+    body = await request.json()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post("http://localhost:5001/stream", json=body) as resp:
+                data = await resp.json()
+                return web.json_response(data)
+    except Exception as e:
+        logger.warning("WebRTC proxy error: %s", e)
+        return web.json_response({"error": f"webrtcd unavailable: {e}"}, status=502)
+
+
 # ─── SPA serving ───────────────────────────────────────────────────────
 
 async def handle_spa(request: web.Request) -> web.Response:
@@ -1257,6 +1271,9 @@ def create_app(data_dir: str, static_dir: str) -> web.Application:
     app.router.add_get("/v1/prime/subscribe_info", handle_stub_error)
     app.router.add_get("/v1/storage", handle_storage)
     app.router.add_get("/health", lambda r: web.json_response({"status": "ok"}))
+
+    # WebRTC signaling proxy (to local webrtcd on port 5001)
+    app.router.add_post("/api/webrtc", handle_webrtc)
 
     # Media file serving
     app.router.add_get("/connectdata/{path:.*}", handle_connectdata)

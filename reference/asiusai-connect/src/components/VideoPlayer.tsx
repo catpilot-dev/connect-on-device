@@ -2,7 +2,7 @@ import clsx from 'clsx'
 import { WIDTH, HEIGHT } from '../templates/shared'
 import { CameraType, FileType, LogType } from '../types'
 import { formatVideoTime, getRouteDurationMs, formatTime, getDateTime } from '../utils/format'
-import { RefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { RefObject, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useAsyncMemo, useFullscreen, useRouteParams } from '../utils/hooks'
 import { useNavigate } from 'react-router-dom'
 import { useFiles, useRoute } from '../api/queries'
@@ -13,6 +13,8 @@ import { getTimelineEvents, TimelineEvent } from '../utils/derived'
 import { useStorage } from '../utils/storage'
 import { Route } from '../types'
 import { HlsPlayer, HlsPlayerRef } from './HlsPlayer'
+import { ModelOverlay } from './ModelOverlay'
+import type { FrameData } from '../log-reader/reader'
 
 const FILE_LABELS: Record<FileType, string> = {
   cameras: 'Road',
@@ -484,6 +486,8 @@ export const RouteVideoPlayer = ({ playerRef, className }: { playerRef: RefObjec
   const duration = (getRouteDurationMs(route) ?? 0) / 1000
 
   const [playbackRate] = useStorage('playbackRate')
+  const [logType] = useStorage('logType')
+  const [showPath] = useStorage('showPath')
 
   const qcameraUrls = useMemo(() => {
     if (!files) return []
@@ -501,9 +505,84 @@ export const RouteVideoPlayer = ({ playerRef, className }: { playerRef: RefObjec
     return () => clearInterval(interval)
   }, [route])
 
+  // Log overlay state
+  const [logFrames, setLogFrames] = useState<Record<string, FrameData> | null>(null)
+  const loadedSegRef = useRef(-1)
+  const workerRef = useRef<Worker | null>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [canvasSize, setCanvasSize] = useState({ w: 0, h: 0 })
+
+  // Track container size for canvas dimensions
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const obs = new ResizeObserver(([e]) => {
+      setCanvasSize({ w: Math.round(e.contentRect.width), h: Math.round(e.contentRect.height) })
+    })
+    obs.observe(el)
+    return () => obs.disconnect()
+  }, [])
+
+  // Load log data when segment changes
+  const checkAndLoadSegment = useCallback(() => {
+    if (!logType || !files) {
+      return
+    }
+    const sec = playerRef.current?.getCurrentTime() ?? 0
+    const seg = Math.floor(sec / 60)
+    if (seg === loadedSegRef.current) return
+
+    const url = files[logType]?.[seg]
+    if (!url) return
+
+    loadedSegRef.current = seg
+    setLogFrames(null)
+
+    // Terminate previous worker
+    workerRef.current?.terminate()
+
+    const worker = new Worker(new URL('../log-reader/worker.ts', import.meta.url), { type: 'module' })
+    workerRef.current = worker
+    worker.postMessage({ url })
+    worker.onmessage = ({ data }) => {
+      if (data.frames) setLogFrames(data.frames)
+      worker.terminate()
+      if (workerRef.current === worker) workerRef.current = null
+    }
+  }, [logType, files, playerRef])
+
+  useEffect(() => {
+    checkAndLoadSegment()
+    const interval = setInterval(checkAndLoadSegment, 2000)
+    return () => {
+      clearInterval(interval)
+      workerRef.current?.terminate()
+      workerRef.current = null
+    }
+  }, [checkAndLoadSegment])
+
+  // Reset when logType is cleared
+  useEffect(() => {
+    if (!logType) {
+      setLogFrames(null)
+      loadedSegRef.current = -1
+    }
+  }, [logType])
+
   return (
-    <div id="fullscreen" className={clsx('relative rounded-xl overflow-hidden bg-black', className)} style={{ aspectRatio: WIDTH / HEIGHT }}>
+    <div ref={containerRef} id="fullscreen" className={clsx('relative rounded-xl overflow-hidden bg-black', className)} style={{ aspectRatio: WIDTH / HEIGHT }}>
       <HlsPlayer ref={playerRef} qcameraUrls={qcameraUrls} autoPlay initialTime={start ?? 0} playbackRate={playbackRate} className="w-full h-full" />
+
+      {logType && logFrames && canvasSize.w > 0 && (
+        <ModelOverlay
+          playerRef={playerRef}
+          logFrames={logFrames}
+          canvasWidth={canvasSize.w}
+          canvasHeight={canvasSize.h}
+          showPath={showPath}
+        />
+      )}
+
       <div className="absolute inset-0 cursor-pointer" onClick={() => playerRef.current?.toggle()} />
 
       {currentTime && (

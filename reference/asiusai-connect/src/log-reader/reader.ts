@@ -33,6 +33,7 @@ export type DriverStateV2 = {
 }
 export type CarState = {
   VEgo: number
+  AEgo: number
   CruiseEnabled: boolean
   CruiseSpeed: number
   GearShifter: number
@@ -80,9 +81,10 @@ export const readLogs = async ({ url }: ReadLogsInput) => {
     }
 
     if ('CarState' in event) {
-      const { VEgo, CruiseState, GearShifter, LeftBlinker, RightBlinker } = event.CarState
+      const { VEgo, AEgo, CruiseState, GearShifter, LeftBlinker, RightBlinker } = event.CarState
       CarState = {
         VEgo,
+        AEgo,
         GearShifter,
         LeftBlinker,
         RightBlinker,
