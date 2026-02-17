@@ -347,7 +347,7 @@ const Timeline = ({
       </div>
 
       <div
-        className="absolute -top-7 z-10 pointer-events-none"
+        className="absolute -top-5 z-10 pointer-events-none"
         style={{ left: `${markerOffset}%` }}
       >
         <div className="absolute left-1/2 -translate-x-1/2 bg-black/80 text-white text-[10px] px-1.5 py-0.5 rounded font-mono whitespace-nowrap opacity-100 transition-opacity">
