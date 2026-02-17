@@ -22,7 +22,7 @@ import shutil
 import argparse
 import logging
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
@@ -74,6 +74,7 @@ def _parse_rlog_metadata(rlog_path: str) -> dict:
     meta = {}
     has_init = False
     has_gps = False
+    has_car = False
     last_lat = last_lng = None
     seg_dist = 0.0
 
@@ -91,14 +92,24 @@ def _parse_rlog_metadata(rlog_path: str) -> dict:
                     meta["wall_time_nanos"] = wtn
                     meta["create_time"] = wtn / 1e9
                 has_init = True
+            elif w == "carParams" and not has_car:
+                try:
+                    meta["car_fingerprint"] = ev.carParams.carFingerprint
+                except Exception:
+                    pass
+                has_car = True
             elif w == "gpsLocationExternal":
                 gps = ev.gpsLocationExternal
-                if gps.flags & 1:
-                    lat, lng = gps.latitude, gps.longitude
-                    if not has_gps:
-                        meta["start_lat"] = lat
-                        meta["start_lng"] = lng
-                        has_gps = True
+                lat, lng = gps.latitude, gps.longitude
+                has_fix = bool(gps.flags & 1)
+                has_coords = lat != 0 and lng != 0
+                # Accept unfixed GPS for location (good enough for timezone)
+                if has_coords and not has_gps:
+                    meta["start_lat"] = lat
+                    meta["start_lng"] = lng
+                    has_gps = True
+                # Only use fixed GPS for distance calculation (unfixed can jitter)
+                if has_fix and has_coords:
                     if last_lat is not None:
                         seg_dist += _haversine_dist(last_lat, last_lng, lat, lng)
                     last_lat, last_lng = lat, lng
@@ -112,12 +123,14 @@ def _parse_rlog_metadata(rlog_path: str) -> dict:
 
 
 def _find_first_gps(rlog_path: str) -> tuple | None:
-    """Fast GPS-only scan — returns (lat, lng) or None."""
+    """Fast GPS-only scan — returns (lat, lng) or None.
+    Accepts unfixed GPS (flags=0) if coordinates are non-zero,
+    since that's sufficient for timezone estimation."""
     try:
         for ev in _iter_rlog(rlog_path):
             if ev.which() == "gpsLocationExternal":
                 gps = ev.gpsLocationExternal
-                if gps.flags & 1:
+                if gps.latitude != 0 and gps.longitude != 0:
                     return (gps.latitude, gps.longitude)
     except Exception:
         pass
@@ -288,7 +301,6 @@ class RouteStore:
         self._metadata: dict = {}         # route_id -> route_metadata.py format
         self._hidden: set = set()         # local_ids soft-deleted (hidden from list)
         self._preserved: set = set()      # local_ids protected from cleanup
-        self._enriching: bool = False
         self._executor = ThreadPoolExecutor(max_workers=1)
         self._metadata_path = Path(data_dir) / METADATA_FILE
 
@@ -340,9 +352,12 @@ class RouteStore:
         except Exception as e:
             logger.debug("Failed to save metadata.json: %s", e)
 
-    def _wall_time_to_route_date(self, wall_time_nanos: int) -> str:
-        """Convert wallTimeNanos to comma route date format: YYYY-MM-DD--HH-MM-SS"""
+    def _wall_time_to_route_date(self, wall_time_nanos: int, lng: float | None = None) -> str:
+        """Convert wallTimeNanos to comma route date format: YYYY-MM-DD--HH-MM-SS in local time."""
         dt = datetime.fromtimestamp(wall_time_nanos / 1e9, tz=timezone.utc)
+        if lng is not None:
+            offset_hours = round(lng / 15)
+            dt = dt.astimezone(timezone(timedelta(hours=offset_hours)))
         return dt.strftime("%Y-%m-%d--%H-%M-%S")
 
     def _meta_to_internal(self, route_id: str) -> dict:
@@ -386,7 +401,32 @@ class RouteStore:
         if ver and ver != "Unknown":
             result["version"] = ver
 
+        # Car fingerprint
+        cf = meta.get("car_fingerprint")
+        if cf:
+            result["car_fingerprint"] = cf
+
         return result
+
+    def _needs_enrich(self, lid: str) -> bool:
+        """Check if a route needs background enrichment."""
+        meta = self._metadata.get(lid)
+        if not meta:
+            return True
+        if not meta.get("car_fingerprint"):
+            return True
+        return not meta.get("gps_coordinates") or not meta.get("total_distance_m")
+
+    @staticmethod
+    def _find_rlog(seg_path: str) -> str | None:
+        """Find rlog file in a segment directory, preferring .zst."""
+        rlog = Path(seg_path) / "rlog.zst"
+        if rlog.exists():
+            return str(rlog)
+        rlog = Path(seg_path) / "rlog"
+        if rlog.exists():
+            return str(rlog)
+        return None
 
     def _calc_route_distance(self, local_id: str, segments: list) -> float | None:
         """Calculate total route distance in miles.
@@ -423,11 +463,14 @@ class RouteStore:
         """Build a comma-compatible route dict from raw scan data + metadata."""
         dongle_id = internal.get("dongle_id", self._dongle_id)
 
+        lng = internal.get("start_lng")
         wtn = internal.get("wall_time_nanos", 0)
         if wtn:
-            route_date = self._wall_time_to_route_date(wtn)
+            route_date = self._wall_time_to_route_date(wtn, lng)
         else:
             dt = datetime.fromtimestamp(info["mtime"], tz=timezone.utc)
+            if lng is not None:
+                dt = dt.astimezone(timezone(timedelta(hours=round(lng / 15))))
             route_date = dt.strftime("%Y-%m-%d--%H-%M-%S")
 
         fullname = f"{dongle_id}/{route_date}"
@@ -443,9 +486,10 @@ class RouteStore:
             seg_start_times.append(t)
             seg_end_times.append(t + 60)
 
-        start_time_iso = datetime.fromtimestamp(create_time, tz=timezone.utc).isoformat()
+        tz_info = timezone(timedelta(hours=round(lng / 15))) if lng is not None else timezone.utc
+        start_time_iso = datetime.fromtimestamp(create_time, tz=tz_info).isoformat()
         end_time_epoch = create_time + (max_seg + 1) * 60
-        end_time_iso = datetime.fromtimestamp(end_time_epoch, tz=timezone.utc).isoformat()
+        end_time_iso = datetime.fromtimestamp(end_time_epoch, tz=tz_info).isoformat()
 
         return {
             "create_time": create_time,
@@ -462,7 +506,7 @@ class RouteStore:
             "is_public": True,
             "distance": self._calc_route_distance(local_id, info["segments"]),
             "maxqlog": max_seg,
-            "platform": None,
+            "platform": internal.get("car_fingerprint"),
             "procqlog": len(seg_numbers),
             "start_lat": internal.get("start_lat"),
             "start_lng": internal.get("start_lng"),
@@ -475,6 +519,7 @@ class RouteStore:
             "id": None,
             "car_id": None,
             "version_id": None,
+            "local_id": local_id,
             "_local_id": local_id,
             "_segments": info["segments"],
             "_seg_numbers": seg_numbers,
@@ -497,6 +542,11 @@ class RouteStore:
                 self._dongle_id = dongle_id
 
             route = self._build_route(local_id, info, internal)
+
+            # Hide stub routes: < 2 minutes (maxqlog < 1) and no distance
+            if route["maxqlog"] < 1 and not route.get("distance"):
+                continue
+
             fullname = route["fullname"]
             routes[fullname] = route
             fullname_map[fullname] = local_id
@@ -509,48 +559,42 @@ class RouteStore:
     def _enrich_one(self, local_id: str, segments: list) -> dict | None:
         """Parse rlog metadata for a single route. Runs in thread pool.
 
-        Tries segment 0 first for initData + GPS, then checks later
+        Tries segment 0 first for initData + GPS + distance, then checks later
         segments for GPS only (cold starts can delay GPS lock).
-        Also computes total distance across ALL segments.
+        Computes total distance across ALL segments, reusing seg 0's distance
+        from _parse_rlog_metadata to avoid decompressing it twice.
         """
         sorted_segs = sorted(segments, key=lambda s: s["number"])
 
         # Parse segment 0 for full metadata (initData + GPS + seg0 distance)
         result = None
-        for seg in sorted_segs[:1]:
-            rlog = Path(seg["path"]) / "rlog.zst"
-            if not rlog.exists():
-                rlog = Path(seg["path"]) / "rlog"
-            if rlog.exists():
-                result = _parse_rlog_metadata(str(rlog))
-                break
+        seg0_rlog = self._find_rlog(sorted_segs[0]["path"]) if sorted_segs else None
+        if seg0_rlog:
+            result = _parse_rlog_metadata(seg0_rlog)
 
         if not result:
             result = {}
 
-        # If no GPS yet, try later segments
+        # If no GPS yet, try later segments (GPS lock can take 5+ minutes)
         if not result.get("start_lat"):
-            for seg in sorted_segs[1:4]:
-                rlog = Path(seg["path"]) / "rlog.zst"
-                if not rlog.exists():
-                    rlog = Path(seg["path"]) / "rlog"
-                if not rlog.exists():
+            for seg in sorted_segs[1:10]:
+                rlog = self._find_rlog(seg["path"])
+                if not rlog:
                     continue
-                gps = _find_first_gps(str(rlog))
+                gps = _find_first_gps(rlog)
                 if gps:
                     result["start_lat"] = gps[0]
                     result["start_lng"] = gps[1]
                     break
 
-        # Compute total distance across ALL segments
-        total_dist = 0.0
-        for seg in sorted_segs:
-            rlog = Path(seg["path"]) / "rlog.zst"
-            if not rlog.exists():
-                rlog = Path(seg["path"]) / "rlog"
-            if not rlog.exists():
+        # Compute total distance: start from seg 0's already-computed distance,
+        # then add remaining segments (avoids re-decompressing seg 0)
+        total_dist = result.pop("segment_distance_m", 0.0)
+        for seg in sorted_segs[1:]:
+            rlog = self._find_rlog(seg["path"])
+            if not rlog:
                 continue
-            total_dist += _segment_gps_distance(str(rlog))
+            total_dist += _segment_gps_distance(rlog)
 
         if total_dist > 0:
             result["total_distance_m"] = total_dist
@@ -577,58 +621,66 @@ class RouteStore:
         entry["git_branch"] = rlog_meta.get("git_branch")
         entry["openpilot_version"] = rlog_meta.get("version", "Unknown")
         entry["total_distance_m"] = rlog_meta.get("total_distance_m")
+        entry["car_fingerprint"] = rlog_meta.get("car_fingerprint")
         entry["source"] = "connect_server"
 
         return entry
 
-    async def _enrich_background(self):
-        """Parse rlog metadata for uncached routes in background."""
-        if self._enriching:
-            return
-        self._enriching = True
+    async def _enrichment_loop(self):
+        """Persistent background loop that enriches route metadata.
 
-        # Enrich routes missing GPS or total distance (Feb 2026 only for now)
-        def _needs_enrich(lid):
-            meta = self._metadata.get(lid)
-            if not meta:
-                return True
-            # DEV: only enrich Feb 2026 routes for distance computation
-            ct = meta.get("creation_time", "")
-            if not ct.startswith("2026-02"):
-                return False
-            return not meta.get("gps_coordinates") or not meta.get("total_distance_m")
-
-        uncached = [(lid, info) for lid, info in self._raw.items() if _needs_enrich(lid)]
-
-        if not uncached:
-            self._enriching = False
-            return
-
-        logger.info("Background enrichment: %d routes to parse", len(uncached))
+        Polls every 90s, re-scans directories, enriches newest routes first.
+        Runs as a single asyncio task — no re-entrancy guard needed.
+        """
+        await asyncio.sleep(5)  # let server bind first
         loop = asyncio.get_event_loop()
-        count = 0
 
-        for local_id, info in uncached:
+        while True:
             try:
-                rlog_meta = await loop.run_in_executor(
-                    self._executor, self._enrich_one, local_id, info["segments"])
-                if rlog_meta:
-                    entry = self._rlog_to_metadata_entry(local_id, rlog_meta)
-                    self._metadata[local_id] = entry
-                    count += 1
-                    if count % 10 == 0:
-                        self._rebuild_routes()
-                        self._save_metadata()
-                        logger.info("  enriched %d/%d routes...", count, len(uncached))
+                # Re-scan directories to pick up new routes/segments
+                self.scan(force=True)
+
+                # Find routes needing enrichment, newest first
+                uncached = [
+                    (lid, info) for lid, info in self._raw.items()
+                    if self._needs_enrich(lid)
+                ]
+                if not uncached:
+                    await asyncio.sleep(90)
+                    continue
+
+                # Sort newest-first by mtime so latest drive is enriched first
+                uncached.sort(key=lambda x: x[1]["mtime"], reverse=True)
+                logger.info("Enrichment cycle: %d routes to process", len(uncached))
+
+                count = 0
+                for local_id, info in uncached:
+                    try:
+                        rlog_meta = await loop.run_in_executor(
+                            self._executor, self._enrich_one, local_id, info["segments"])
+                        if rlog_meta:
+                            entry = self._rlog_to_metadata_entry(local_id, rlog_meta)
+                            self._metadata[local_id] = entry
+                            count += 1
+                            if count % 5 == 0:
+                                self._rebuild_routes()
+                                self._save_metadata()
+                                logger.info("  enriched %d/%d routes...", count, len(uncached))
+                    except Exception as e:
+                        logger.debug("enrich error for %s: %s", local_id, e)
+
+                if count > 0:
+                    self._rebuild_routes()
+                    self._save_metadata()
+                    logger.info("Enrichment cycle complete: %d routes enriched", count)
+
+            except asyncio.CancelledError:
+                logger.info("Enrichment loop cancelled")
+                return
             except Exception as e:
-                logger.debug("enrich error for %s: %s", local_id, e)
+                logger.warning("Enrichment cycle error: %s", e)
 
-        if count > 0:
-            self._rebuild_routes()
-            self._save_metadata()
-            logger.info("Background enrichment complete: %d routes enriched", count)
-
-        self._enriching = False
+            await asyncio.sleep(90)
 
     def scan(self, force: bool = False) -> dict:
         """Fast directory scan — no rlog parsing. Returns immediately."""
@@ -685,19 +737,6 @@ class RouteStore:
             logger.info("Storage cleanup: freed %d routes, now %.1f%% free",
                         len(cleanup_result["deleted"]), cleanup_result["free_pct"])
             self._rebuild_routes()
-
-        # Kick off background enrichment (Feb 2026 only for dev)
-        def _needs(lid):
-            meta = self._metadata.get(lid)
-            if not meta:
-                return True
-            ct = meta.get("creation_time", "")
-            if not ct.startswith("2026-02"):
-                return False
-            return not meta.get("gps_coordinates") or not meta.get("total_distance_m")
-        needs_enrich = [lid for lid in self._raw if _needs(lid)]
-        if needs_enrich:
-            asyncio.ensure_future(self._enrich_background())
 
         return self._routes
 
@@ -959,19 +998,82 @@ async def handle_share_signature(request: web.Request) -> web.Response:
     })
 
 
+def _route_engagement(store: "RouteStore", route: dict) -> tuple[float, float]:
+    """Compute engaged_ms and total_ms for a route from cached events.json files.
+
+    Returns (engaged_ms, total_duration_ms). Uses cached events.json files
+    (generated when a route is viewed in the UI). Returns (0, 0) if no cache.
+    """
+    local_id = route.get("_local_id")
+    if not local_id:
+        return (0, 0)
+
+    total_duration_ms = (route.get("maxqlog", 0) + 1) * 60_000
+    engaged_ms = 0.0
+
+    for seg in route.get("_segments", []):
+        events_path = Path(seg["path"]) / "events.json"
+        if not events_path.exists():
+            continue
+        try:
+            events = json.loads(events_path.read_text())
+            last_enabled_offset = None
+            for ev in events:
+                if ev.get("type") != "state":
+                    continue
+                enabled = ev.get("data", {}).get("enabled", False)
+                offset = ev.get("route_offset_millis", 0)
+                if enabled and last_enabled_offset is None:
+                    last_enabled_offset = offset
+                elif not enabled and last_enabled_offset is not None:
+                    engaged_ms += offset - last_enabled_offset
+                    last_enabled_offset = None
+            # Close open engagement at segment end
+            if last_enabled_offset is not None:
+                seg_end_ms = (seg["number"] + 1) * 60_000
+                engaged_ms += seg_end_ms - last_enabled_offset
+        except Exception:
+            pass
+
+    return (engaged_ms, total_duration_ms)
+
+
 async def handle_device_stats(request: web.Request) -> web.Response:
-    """GET /v1.1/devices/{dongleId}/stats — driving statistics"""
+    """GET /v1.1/devices/{dongleId}/stats — driving statistics with engagement"""
     store: RouteStore = request.app["store"]
     routes = store.scan()
 
-    total_routes = len(routes)
-    total_minutes = sum(len(r["_segments"]) for r in routes.values())  # ~1 min per segment
-    total_distance = sum(r.get("distance") or 0 for r in routes.values())
+    week_ago = time.time() - 7 * 86400
 
-    return web.json_response({
-        "all": {"distance": round(total_distance, 1), "minutes": total_minutes, "routes": total_routes},
-        "week": {"distance": 0, "minutes": 0, "routes": 0},
-    })
+    all_stats = {"distance": 0.0, "minutes": 0, "routes": 0, "engaged_minutes": 0.0, "total_minutes_with_events": 0}
+    week_stats = {"distance": 0.0, "minutes": 0, "routes": 0, "engaged_minutes": 0.0, "total_minutes_with_events": 0}
+
+    for r in routes.values():
+        minutes = len(r["_segments"])  # ~1 min per segment
+        distance = r.get("distance") or 0
+        engaged_ms, total_ms = _route_engagement(store, r)
+
+        all_stats["routes"] += 1
+        all_stats["minutes"] += minutes
+        all_stats["distance"] += distance
+        if total_ms > 0 and engaged_ms > 0:
+            all_stats["engaged_minutes"] += engaged_ms / 60_000
+            all_stats["total_minutes_with_events"] += total_ms / 60_000
+
+        if r.get("create_time", 0) >= week_ago:
+            week_stats["routes"] += 1
+            week_stats["minutes"] += minutes
+            week_stats["distance"] += distance
+            if total_ms > 0 and engaged_ms > 0:
+                week_stats["engaged_minutes"] += engaged_ms / 60_000
+                week_stats["total_minutes_with_events"] += total_ms / 60_000
+
+    for s in (all_stats, week_stats):
+        s["distance"] = round(s["distance"], 1)
+        s["engaged_minutes"] = round(s["engaged_minutes"], 1)
+        s["total_minutes_with_events"] = round(s["total_minutes_with_events"], 1)
+
+    return web.json_response({"all": all_stats, "week": week_stats})
 
 
 async def handle_device_location(request: web.Request) -> web.Response:
@@ -1255,12 +1357,36 @@ async def handle_spa(request: web.Request) -> web.Response:
 
 # ─── App setup ─────────────────────────────────────────────────────────
 
+async def _start_enrichment(app: web.Application):
+    """Start the persistent background enrichment loop on server startup."""
+    store: RouteStore = app["store"]
+    store.scan(force=True)
+    app["enrichment_task"] = asyncio.create_task(store._enrichment_loop())
+    logger.info("Background enrichment task started")
+
+
+async def _stop_enrichment(app: web.Application):
+    """Cancel the background enrichment loop on server shutdown."""
+    task = app.get("enrichment_task")
+    if task:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+    logger.info("Background enrichment task stopped")
+
+
 def create_app(data_dir: str, static_dir: str) -> web.Application:
     app = web.Application(middlewares=[cors_middleware])
 
     store = RouteStore(data_dir)
     app["store"] = store
     app["static_dir"] = Path(static_dir)
+
+    # Background enrichment lifecycle
+    app.on_startup.append(_start_enrichment)
+    app.on_cleanup.append(_stop_enrichment)
 
     # ── comma-compatible API ──
     # Auth
