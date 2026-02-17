@@ -22,13 +22,29 @@ export const DetailRow = ({
   const handleCopy = (e: React.MouseEvent) => {
     if (!copyable || typeof value !== 'string') return
     e.preventDefault()
-    navigator.clipboard.writeText(value)
+    e.stopPropagation()
+    // navigator.clipboard requires HTTPS; fall back to execCommand for HTTP
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(value)
+    } else {
+      const ta = document.createElement('textarea')
+      ta.value = value
+      ta.style.position = 'fixed'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+    }
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
 
+  const Wrapper = href ? 'a' : 'div'
+  const wrapperProps = href ? { href, target: '_blank', rel: 'noreferrer', className: 'block' } : { className: 'block' }
+
   return (
-    <a href={href} target="_blank" rel="noreferrer" className="block">
+    <Wrapper {...wrapperProps}>
       <div
         className={clsx(
           'flex items-center justify-between py-2 border-b border-white/5 last:border-0 gap-4',
@@ -43,6 +59,6 @@ export const DetailRow = ({
           {href && <Icon name="open_in_new" className="text-[14px] text-white/20 shrink-0" />}
         </div>
       </div>
-    </a>
+    </Wrapper>
   )
 }
