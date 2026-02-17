@@ -2,22 +2,11 @@ import clsx from 'clsx'
 import { DetailRow } from '../../components/DetailRow'
 import { Route } from '../../types'
 
-const DEVICE_NAMES: Record<string, string> = {
-  tici: 'Comma 3',
-  tize: 'Comma 3X',
-  mici: 'Comma 4',
-}
-
 export const Info = ({ route, className }: { route: Route; className?: string }) => {
-  const deviceLabel = route.device_type ? (DEVICE_NAMES[route.device_type] ?? route.device_type) : undefined
-
   return (
     <div className={clsx('bg-background-alt rounded-xl p-4 flex flex-col', className)}>
       <h3 className="text-xs font-bold uppercase tracking-wider text-white/40 mb-2">Details</h3>
       <DetailRow label="Route" value={(route as any).local_id ?? route.fullname.replace('|', '/')} mono copyable />
-      <DetailRow label="Dongle ID" value={route.dongle_id} mono copyable />
-      <DetailRow label="Device" value={deviceLabel} />
-      <DetailRow label="AGNOS" value={route.agnos_version} mono />
       <DetailRow label="Vehicle" value={route.platform} copyable />
       <DetailRow label="Repo" value={route.git_remote} href={route.git_remote ? `https://${route.git_remote}` : undefined} />
       <DetailRow label="Branch" value={route.git_branch} mono copyable />

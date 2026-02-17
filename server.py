@@ -872,10 +872,22 @@ async def handle_device_get(request: web.Request) -> web.Response:
 
 
 def _device_dict(store: RouteStore) -> dict:
+    # Find device_type from most recent enriched route
+    device_type = None
+    for meta in store._metadata.values():
+        dt = meta.get("device_type")
+        if dt:
+            device_type = dt
+            break
+
+    DEVICE_TYPE_MAP = {"tici": "three", "tize": "threex", "mici": "four"}
+
     return {
         "alias": None,
         "athena_host": None,
-        "device_type": "three",
+        "device_type": DEVICE_TYPE_MAP.get(device_type, "three"),
+        "device_type_raw": device_type,
+        "agnos_version": store._agnos_version,
         "dongle_id": store.dongle_id,
         "eligible_features": {"prime": False, "prime_data": False},
         "ignore_uploads": None,
@@ -1456,6 +1468,7 @@ def create_app(data_dir: str, static_dir: str) -> web.Application:
     app.router.add_get("/v1/devices/{dongleId}/users", handle_stub_empty_array)
     app.router.add_get("/v1/devices/{dongleId}/firehose_stats", handle_stub_error)
     app.router.add_post("/v1/devices/{dongleId}/unpair", handle_stub_error)
+    app.router.add_get("/v1/devices/{dongleId}/", handle_device_get)
     app.router.add_get("/v1/prime/subscription", handle_stub_error)
     app.router.add_get("/v1/prime/subscribe_info", handle_stub_error)
     app.router.add_get("/v1/storage", handle_storage)
