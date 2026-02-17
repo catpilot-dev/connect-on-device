@@ -1,7 +1,6 @@
-import { RouteFiles } from '../../components/RouteFiles'
 import { RouteVideoPlayer, VideoControls } from '../../components/VideoPlayer'
-import { useFiles, useProfile, useRoute } from '../../api/queries'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useProfile, useRoute } from '../../api/queries'
+import { useEffect, useRef, useState } from 'react'
 import { HlsPlayerRef } from '../../components/HlsPlayer'
 import { useRouteParams } from '../../utils/hooks'
 import { TopAppBar } from '../../components/TopAppBar'
@@ -13,7 +12,6 @@ import { Stats } from './Stats'
 import { Actions } from './Actions'
 import { formatDate, formatTime } from '../../utils/format'
 import { Info } from './Info'
-import { useStorage } from '../../utils/storage'
 
 const getLocationText = ({ start, end }: { start?: string; end?: string }) => {
   if (!start && !end) return 'Drive Details'
@@ -43,7 +41,7 @@ export const Component = () => {
 
   return (
     <div className="flex flex-col min-h-screen bg-background text-foreground">
-      <TopAppBar leading={<BackButton href={`/${route.dongle_id}`} />}>
+      <TopAppBar leading={<BackButton href="/" />}>
         <span>{location ? getLocationText(location) : 'Drive details'}</span>
         {route.start_time && (
           <span className="text-xs md:text-sm font-medium text-white/60">
@@ -54,12 +52,11 @@ export const Component = () => {
 
       <div className="grid md:grid-cols-3 gap-3 md:gap-4 p-4 max-w-screen-xl mx-auto">
         <RouteVideoPlayer playerRef={playerRef} className="md:col-span-2 md:order-1" />
-        <VideoControls playerRef={playerRef} className="md:col-span-2 md:order-3" />
-        <Stats route={route} className="md:order-6" />
-        <Actions route={route} className="md:order-4" />
-        <RouteFiles playerRef={playerRef} route={route} className="md:col-span-2 md:row-span-3 md:order-5" />
         <DynamicMap route={route} className="md:order-2" playerRef={playerRef} />
-        <Info route={route} className="md:order-7" />
+        <VideoControls playerRef={playerRef} className="md:col-span-2 md:order-3" />
+        <Actions route={route} className="md:order-4" />
+        <Stats route={route} className="md:col-span-2 md:order-5" />
+        <Info route={route} className="md:order-6" />
       </div>
     </div>
   )
