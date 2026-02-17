@@ -344,8 +344,8 @@ const Timeline = ({
         style={{ left: `${markerOffset}%` }}
       >
         <div className="absolute -top-1 -translate-x-1/2 w-3 h-3 bg-white rounded-full shadow-sm" />
-        <div className="absolute -top-7 left-1/2 -translate-x-1/2 bg-black/80 text-white text-[10px] px-1.5 py-0.5 rounded font-mono whitespace-nowrap">
-          seg {currentSegment}
+        <div className="absolute -top-7 left-1/2 -translate-x-1/2 bg-black/80 text-white text-[10px] px-1.5 py-0.5 rounded font-mono whitespace-nowrap opacity-100 transition-opacity pointer-events-none">
+          {currentSegment}
         </div>
       </div>
 
