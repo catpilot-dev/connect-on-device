@@ -28,12 +28,12 @@ const ActionButton = ({
       variant === 'danger'
         ? 'bg-red-500/15 text-red-400 hover:bg-red-500/25'
         : active
-          ? 'bg-white text-black'
+          ? 'bg-green-500 text-white'
           : 'bg-background-alt text-white hover:bg-background-alt/80',
       disabled && 'opacity-50 cursor-not-allowed',
     )}
   >
-    <Icon name={icon as any} className={clsx('text-2xl', active ? 'text-black' : variant === 'danger' ? 'text-red-400' : 'text-white')} />
+    <Icon name={icon as any} className={clsx('text-2xl', active ? 'text-white' : variant === 'danger' ? 'text-red-400' : 'text-white')} />
     <span className="text-xs font-medium">{label}</span>
   </button>
 )
@@ -48,6 +48,9 @@ const DOWNLOAD_OPTIONS = [
 
 const DownloadModal = ({ route, onClose }: { route: Route; onClose: () => void }) => {
   const [selected, setSelected] = useState<Record<string, boolean>>({ rlog: true })
+  const [allSegments, setAllSegments] = useState(true)
+  const [segFrom, setSegFrom] = useState(0)
+  const [segTo, setSegTo] = useState(route.maxqlog)
 
   const toggle = (key: string) => setSelected((s) => ({ ...s, [key]: !s[key] }))
 
@@ -58,22 +61,32 @@ const DownloadModal = ({ route, onClose }: { route: Route; onClose: () => void }
       .join(',')
     if (!files) return
     const routeName = route.fullname.replace('/', '|')
-    window.open(`${env.API_URL}/v1/route/${routeName}/download?files=${files}`)
+    let url = `${env.API_URL}/v1/route/${routeName}/download?files=${files}`
+    if (!allSegments) {
+      const from = Math.max(0, Math.min(segFrom, route.maxqlog))
+      const to = Math.max(from, Math.min(segTo, route.maxqlog))
+      const segs = Array.from({ length: to - from + 1 }, (_, i) => from + i).join(',')
+      url += `&segments=${segs}`
+    }
+    window.open(url)
     onClose()
   }
 
   const anySelected = Object.values(selected).some(Boolean)
+  const segCount = allSegments ? route.maxqlog + 1 : Math.max(0, segTo - segFrom + 1)
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
-      <div className="w-full max-w-sm rounded-2xl bg-[#1a1a2e] p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+      <div className="w-full max-w-sm rounded-2xl bg-[#1a1a2e] p-5 shadow-xl max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="mb-4 flex items-center justify-between">
           <h3 className="text-lg font-semibold text-white">Download Route</h3>
           <button onClick={onClose} className="rounded-lg p-1 text-white/50 hover:bg-white/10 hover:text-white">
             <Icon name="close" className="text-xl" />
           </button>
         </div>
-        <div className="flex flex-col gap-2">
+
+        <span className="text-xs font-bold uppercase tracking-wider text-white/40">File types</span>
+        <div className="flex flex-col gap-2 mt-2">
           {DOWNLOAD_OPTIONS.map((opt) => (
             <label
               key={opt.key}
@@ -95,6 +108,50 @@ const DownloadModal = ({ route, onClose }: { route: Route; onClose: () => void }
             </label>
           ))}
         </div>
+
+        <span className="text-xs font-bold uppercase tracking-wider text-white/40 mt-4 block">Segments</span>
+        <div className="flex flex-col gap-2 mt-2">
+          <label
+            className={clsx(
+              'flex cursor-pointer items-center gap-3 rounded-xl p-3 transition-colors',
+              allSegments ? 'bg-white/15' : 'bg-white/5 hover:bg-white/10',
+            )}
+          >
+            <input type="radio" checked={allSegments} onChange={() => setAllSegments(true)} className="h-4 w-4 accent-white" />
+            <span className="text-sm font-medium text-white">All ({route.maxqlog + 1} segments)</span>
+          </label>
+          <label
+            className={clsx(
+              'flex cursor-pointer items-center gap-3 rounded-xl p-3 transition-colors',
+              !allSegments ? 'bg-white/15' : 'bg-white/5 hover:bg-white/10',
+            )}
+          >
+            <input type="radio" checked={!allSegments} onChange={() => setAllSegments(false)} className="h-4 w-4 accent-white" />
+            <span className="text-sm font-medium text-white">Range</span>
+          </label>
+          {!allSegments && (
+            <div className="flex items-center gap-2 px-3 pb-1">
+              <input
+                type="number"
+                min={0}
+                max={route.maxqlog}
+                value={segFrom}
+                onChange={(e) => setSegFrom(parseInt(e.target.value) || 0)}
+                className="w-16 rounded-lg bg-white/10 px-2 py-1.5 text-sm text-white text-center outline-none focus:ring-1 focus:ring-white/30"
+              />
+              <span className="text-white/40 text-sm">to</span>
+              <input
+                type="number"
+                min={0}
+                max={route.maxqlog}
+                value={segTo}
+                onChange={(e) => setSegTo(parseInt(e.target.value) || 0)}
+                className="w-16 rounded-lg bg-white/10 px-2 py-1.5 text-sm text-white text-center outline-none focus:ring-1 focus:ring-white/30"
+              />
+            </div>
+          )}
+        </div>
+
         <button
           onClick={handleDownload}
           disabled={!anySelected}
@@ -103,7 +160,7 @@ const DownloadModal = ({ route, onClose }: { route: Route; onClose: () => void }
             anySelected ? 'bg-white text-black hover:bg-white/90' : 'bg-white/10 text-white/30 cursor-not-allowed',
           )}
         >
-          Download
+          Download {segCount} segment{segCount !== 1 ? 's' : ''}
         </button>
       </div>
     </div>
@@ -140,7 +197,7 @@ export const Actions = ({ route, className }: { route: Route; className?: string
     if (!confirm('Hide this drive? It will be deleted when storage is low.')) return
     try {
       await fetch(`${env.API_URL}/v1/route/${routeName}/`, { method: 'DELETE' })
-      navigate(`/${route.dongle_id}`)
+      navigate('/')
     } catch (e) {
       console.error('Delete failed:', e)
     }

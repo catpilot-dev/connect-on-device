@@ -134,13 +134,14 @@ def _delete_route_from_disk(store, local_id: str):
     store._metadata.pop(local_id, None)
 
 
-def build_download_tar(store, local_id: str, file_types: list[str]) -> io.BytesIO | None:
-    """Build a tar.gz archive of requested files across all segments.
+def build_download_tar(store, local_id: str, file_types: list[str], segments: list[int] | None = None) -> io.BytesIO | None:
+    """Build a tar.gz archive of requested files across segments.
 
     Args:
         store: RouteStore instance
         local_id: Route local_id (e.g. "00000042--abc123")
         file_types: List of file type keys from DOWNLOAD_FILES
+        segments: Optional list of segment numbers to include (None = all)
 
     Returns:
         BytesIO containing tar.gz data, or None if no files found.
@@ -154,6 +155,8 @@ def build_download_tar(store, local_id: str, file_types: list[str]) -> io.BytesI
 
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
         for seg in sorted(info["segments"], key=lambda s: s["number"]):
+            if segments is not None and seg["number"] not in segments:
+                continue
             seg_path = Path(seg["path"])
             seg_name = f"{local_id}--{seg['number']}"
 

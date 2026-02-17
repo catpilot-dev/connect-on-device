@@ -1153,7 +1153,7 @@ async def handle_route_unpreserve(request: web.Request) -> web.Response:
 
 
 async def handle_route_download(request: web.Request) -> web.Response:
-    """GET /v1/route/{routeName}/download?files=rlog,qcamera — stream tar.gz"""
+    """GET /v1/route/{routeName}/download?files=rlog,qcamera&segments=0,1,2 — stream tar.gz"""
     store: RouteStore = request.app["store"]
     local_id = _resolve_local_id(store, request)
 
@@ -1162,8 +1162,17 @@ async def handle_route_download(request: web.Request) -> web.Response:
     if not file_types:
         raise web.HTTPBadRequest(text=json.dumps({"error": f"No valid file types. Choose from: {', '.join(DOWNLOAD_FILES)}"}))
 
+    # Optional segment filter: ?segments=0,1,2 (default: all)
+    seg_param = request.query.get("segments")
+    segments = None
+    if seg_param:
+        try:
+            segments = [int(s.strip()) for s in seg_param.split(",")]
+        except ValueError:
+            raise web.HTTPBadRequest(text=json.dumps({"error": "Invalid segments parameter"}))
+
     loop = asyncio.get_event_loop()
-    buf = await loop.run_in_executor(None, build_download_tar, store, local_id, file_types)
+    buf = await loop.run_in_executor(None, build_download_tar, store, local_id, file_types, segments)
 
     if not buf:
         raise web.HTTPNotFound(text=json.dumps({"error": "No matching files found"}))
