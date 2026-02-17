@@ -327,16 +327,6 @@ const Timeline = ({
           })}
         </div>
 
-        <div
-          className="absolute top-0 bottom-0 z-10 w-0.5 bg-white shadow-[0_0_10px_rgba(255,255,255,0.5)] pointer-events-none"
-          style={{ left: `${markerOffset}%` }}
-        >
-          <div className="absolute -top-1 -translate-x-1/2 w-3 h-3 bg-white rounded-full shadow-sm" />
-          <div className="absolute -top-7 left-1/2 -translate-x-1/2 bg-black/80 text-white text-[10px] px-1.5 py-0.5 rounded font-mono whitespace-nowrap">
-            seg {currentSegment}
-          </div>
-        </div>
-
         <div className="absolute inset-y-0 left-0 bg-black/60 pointer-events-none z-20" style={{ width: `${(selection.start / duration) * 100}%` }} />
         <div className="absolute inset-y-0 right-0 bg-black/60 pointer-events-none z-20" style={{ width: `${100 - (selection.end / duration) * 100}%` }} />
 
@@ -347,6 +337,16 @@ const Timeline = ({
             width: `${((selection.end - selection.start) / duration) * 100}%`,
           }}
         />
+      </div>
+
+      <div
+        className="absolute top-0 bottom-0 z-10 w-0.5 bg-white shadow-[0_0_10px_rgba(255,255,255,0.5)] pointer-events-none"
+        style={{ left: `${markerOffset}%` }}
+      >
+        <div className="absolute -top-1 -translate-x-1/2 w-3 h-3 bg-white rounded-full shadow-sm" />
+        <div className="absolute -top-7 left-1/2 -translate-x-1/2 bg-black/80 text-white text-[10px] px-1.5 py-0.5 rounded font-mono whitespace-nowrap">
+          seg {currentSegment}
+        </div>
       </div>
 
       {['start', 'end'].map((type) => {
