@@ -74,6 +74,7 @@ def _parse_rlog_metadata(rlog_path: str) -> dict:
     meta = {}
     has_init = False
     has_gps = False
+    has_gps_time = False
     has_car = False
     last_lat = last_lng = None
     seg_dist = 0.0
@@ -110,6 +111,12 @@ def _parse_rlog_metadata(rlog_path: str) -> dict:
                     meta["start_lat"] = lat
                     meta["start_lng"] = lng
                     has_gps = True
+                # Capture GPS time from first fixed position
+                if has_fix and has_coords and not has_gps_time:
+                    gps_ms = getattr(gps, "unixTimestampMillis", 0)
+                    if gps_ms > 0:
+                        meta["gps_time"] = gps_ms / 1000.0
+                        has_gps_time = True
                 # Only use fixed GPS for distance calculation (unfixed can jitter)
                 if has_fix and has_coords:
                     if last_lat is not None:
@@ -117,6 +124,14 @@ def _parse_rlog_metadata(rlog_path: str) -> dict:
                     last_lat, last_lng = lat, lng
     except Exception as e:
         logger.debug("rlog parse error: %s", e)
+
+    # Prefer GPS time over wallTimeNanos when they differ by >24h
+    # (wallTimeNanos often reflects AGNOS build date, not recording time)
+    gps_t = meta.get("gps_time")
+    wall_t = meta.get("create_time")
+    if gps_t and wall_t and abs(gps_t - wall_t) > 86400:
+        meta["create_time"] = gps_t
+        meta["wall_time_nanos"] = int(gps_t * 1e9)
 
     if seg_dist > 0:
         meta["segment_distance_m"] = seg_dist
@@ -437,6 +452,10 @@ class RouteStore:
         if not meta.get("car_fingerprint"):
             return True
         if not meta.get("device_type"):
+            return True
+        # Re-enrich routes with known-bad AGNOS build date as creation_time
+        ct = meta.get("creation_time", "")
+        if isinstance(ct, str) and ct.startswith("2025-07-02"):
             return True
         return not meta.get("gps_coordinates") or not meta.get("total_distance_m")
 
