@@ -286,6 +286,7 @@ const Timeline = ({
   }
 
   const markerOffset = duration > 0 ? (currentTime / duration) * 100 : 0
+  const currentSegment = Math.floor(currentTime / 60)
 
   return (
     <div
@@ -331,6 +332,9 @@ const Timeline = ({
           style={{ left: `${markerOffset}%` }}
         >
           <div className="absolute -top-1 -translate-x-1/2 w-3 h-3 bg-white rounded-full shadow-sm" />
+          <div className="absolute -top-7 left-1/2 -translate-x-1/2 bg-black/80 text-white text-[10px] px-1.5 py-0.5 rounded font-mono whitespace-nowrap">
+            seg {currentSegment}
+          </div>
         </div>
 
         <div className="absolute inset-y-0 left-0 bg-black/60 pointer-events-none z-20" style={{ width: `${(selection.start / duration) * 100}%` }} />
@@ -391,7 +395,7 @@ const Timeline = ({
 
 export const VideoControls = ({ playerRef, className }: { className?: string; playerRef: RefObject<HlsPlayerRef | null> }) => {
   const fullscreen = useFullscreen()
-  const { routeName, start, end, date, dongleId } = useRouteParams()
+  const { routeName, start, end, date } = useRouteParams()
   const [playing, setPlaying] = useState(true)
   const [muted, setMuted] = useState(true)
   const [currentTime, setCurrentTime] = useState(0)
@@ -409,15 +413,24 @@ export const VideoControls = ({ playerRef, className }: { className?: string; pl
   )
 
   const onSelectionChange = (sel: { start: number; end: number }) => {
-    if (Math.abs(sel.start) < 1 && Math.abs(sel.end - duration) < 1) navigate(`/${dongleId}/${date}`, { replace: true })
-    else navigate(`/${dongleId}/${date}/${sel.start.toFixed(0)}/${sel.end.toFixed(0)}`, { replace: true })
+    if (Math.abs(sel.start) < 1 && Math.abs(sel.end - duration) < 1) navigate(`/${date}`, { replace: true })
+    else navigate(`/${date}/${sel.start.toFixed(0)}/${sel.end.toFixed(0)}`, { replace: true })
   }
 
   useEffect(() => {
     const video = playerRef.current?.getVideoElement()
     if (!video) return
 
-    const onTimeUpdate = () => setCurrentTime(video.currentTime)
+    const onTimeUpdate = () => {
+      const t = video.currentTime
+      setCurrentTime(t)
+      // Clamp playback within selection bounds
+      if (t >= selection.end) {
+        video.currentTime = selection.start
+      } else if (t < selection.start - 0.5) {
+        video.currentTime = selection.start
+      }
+    }
     const onPlayPause = () => setPlaying(!video.paused)
     const onVolumeChange = () => setMuted(video.muted)
 
@@ -431,7 +444,7 @@ export const VideoControls = ({ playerRef, className }: { className?: string; pl
       video.removeEventListener('pause', onPlayPause)
       video.removeEventListener('volumechange', onVolumeChange)
     }
-  }, [playerRef.current])
+  }, [playerRef.current, selection])
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
