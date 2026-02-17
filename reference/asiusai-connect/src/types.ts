@@ -104,6 +104,8 @@ export const Route = z.object({
   id: z.number().nullable(),
   car_id: z.number().nullable(),
   version_id: z.number().nullable(),
+  device_type: z.string().nullish(),
+  agnos_version: z.string().nullish(),
 })
 
 export const RouteSegment = Route.extend({

@@ -86,7 +86,9 @@ def _parse_rlog_metadata(rlog_path: str) -> dict:
                 meta["dongle_id"] = init.dongleId
                 meta["git_commit"] = init.gitCommit
                 meta["git_branch"] = init.gitBranch
+                meta["git_remote"] = init.gitRemote
                 meta["version"] = init.version
+                meta["device_type"] = str(init.deviceType)
                 wtn = getattr(init, "wallTimeNanos", 0)
                 if wtn:
                     meta["wall_time_nanos"] = wtn
@@ -303,9 +305,11 @@ class RouteStore:
         self._preserved: set = set()      # local_ids protected from cleanup
         self._executor = ThreadPoolExecutor(max_workers=1)
         self._metadata_path = Path(data_dir) / METADATA_FILE
+        self._agnos_version: str | None = None
 
         self._load_metadata()
         self._detect_dongle_id()
+        self._detect_agnos_version()
 
     def _detect_dongle_id(self):
         """Read dongle_id from params or metadata."""
@@ -321,6 +325,13 @@ class RouteStore:
                 self._dongle_id = did
                 return
         self._dongle_id = "local"
+
+    def _detect_agnos_version(self):
+        """Read AGNOS version from /VERSION."""
+        try:
+            self._agnos_version = Path("/VERSION").read_text().strip()
+        except Exception:
+            pass
 
     def _load_metadata(self):
         """Load metadata.json (route_metadata.py format) including hidden/preserved sets."""
@@ -406,6 +417,16 @@ class RouteStore:
         if cf:
             result["car_fingerprint"] = cf
 
+        # Git remote
+        gr = meta.get("git_remote")
+        if gr:
+            result["git_remote"] = gr
+
+        # Device type
+        dt = meta.get("device_type")
+        if dt:
+            result["device_type"] = dt
+
         return result
 
     def _needs_enrich(self, lid: str) -> bool:
@@ -414,6 +435,8 @@ class RouteStore:
         if not meta:
             return True
         if not meta.get("car_fingerprint"):
+            return True
+        if not meta.get("device_type"):
             return True
         return not meta.get("gps_coordinates") or not meta.get("total_distance_m")
 
@@ -502,7 +525,7 @@ class RouteStore:
             "git_commit": internal.get("git_commit"),
             "git_commit_date": None,
             "git_dirty": None,
-            "git_remote": None,
+            "git_remote": internal.get("git_remote"),
             "is_public": True,
             "distance": self._calc_route_distance(local_id, info["segments"]),
             "maxqlog": max_seg,
@@ -519,6 +542,8 @@ class RouteStore:
             "id": None,
             "car_id": None,
             "version_id": None,
+            "device_type": internal.get("device_type"),
+            "agnos_version": self._agnos_version,
             "local_id": local_id,
             "_local_id": local_id,
             "_segments": info["segments"],
@@ -622,6 +647,8 @@ class RouteStore:
         entry["openpilot_version"] = rlog_meta.get("version", "Unknown")
         entry["total_distance_m"] = rlog_meta.get("total_distance_m")
         entry["car_fingerprint"] = rlog_meta.get("car_fingerprint")
+        entry["git_remote"] = rlog_meta.get("git_remote")
+        entry["device_type"] = rlog_meta.get("device_type")
         entry["source"] = "connect_server"
 
         return entry
