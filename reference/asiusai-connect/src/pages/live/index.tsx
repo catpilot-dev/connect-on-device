@@ -3,8 +3,6 @@ import { useRouteParams } from '../../utils/hooks'
 import { TopAppBar } from '../../components/TopAppBar'
 import { BackButton } from '../../components/BackButton'
 import { Icon } from '../../components/Icon'
-import { ModelOverlay } from '../../components/ModelOverlay'
-import type { FrameData, CarState, LiveCalibration, SelfdriveState } from '../../log-reader/reader'
 
 export const Component = () => {
   const { dongleId } = useRouteParams()
@@ -19,8 +17,6 @@ export const Component = () => {
 
   // Overlay state
   const [showOverlay, setShowOverlay] = useState(true)
-  const [liveFrame, setLiveFrame] = useState<FrameData | null>(null)
-  const [canvasSize, setCanvasSize] = useState({ width: 1928, height: 1208 })
 
   const rtcConnection = useRef<RTCPeerConnection | null>(null)
   const localAudioTrack = useRef<MediaStreamTrack | null>(null)
@@ -32,33 +28,50 @@ export const Component = () => {
   const joystickBaseRef = useRef<HTMLDivElement | null>(null)
   const isDraggingRef = useRef(false)
 
-  // Latest bridge state (updated at high frequency, only modelV2 triggers React render)
-  const latestCarState = useRef<CarState | null>(null)
-  const latestCalibration = useRef<LiveCalibration | null>(null)
-  const latestSelfdriveState = useRef<SelfdriveState | null>(null)
+  // HUD overlay via WebSocket (server-rendered)
+  const hudImgRef = useRef<HTMLImageElement | null>(null)
+  const hudWsRef = useRef<WebSocket | null>(null)
 
   useEffect(() => {
     setupRTCConnection()
     return () => disconnectRTCConnection()
   }, [dongleId])
 
-  // Track road video dimensions for canvas sizing
+  // Connect HUD WebSocket
   useEffect(() => {
-    const video = roadRef.current
-    if (!video) return
-    const update = () => {
-      if (video.videoWidth > 0 && video.videoHeight > 0) {
-        setCanvasSize({ width: video.videoWidth, height: video.videoHeight })
+    if (!showOverlay) {
+      // Close WS when overlay hidden
+      if (hudWsRef.current) {
+        hudWsRef.current.close()
+        hudWsRef.current = null
+      }
+      return
+    }
+
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const ws = new WebSocket(`${proto}//${location.host}/ws/hud`)
+    ws.binaryType = 'arraybuffer'
+    hudWsRef.current = ws
+
+    ws.onmessage = (e) => {
+      const blob = new Blob([e.data], { type: 'image/webp' })
+      const url = URL.createObjectURL(blob)
+      if (hudImgRef.current) {
+        const old = hudImgRef.current.src
+        hudImgRef.current.src = url
+        if (old && old.startsWith('blob:')) URL.revokeObjectURL(old)
       }
     }
-    video.addEventListener('loadedmetadata', update)
-    video.addEventListener('resize', update)
-    update()
-    return () => {
-      video.removeEventListener('loadedmetadata', update)
-      video.removeEventListener('resize', update)
+
+    ws.onerror = () => {
+      console.warn('HUD WebSocket error')
     }
-  }, [])
+
+    return () => {
+      ws.close()
+      hudWsRef.current = null
+    }
+  }, [showOverlay])
 
   const audioSenderRef = useRef<RTCRtpSender | null>(null)
 
@@ -75,67 +88,6 @@ export const Component = () => {
     if (driverRef.current) driverRef.current.srcObject = null
     if (roadRef.current) roadRef.current.srcObject = null
     setIsSpeaking(false)
-    setLiveFrame(null)
-  }
-
-  const handleBridgeMessage = (rawData: ArrayBuffer | string) => {
-    try {
-      const text = typeof rawData === 'string' ? rawData : new TextDecoder().decode(rawData)
-      const msg = JSON.parse(text)
-
-      switch (msg.type) {
-        case 'carState': {
-          const d = msg.data
-          latestCarState.current = {
-            VEgo: d.vEgo ?? 0,
-            AEgo: d.aEgo ?? 0,
-            CruiseEnabled: d.cruiseState?.enabled ?? false,
-            CruiseSpeed: d.cruiseState?.speed ?? 0,
-            GearShifter: d.gearShifter ?? 0,
-            LeftBlinker: d.leftBlinker ?? false,
-            RightBlinker: d.rightBlinker ?? false,
-          }
-          break
-        }
-        case 'liveCalibration': {
-          const rpy = msg.data.rpyCalib
-          if (rpy?.length >= 3) {
-            latestCalibration.current = { RpyCalib: [rpy[0], rpy[1], rpy[2]] }
-          }
-          break
-        }
-        case 'selfdriveState': {
-          latestSelfdriveState.current = {
-            ExperimentalMode: msg.data.experimentalMode ?? false,
-          }
-          break
-        }
-        case 'modelV2': {
-          const d = msg.data
-          if (!d.position?.x) break
-          setLiveFrame({
-            event: 'ModelV2',
-            ModelV2: {
-              Position: { X: d.position.x, Y: d.position.y, Z: d.position.z },
-              LaneLines: d.laneLines?.map((l: any, i: number) => ({
-                X: l.x, Y: l.y, Z: l.z,
-                prob: d.laneLineProbs?.[i],
-              })) ?? [],
-              RoadEdges: d.roadEdges?.map((e: any) => ({
-                X: e.x, Y: e.y, Z: e.z,
-              })) ?? [],
-              AccelerationX: d.acceleration?.x,
-            },
-            CarState: latestCarState.current ?? undefined,
-            LiveCalibration: latestCalibration.current ?? undefined,
-            SelfdriveState: latestSelfdriveState.current ?? undefined,
-          })
-          break
-        }
-      }
-    } catch {
-      // Ignore parse errors (e.g., non-JSON messages)
-    }
   }
 
   const setupRTCConnection = async () => {
@@ -169,9 +121,6 @@ export const Component = () => {
       }
       dataChannel.onclose = () => {
         dataChannelRef.current = null
-      }
-      dataChannel.onmessage = (event) => {
-        handleBridgeMessage(event.data)
       }
 
       // Two video transceivers: driver + road
@@ -236,6 +185,7 @@ export const Component = () => {
       const sdp = pc.localDescription?.sdp
 
       // Direct local signaling to webrtcd via server proxy (no Athena needed)
+      // HUD overlay is now server-rendered via WebSocket — no bridge_services_out needed
       const resp = await fetch('/api/webrtc', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -243,7 +193,7 @@ export const Component = () => {
           sdp,
           cameras: ['driver', 'road'],
           bridge_services_in: ['testJoystick'],
-          bridge_services_out: ['modelV2', 'liveCalibration', 'carState', 'selfdriveState'],
+          bridge_services_out: [],
         }),
       })
 
@@ -363,9 +313,6 @@ export const Component = () => {
     })
   }
 
-  // Speed display from latest carState
-  const speedKmh = latestCarState.current ? Math.round(latestCarState.current.VEgo * 3.6) : null
-
   return (
     <div className="flex flex-col min-h-screen bg-transparent text-foreground gap-4 relative">
       <TopAppBar leading={<BackButton href={`/${dongleId}`} />} className="z-10 bg-transparent">
@@ -401,23 +348,15 @@ export const Component = () => {
             <video autoPlay playsInline ref={driverRef} className="w-full h-full object-contain" />
           </div>
 
-          {/* Road camera with model overlay */}
+          {/* Road camera with server-rendered HUD overlay */}
           <div className="relative bg-black flex items-center justify-center overflow-hidden">
             <video autoPlay playsInline ref={roadRef} className="w-full h-full object-contain" />
             {showOverlay && (
-              <ModelOverlay
-                playerRef={null}
-                liveFrame={liveFrame}
-                canvasWidth={canvasSize.width}
-                canvasHeight={canvasSize.height}
-                showPath={true}
+              <img
+                ref={hudImgRef}
+                className="absolute inset-0 w-full h-full object-contain pointer-events-none"
+                alt=""
               />
-            )}
-            {/* Speed HUD */}
-            {speedKmh !== null && (
-              <div className="absolute bottom-4 left-4 bg-black/50 backdrop-blur-sm text-white px-3 py-1.5 rounded-lg font-mono text-lg pointer-events-none">
-                {speedKmh} km/h
-              </div>
             )}
           </div>
         </div>

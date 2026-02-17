@@ -1,0 +1,15 @@
+[Unit]
+Description=Connect on Device - local route browser and live HUD overlay
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=/data/connect_on_device
+ExecStart=/usr/local/venv/bin/python -u server.py
+Restart=always
+RestartSec=3
+User=comma
+
+[Install]
+WantedBy=multi-user.target

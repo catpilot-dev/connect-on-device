@@ -1199,6 +1199,31 @@ async def handle_webrtc(request: web.Request) -> web.Response:
         return web.json_response({"error": f"webrtcd unavailable: {e}"}, status=502)
 
 
+async def handle_hud_ws(request: web.Request) -> web.StreamResponse:
+    """WebSocket /ws/hud — stream full HUD overlay images at 20Hz."""
+    from hud_renderer import HudRenderer
+
+    ws = web.WebSocketResponse()
+    await ws.prepare(request)
+    logger.info("HUD WebSocket connected")
+
+    renderer = HudRenderer()
+    try:
+        while not ws.closed:
+            frame_bytes = renderer.render_frame()
+            if frame_bytes:
+                await ws.send_bytes(frame_bytes)
+            await asyncio.sleep(0.05)  # 20Hz
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        logger.warning("HUD WebSocket error: %s", e)
+    finally:
+        renderer.close()
+        logger.info("HUD WebSocket disconnected")
+    return ws
+
+
 # ─── SPA serving ───────────────────────────────────────────────────────
 
 async def handle_spa(request: web.Request) -> web.Response:
@@ -1276,6 +1301,9 @@ def create_app(data_dir: str, static_dir: str) -> web.Application:
 
     # WebRTC signaling proxy (to local webrtcd on port 5001)
     app.router.add_post("/api/webrtc", handle_webrtc)
+
+    # HUD overlay WebSocket (server-side rendered overlay at 20Hz)
+    app.router.add_get("/ws/hud", handle_hud_ws)
 
     # Media file serving
     app.router.add_get("/connectdata/{path:.*}", handle_connectdata)
