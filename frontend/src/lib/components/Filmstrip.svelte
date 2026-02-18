@@ -29,13 +29,14 @@
 <div bind:this={container} class="flex gap-0.5 overflow-hidden rounded-t-lg">
   {#each segments() as seg}
     <button
-      class="flex-1 min-w-0 aspect-[16/9] bg-surface-700 overflow-hidden cursor-pointer hover:opacity-80 transition-opacity"
+      class="flex-1 min-w-0 aspect-[16/9] bg-surface-700 overflow-hidden cursor-pointer hover:opacity-80 transition-opacity relative"
       onclick={() => onclick?.(seg)}
     >
+      <span class="absolute inset-0 flex items-center justify-center text-[10px] text-surface-500">{seg}</span>
       <img
         src={spriteUrl(route, seg)}
         alt="Segment {seg}"
-        class="w-full h-full object-cover"
+        class="w-full h-full object-cover relative"
         loading="lazy"
         onerror={(e) => e.target.style.display = 'none'}
       />
