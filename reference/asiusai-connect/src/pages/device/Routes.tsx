@@ -9,7 +9,7 @@ import { usePreservedRoutes } from '../../api/queries'
 import { Route, RouteSegment } from '../../types'
 import { Link } from 'react-router-dom'
 import { getStartEndPlaceName } from '../../utils/map'
-import { useRouteParams } from '../../utils/hooks'
+import { useDongleId } from '../../utils/DongleIdContext'
 import clsx from 'clsx'
 import { useStorage } from '../../utils/storage'
 import { getRouteStats, getTimelineEvents, RouteStats, TimelineEvent } from '../../utils/derived'
@@ -77,7 +77,7 @@ const Filmstrip = ({ route }: { route: Route }) => {
   // Fallback to 16 for SSR or initial render
   const imageCount = width ? Math.max(1, Math.round(width / 72)) : 16
 
-  const baseRouteUrl = `/${route.dongle_id}/${route.fullname.slice(17)}`
+  const baseRouteUrl = `/${route.fullname.slice(17)}`
 
   const images = useMemo(() => {
     const totalImages = route.maxqlog + 1
@@ -133,7 +133,7 @@ const RouteCard = ({ route }: { route: RouteSegment | (Route & { is_preserved: b
   }, [route])
 
   const engagementPercent = stats ? (stats.engagedDurationMs / durationMs) * 100 : 0
-  const routeUrl = `/${route.dongle_id}/${route.fullname.slice(17)}`
+  const routeUrl = `/${route.fullname.slice(17)}`
 
   const [distVal, distUnit] = formatDistance(route.distance ?? 0)!.split(' ')
 
@@ -150,7 +150,7 @@ const RouteCard = ({ route }: { route: RouteSegment | (Route & { is_preserved: b
       <div className="relative flex flex-col w-full overflow-hidden group-hover:ring-1 group-hover:ring-white/10 rounded-t-lg">
         {/* Preserved Badge Overlay */}
         {isPreserved && (
-          <div className="absolute top-0 right-0 z-10 rounded-bl-lg bg-amber-500 p-1.5 shadow-md">
+          <div className="absolute top-0 right-0 z-10 rounded-bl-lg bg-green-500 p-1.5 shadow-md">
             <Icon name="bookmark" className="text-white text-[16px]" />
           </div>
         )}
@@ -255,7 +255,7 @@ const StorageBanner = () => {
 }
 
 const All = () => {
-  const { dongleId } = useRouteParams()
+  const dongleId = useDongleId()
   const query = api.routes.routesSegments.useInfiniteQuery({
     queryKey: ['allRoutes', dongleId],
     queryData: ({ pageParam }: any) => ({ query: pageParam, params: { dongleId } }),
@@ -305,7 +305,7 @@ const All = () => {
 }
 
 const Preserved = () => {
-  const { dongleId } = useRouteParams()
+  const dongleId = useDongleId()
   const [preserved] = usePreservedRoutes(dongleId)
   let prevDayHeader: string | undefined
 
@@ -338,7 +338,7 @@ export const Routes = ({ className }: { className: string }) => {
   return (
     <div className={clsx('relative flex flex-col', className)}>
       <div className="flex items-center justify-between px-2 pb-4">
-        <h2 className="text-xl font-bold tracking-tight">Drives</h2>
+        <h2 className="text-xl font-bold tracking-tight">Routes</h2>
         <Slider options={{ all: 'All', preserved: 'Preserved' }} value={show} onChange={setShow} />
       </div>
       <StorageBanner />

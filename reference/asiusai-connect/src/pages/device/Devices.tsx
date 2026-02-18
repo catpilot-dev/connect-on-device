@@ -45,7 +45,7 @@ export const Devices = ({ close, isDropdown }: { close: () => void; isDropdown?:
             )}
             onClick={() => {
               close()
-              navigate(`/${device.dongle_id}`)
+              navigate('/')
             }}
           >
             <div className="flex flex-col gap-0.5 z-10">

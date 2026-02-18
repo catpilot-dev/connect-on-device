@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useParams as useParamsRouter } from 'react-router-dom'
 import { callAthena, UploadQueueItem } from '../api/athena'
+import { useDongleId } from './DongleIdContext'
 import { z } from 'zod'
 
 type Dimensions = { width: number; height: number }
@@ -18,9 +19,10 @@ export const useDimensions = (): Dimensions => {
 }
 
 export const useRouteParams = () => {
-  const { dongleId, date, start, end } = useParamsRouter()
+  const { date, start, end } = useParamsRouter()
+  const dongleId = useDongleId()
   return {
-    dongleId: dongleId!,
+    dongleId,
     date: date!,
     routeName: `${dongleId}/${date}`,
     start: start ? Number(start) : undefined,

@@ -140,7 +140,7 @@ const QCameraDownload = () => {
   )
 }
 const FullRouteDownload = ({ type, files }: { type: FileType; files: SegmentFiles }) => {
-  const { dongleId, date, routeName } = useRouteParams()
+  const { date, routeName } = useRouteParams()
   const [progress, setProgress] = useState<Record<number, number>>({})
 
   const values = Object.values(progress)
@@ -148,7 +148,7 @@ const FullRouteDownload = ({ type, files }: { type: FileType; files: SegmentFile
   if (!files[type].every(Boolean)) return null
 
   if (type === 'logs' || type === 'qlogs')
-    return <FileAction label={FILE_INFO[type].processed || 'View'} icon="open_in_new" href={`/${dongleId}/${date}/${type}`} />
+    return <FileAction label={FILE_INFO[type].processed || 'View'} icon="open_in_new" href={`/${date}/${type}`} />
 
   if (type === 'qcameras') return <QCameraDownload />
 
@@ -180,14 +180,14 @@ const DownloadSegment = ({ type, files, segment }: { segment: number; type: File
 }
 
 const ProcessSegment = ({ type, files, segment }: { segment: number; type: FileType; files: SegmentFiles }) => {
-  const { dongleId, date } = useRouteParams()
+  const { date } = useRouteParams()
   const file = files[type][segment]
 
   if (!file) return null
   if (type === 'qcameras') return null
 
   if (type === 'logs' || type === 'qlogs')
-    return <FileAction label={FILE_INFO[type].processed || 'View'} icon="open_in_new" href={`/${dongleId}/${date}/${type}?segment=${segment}`} />
+    return <FileAction label={FILE_INFO[type].processed || 'View'} icon="open_in_new" href={`/${date}/${type}?segment=${segment}`} />
 
   // For HEVC files, offer raw download instead of FFmpeg conversion
   return <FileAction label={FILE_INFO[type].raw} icon="download" href={file} download={file.split('/').pop()} />

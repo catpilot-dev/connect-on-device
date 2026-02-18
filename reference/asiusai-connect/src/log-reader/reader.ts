@@ -43,9 +43,20 @@ export type CarState = {
 }
 export type SelfdriveState = {
   ExperimentalMode: boolean
+  Enabled: boolean
+  AlertText1: string
+  AlertText2: string
+  AlertStatus: number   // 0=normal, 1=userPrompt, 2=critical
+  AlertSize: number     // 0=none, 1=small, 2=mid, 3=full
 }
 export type LiveCalibration = {
   RpyCalib: number[] // [roll, pitch, yaw] in radians
+}
+export type LeadData = {
+  DRel: number    // distance [m]
+  YRel: number    // lateral offset [m]
+  VRel: number    // relative velocity [m/s]
+  Status: boolean
 }
 export type FrameData = {
   event: 'ModelV2' | 'DrivingModelData'
@@ -54,6 +65,7 @@ export type FrameData = {
   DriverStateV2?: DriverStateV2
   SelfdriveState?: SelfdriveState
   LiveCalibration?: LiveCalibration
+  LeadOne?: LeadData
 }
 export type ReadLogsInput = {
   url: string
@@ -72,6 +84,7 @@ export const readLogs = async ({ url }: ReadLogsInput) => {
   let DriverStateV2: DriverStateV2 | undefined
   let SelfdriveState: SelfdriveState | undefined
   let LiveCalibration: LiveCalibration | undefined
+  let LeadOne: LeadData | undefined
 
   for await (const event of reader) {
     if ('LiveCalibration' in event) {
@@ -95,7 +108,27 @@ export const readLogs = async ({ url }: ReadLogsInput) => {
     }
 
     if ('SelfdriveState' in event) {
-      SelfdriveState = { ExperimentalMode: event.SelfdriveState.ExperimentalMode }
+      const sd = event.SelfdriveState
+      SelfdriveState = {
+        ExperimentalMode: sd.ExperimentalMode ?? false,
+        Enabled: sd.Enabled ?? false,
+        AlertText1: sd.AlertText1 ?? '',
+        AlertText2: sd.AlertText2 ?? '',
+        AlertStatus: sd.AlertStatus ?? 0,
+        AlertSize: sd.AlertSize ?? 0,
+      }
+    }
+
+    if ('RadarState' in event) {
+      const lead = event.RadarState.LeadOne
+      if (lead) {
+        LeadOne = {
+          DRel: lead.DRel ?? 0,
+          YRel: lead.YRel ?? 0,
+          VRel: lead.VRel ?? 0,
+          Status: lead.Status ?? false,
+        }
+      }
     }
 
     if ('DriverStateV2' in event) {
@@ -128,6 +161,7 @@ export const readLogs = async ({ url }: ReadLogsInput) => {
         DriverStateV2,
         SelfdriveState,
         LiveCalibration,
+        LeadOne,
       }
     }
   }

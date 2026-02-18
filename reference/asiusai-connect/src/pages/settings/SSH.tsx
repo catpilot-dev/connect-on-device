@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useRouteParams } from '../../utils/hooks'
+import { useDongleId } from '../../utils/DongleIdContext'
 import { accessToken } from '../../utils/helpers'
 import { env } from '../../utils/env'
 import { Icon } from '../../components/Icon'
@@ -8,7 +8,7 @@ import { toast } from 'sonner'
 const getProvider = (mode: string) => (mode === 'konik' ? 'konik' : mode === 'comma' ? 'comma' : 'asius')
 
 export const SSH = () => {
-  const { dongleId } = useRouteParams()
+  const dongleId = useDongleId()
   const token = accessToken()
   const [showToken, setShowToken] = useState(false)
 

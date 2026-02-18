@@ -72,7 +72,7 @@ const Pairing = ({ token }: { token: string }) => {
         const res = await api.devices.pair.mutate({ body: { pair_token: token } })
         if (res.status !== 200) return navigate(`/pair?error=${getErrorMessage(res.status)}`)
 
-        navigate(`/${res.body.dongle_id}`)
+        navigate('/')
         devices.refetch()
       } catch (error) {
         console.error('Error pairing device', error)

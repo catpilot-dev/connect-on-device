@@ -4,11 +4,9 @@ import { useRouteParams } from '../utils/hooks'
 import { Loading } from '../components/Loading'
 import { Button } from '../components/Button'
 import { Icon } from '../components/Icon'
-import { Sidebar } from '../components/Sidebar'
 import { isSignedIn, setAccessToken } from '../utils/helpers'
 import { env } from '../utils/env'
-import { useStorage } from '../utils/storage'
-import { useEffect } from 'react'
+import { DongleIdProvider } from '../utils/DongleIdContext'
 
 const RouteNotFound = () => {
   const { routeName } = useRouteParams()
@@ -31,21 +29,9 @@ const RouteNotFound = () => {
   )
 }
 
-export const Component = () => {
-  const { routeName, dongleId } = useRouteParams()
+const RouteContent = () => {
+  const { routeName } = useRouteParams()
   const [route, { isLoading }] = useRoute(routeName)
-  const [lastDongleId, setLastDongleId] = useStorage('lastDongleId')
-
-  useEffect(() => {
-    if (dongleId && dongleId !== lastDongleId) {
-      setLastDongleId(dongleId)
-    }
-  }, [dongleId, lastDongleId, setLastDongleId])
-
-  // Auto-login in local mode
-  if (!isSignedIn() && env.MODE === 'device' && env.DEMO_ACCESS_TOKEN) {
-    setAccessToken(env.DEMO_ACCESS_TOKEN)
-  }
 
   if (isLoading) return <Loading className="h-screen w-screen" />
 
@@ -53,10 +39,22 @@ export const Component = () => {
 
   return (
     <div className="flex min-h-screen bg-background text-foreground">
-      {isSignedIn() && <Sidebar />}
       <div className="flex-1 flex flex-col min-w-0">
         <Outlet />
       </div>
     </div>
+  )
+}
+
+export const Component = () => {
+  // Auto-login in local mode
+  if (!isSignedIn() && env.MODE === 'device' && env.DEMO_ACCESS_TOKEN) {
+    setAccessToken(env.DEMO_ACCESS_TOKEN)
+  }
+
+  return (
+    <DongleIdProvider>
+      <RouteContent />
+    </DongleIdProvider>
   )
 }

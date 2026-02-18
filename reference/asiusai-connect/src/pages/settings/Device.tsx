@@ -4,11 +4,11 @@ import { api } from '../../api'
 import { useDevice, useDevices } from '../../api/queries'
 import { ButtonBase } from '../../components/ButtonBase'
 import { getDeviceName } from '../../types'
-import { useRouteParams } from '../../utils/hooks'
+import { useDongleId } from '../../utils/DongleIdContext'
 import { Icon } from '../../components/Icon'
 
 export const Device = () => {
-  const { dongleId } = useRouteParams()
+  const dongleId = useDongleId()
   const navigate = useNavigate()
   const [device, { refetch }] = useDevice(dongleId)
   const [_, devices] = useDevices()

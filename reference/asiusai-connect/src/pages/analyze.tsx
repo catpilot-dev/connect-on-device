@@ -1,6 +1,7 @@
 import { BackButton } from '../components/BackButton'
 import { TopAppBar } from '../components/TopAppBar'
-import { useAsyncMemo, useRouteParams } from '../utils/hooks'
+import { useAsyncMemo } from '../utils/hooks'
+import { useDongleId } from '../utils/DongleIdContext'
 import { callAthena } from '../api/athena'
 import { Select } from '../components/Select'
 import { useState } from 'react'
@@ -12,7 +13,7 @@ import { Label } from '../components/Label'
 import { useStorage } from '../utils/storage'
 
 export const Component = () => {
-  const { dongleId } = useRouteParams()
+  const dongleId = useDongleId()
   const [service, setService] = useStorage('analyzeService')
   const [state, setState] = useState<'loading' | 'error' | 'success'>()
 
@@ -28,7 +29,7 @@ export const Component = () => {
 
   return (
     <>
-      <TopAppBar leading={<BackButton href={`/${dongleId}`} />}>Analyze</TopAppBar>
+      <TopAppBar leading={<BackButton href="/" />}>Analyze</TopAppBar>
       <div className="p-6 flex flex-col gap-6">
         <Label>
           Service

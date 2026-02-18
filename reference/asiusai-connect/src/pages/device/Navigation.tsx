@@ -1,73 +1,56 @@
 import clsx from 'clsx'
 import { ButtonBase } from '../../components/ButtonBase'
 import { Icon } from '../../components/Icon'
-import { useRouteParams } from '../../utils/hooks'
 import { useStorage } from '../../utils/storage'
+import { useState, useRef, useEffect } from 'react'
 
 export const Navigation = ({ className }: { className?: string }) => {
-  const { dongleId } = useRouteParams()
   const [usingCorrectFork] = useStorage('usingCorrectFork')
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
 
   const items = [
-    {
-      title: 'Home',
-      icon: 'home',
-      href: `/${dongleId}`,
-      color: 'text-blue-400',
-    },
-    {
-      title: 'Sentry',
-      icon: 'photo_camera',
-      href: `/${dongleId}/sentry`,
-      color: 'text-red-400',
-    },
-    {
-      title: 'Live',
-      icon: 'play_arrow',
-      href: `/${dongleId}/live`,
-      color: 'text-orange-400',
-      hide: !usingCorrectFork,
-    },
-    {
-      title: 'Params',
-      icon: 'switches',
-      href: `/${dongleId}/params`,
-      color: 'text-purple-400',
-      hide: !usingCorrectFork,
-    },
-    {
-      title: 'Analyze',
-      icon: 'bar_chart',
-      href: `/${dongleId}/analyze`,
-      color: 'text-green-500',
-    },
-    {
-      title: 'Settings',
-      icon: 'settings',
-      href: `/${dongleId}/settings`,
-      color: 'text-yellow-400',
-    },
+    { title: 'Sentry', icon: 'photo_camera', href: '/sentry' },
+    { title: 'Live', icon: 'play_arrow', href: '/live', hide: !usingCorrectFork },
+    { title: 'Params', icon: 'switches', href: '/params', hide: !usingCorrectFork },
+    { title: 'Analyze', icon: 'bar_chart', href: '/analyze' },
+    { title: 'Settings', icon: 'settings', href: '/settings' },
   ]
+
   return (
-    <div className={clsx('grid grid-cols-2 md:grid-cols-1 gap-4 md:gap-0', className)}>
-      {items
-        .filter((x) => !x.hide)
-        .map(({ title, href, icon, color }, i, arr) => (
-          <ButtonBase
-            key={title}
-            href={href}
-            disabled={!href}
-            className={clsx(
-              'flex md:flex-row bg-background-alt md:bg-transparent items-center p-4 gap-4 md:gap-3 md:px-3 md:py-2  rounded-lg transition-colors font-medium',
-              href && 'hover:bg-white/10 text-white',
-              title === 'Home' && 'hidden md:flex',
-              i === arr.length - 1 && i % 2 !== 0 && 'justify-center col-span-2 md:col-span-1 md:justify-start',
-            )}
-          >
-            <Icon name={icon as any} className={clsx('text-xl md:text-2xl', color)} />
-            <span>{title}</span>
-          </ButtonBase>
-        ))}
+    <div ref={ref} className={clsx('relative', className)}>
+      <ButtonBase
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 transition-colors text-sm font-medium text-white/70"
+      >
+        <Icon name="menu" className="text-lg" />
+        <span>Menu</span>
+      </ButtonBase>
+      {open && (
+        <div className="absolute top-full left-0 mt-1 z-50 bg-[#1e1e1e]/95 backdrop-blur-sm border border-white/10 rounded-xl shadow-2xl overflow-hidden min-w-[160px]">
+          {items
+            .filter((x) => !x.hide)
+            .map(({ title, href, icon }) => (
+              <ButtonBase
+                key={title}
+                href={href}
+                className="flex items-center gap-3 px-4 py-2.5 hover:bg-white/10 transition-colors text-sm text-white w-full"
+              >
+                <Icon name={icon as any} className="text-lg text-white/60" />
+                <span>{title}</span>
+              </ButtonBase>
+            ))}
+        </div>
+      )}
     </div>
   )
 }

@@ -1,6 +1,5 @@
 import clsx from 'clsx'
 import { useStorage } from '../../utils/storage'
-import { env } from '../../utils/env'
 
 const ToggleSwitch = ({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) => (
   <div
@@ -14,8 +13,6 @@ const ToggleSwitch = ({ value, onChange }: { value: boolean; onChange: (v: boole
 export const Preferences = () => {
   const [unitFormat, setUnitFormat] = useStorage('unitFormat')
   const [timeFormat, setTimeFormat] = useStorage('timeFormat')
-  const [usingCorrectFork, setUsingCorrectFork] = useStorage('usingCorrectFork')
-
   return (
     <div className="flex flex-col gap-4">
       <h2 className="text-xl font-bold px-2">Preferences</h2>
@@ -32,13 +29,6 @@ export const Preferences = () => {
           <span className="text-xs text-white/60">Use 12h (AM/PM) format instead of 24h</span>
         </div>
         <ToggleSwitch value={timeFormat === '12h'} onChange={(v) => setTimeFormat(v ? '12h' : '24h')} />
-      </div>
-      <div className="bg-background-alt rounded-xl p-4 flex items-center justify-between">
-        <div className="flex flex-col">
-          <span className="font-medium">Using {env.FORK} fork</span>
-          <span className="text-xs text-white/60">Enable if your device runs our fork (required for all features)</span>
-        </div>
-        <ToggleSwitch value={!!usingCorrectFork} onChange={setUsingCorrectFork} />
       </div>
     </div>
   )

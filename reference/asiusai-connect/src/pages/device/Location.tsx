@@ -126,7 +126,7 @@ export const Location = ({ className, device }: { className?: string; device?: D
           id: device.dongle_id,
           lat: location.lat,
           lng: location.lng,
-          href: `/${device.dongle_id}`,
+          href: '/',
           label: getDeviceName(device),
           iconName: 'directions_car',
         } satisfies MarkerType)

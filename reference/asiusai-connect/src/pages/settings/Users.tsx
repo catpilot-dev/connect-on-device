@@ -2,11 +2,11 @@ import { ButtonBase } from '../../components/ButtonBase'
 import { Icon } from '../../components/Icon'
 import { useState } from 'react'
 import { api } from '../../api'
-import { useRouteParams } from '../../utils/hooks'
+import { useDongleId } from '../../utils/DongleIdContext'
 import { useUsers } from '../../api/queries'
 
 export const Users = () => {
-  const { dongleId } = useRouteParams()
+  const dongleId = useDongleId()
 
   let [users, { refetch }] = useUsers(dongleId)
 

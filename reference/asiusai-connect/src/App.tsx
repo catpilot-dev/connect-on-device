@@ -75,9 +75,9 @@ const router = createBrowserRouter([
     errorElement: <ErrorPage />,
   },
 
-  // Route pages
+  // Route pages (flat URL — no dongleId)
   {
-    path: ':dongleId/:date/:start?/:end?',
+    path: ':date/:start?/:end?',
     lazy: () => import('./layouts/route'),
     errorElement: <ErrorPage />,
     children: [
@@ -96,12 +96,36 @@ const router = createBrowserRouter([
     ],
   },
 
-  // Other authorized pages
+  // Authorized pages (flat URLs — single device, no dongleId in URL)
   {
     path: '',
     lazy: () => import('./layouts/authorized'),
     errorElement: <ErrorPage />,
     children: [
+      {
+        path: '',
+        lazy: () => import('./pages/device/index'),
+      },
+      {
+        path: 'live',
+        lazy: () => import('./pages/live/index'),
+      },
+      {
+        path: 'params',
+        lazy: () => import('./pages/params/index'),
+      },
+      {
+        path: 'settings',
+        lazy: () => import('./pages/settings'),
+      },
+      {
+        path: 'sentry',
+        lazy: () => import('./pages/sentry'),
+      },
+      {
+        path: 'analyze',
+        lazy: () => import('./pages/analyze'),
+      },
       {
         path: 'pair',
         lazy: () => import('./pages/pair'),
@@ -109,39 +133,6 @@ const router = createBrowserRouter([
       {
         path: 'first-pair',
         lazy: () => import('./pages/first-pair'),
-      },
-      {
-        path: ':dongleId',
-        children: [
-          {
-            path: 'live',
-            lazy: () => import('./pages/live/index'),
-          },
-          {
-            path: 'params',
-            lazy: () => import('./pages/params/index'),
-          },
-          {
-            path: 'settings',
-            lazy: () => import('./pages/settings'),
-          },
-          {
-            path: 'prime',
-            lazy: () => import('./pages/settings/index'),
-          },
-          {
-            path: 'sentry',
-            lazy: () => import('./pages/sentry'),
-          },
-          {
-            path: 'analyze',
-            lazy: () => import('./pages/analyze'),
-          },
-          {
-            path: '',
-            lazy: () => import('./pages/device/index'),
-          },
-        ],
       },
     ],
   },

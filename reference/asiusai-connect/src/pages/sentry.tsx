@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { useRouteParams } from '../utils/hooks'
+import { useDongleId } from '../utils/DongleIdContext'
 import { callAthena } from '../api/athena'
 import { toast } from 'sonner'
 import { useSearchParams } from 'react-router-dom'
@@ -13,7 +13,7 @@ import { IconButton } from '../components/IconButton'
 import { saveFile } from '../utils/helpers'
 
 export const Component = () => {
-  const { dongleId } = useRouteParams()
+  const dongleId = useDongleId()
   const [images, setImages] = useState<string[]>()
   const [params] = useSearchParams()
   const instant = params.get('instant')
@@ -33,7 +33,7 @@ export const Component = () => {
 
   return (
     <div className="flex flex-col min-h-screen bg-background text-foreground">
-      <TopAppBar leading={<BackButton href={`/${dongleId}`} />}>Sentry Mode</TopAppBar>
+      <TopAppBar leading={<BackButton href="/" />}>Sentry Mode</TopAppBar>
 
       <div className="flex flex-col gap-4 p-4 h-full">
         {isLoading && (

@@ -1,30 +1,40 @@
 import { useStats } from '../../api/queries'
 import { Slider } from '../../components/Slider'
-import { DetailRow } from '../../components/DetailRow'
 import { formatDistance, formatDuration } from '../../utils/format'
-import { useRouteParams } from '../../utils/hooks'
+import { useDongleId } from '../../utils/DongleIdContext'
 import clsx from 'clsx'
 import { useStorage } from '../../utils/storage'
 
-export const Stats = ({ className }: { className: string }) => {
-  const { dongleId } = useRouteParams()
+export const Stats = ({ className }: { className?: string }) => {
+  const dongleId = useDongleId()
   const [stats] = useStats(dongleId)
   const [timeRange, setTimeRange] = useStorage('statsTime')
 
   if (!stats) return null
 
-  const currentStats = stats[timeRange]
+  const s = stats[timeRange]
+
+  const engagedPct =
+    s.total_minutes_with_events && s.total_minutes_with_events > 0
+      ? Math.round((s.engaged_minutes / s.total_minutes_with_events) * 100)
+      : undefined
+
+  const items = [
+    { label: 'Distance', value: formatDistance(s.distance) ?? '0' },
+    { label: 'Duration', value: formatDuration(s.minutes) ?? '0 min' },
+    { label: 'Routes', value: s.routes.toString() },
+    ...(engagedPct !== undefined ? [{ label: 'Engaged', value: `${engagedPct}%` }] : []),
+  ]
+
   return (
-    <div className={clsx('flex flex-col gap-4', className)}>
-      <div className="flex items-center justify-between px-2">
-        <h2 className="text-xl font-bold">Statistics</h2>
-        <Slider options={{ all: 'All', week: 'Weekly' }} value={timeRange} onChange={setTimeRange} />
-      </div>
-      <div className="bg-background-alt rounded-xl px-4 py-3 flex flex-col">
-        <DetailRow label="Distance" value={formatDistance(currentStats.distance)} />
-        <DetailRow label="Time" value={formatDuration(currentStats.minutes)} />
-        <DetailRow label="Drives" value={currentStats.routes.toString()} />
-      </div>
+    <div className={clsx('flex items-center gap-6', className)}>
+      <Slider options={{ all: 'All', week: 'Last week' }} value={timeRange} onChange={setTimeRange} />
+      {items.map(({ label, value }) => (
+        <div key={label} className="flex flex-col items-start">
+          <span className="text-xs text-white/40 font-medium">{label}</span>
+          <span className="text-sm font-bold text-white leading-tight">{value}</span>
+        </div>
+      ))}
     </div>
   )
 }

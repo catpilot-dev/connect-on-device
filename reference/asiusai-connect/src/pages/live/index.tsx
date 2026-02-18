@@ -1,11 +1,11 @@
 import { useState, useEffect, useRef } from 'react'
-import { useRouteParams } from '../../utils/hooks'
+import { useDongleId } from '../../utils/DongleIdContext'
 import { TopAppBar } from '../../components/TopAppBar'
 import { BackButton } from '../../components/BackButton'
 import { Icon } from '../../components/Icon'
 
 export const Component = () => {
-  const { dongleId } = useRouteParams()
+  const dongleId = useDongleId()
   const [status, setStatus] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [reconnecting, setReconnecting] = useState(false)
@@ -315,7 +315,7 @@ export const Component = () => {
 
   return (
     <div className="flex flex-col min-h-screen bg-transparent text-foreground gap-4 relative">
-      <TopAppBar leading={<BackButton href={`/${dongleId}`} />} className="z-10 bg-transparent">
+      <TopAppBar leading={<BackButton href="/" />} className="z-10 bg-transparent">
         Live
       </TopAppBar>
 

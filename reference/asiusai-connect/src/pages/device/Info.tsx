@@ -1,12 +1,12 @@
 import clsx from 'clsx'
 import { useRoutesSegments } from '../../api/queries'
 import { DetailRow } from '../../components/DetailRow'
-import { useRouteParams } from '../../utils/hooks'
+import { useDongleId } from '../../utils/DongleIdContext'
 import { useStorage } from '../../utils/storage'
 import { env } from '../../utils/env'
 
 export const Info = ({ className }: { className?: string }) => {
-  const { dongleId } = useRouteParams()
+  const dongleId = useDongleId()
   const [routes] = useRoutesSegments(dongleId, { limit: 1 })
   const route = routes?.[0]
 

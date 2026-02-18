@@ -9,7 +9,7 @@ import { useEffect, useMemo } from 'react'
 import { toast } from 'sonner'
 import clsx from 'clsx'
 import { Icon } from '../../components/Icon'
-import { useRouteParams } from '../../utils/hooks'
+import { useDongleId } from '../../utils/DongleIdContext'
 import { Navigation } from './Navigation'
 import { Models } from './Models'
 
@@ -34,7 +34,7 @@ const SectionHeader = ({ label, isOpen, onClick, count }: { label: string; isOpe
 )
 
 export const Component = () => {
-  const { dongleId } = useRouteParams()
+  const dongleId = useDongleId()
   const { isError, load, save, isSaving, get, types, setChanges, changes } = useDeviceParams()
   const [usingCorrectFork] = useStorage('usingCorrectFork')
   const [openSection, setOpenSection] = useStorage('togglesOpenTab')
@@ -106,7 +106,7 @@ export const Component = () => {
 
   return (
     <div className="flex flex-col min-h-screen bg-transparent text-foreground gap-4">
-      <TopAppBar leading={<BackButton href={`/${dongleId}`} />} className="z-10 bg-transparent">
+      <TopAppBar leading={<BackButton href="/" />} className="z-10 bg-transparent">
         <div className="flex items-center gap-3 w-full">
           <span>Toggles</span>
           {changeCount > 0 && (

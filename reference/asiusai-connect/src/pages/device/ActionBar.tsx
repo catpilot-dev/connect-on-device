@@ -2,7 +2,7 @@ import clsx from 'clsx'
 import { IconName } from '../../components/Icon'
 import { z } from 'zod'
 import { useDeviceParams } from './useDeviceParams'
-import { useRouteParams } from '../../utils/hooks'
+import { useDongleId } from '../../utils/DongleIdContext'
 import { IconButton } from '../../components/IconButton'
 import { DeviceParamType } from '../../utils/params'
 import { useStorage } from '../../utils/storage'
@@ -37,7 +37,7 @@ const BUTTON_STYLE = 'h-full w-full rounded-md border border-white/5 text-white 
 const SELECTED_BUTTON = 'bg-white !text-background-alt hover:!bg-white/80'
 
 const RedirectActionComponent = ({ icon, title, href }: z.infer<typeof RedirectAction>) => {
-  const { dongleId } = useRouteParams()
+  const dongleId = useDongleId()
   return (
     <IconButton
       name={icon}

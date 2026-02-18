@@ -69,7 +69,7 @@ export function buildCarSpaceTransform(rpyCalib: number[], canvasW: number, canv
   return matMul3(videoTransform, calibTransform)
 }
 
-function mapToScreen(T: number[][], x: number, y: number, z: number): [number, number] | null {
+export function mapToScreen(T: number[][], x: number, y: number, z: number): [number, number] | null {
   const pt = matVec3(T, [x, y, z])
   if (pt[2] < 1.0) return null  // skip points < ~1m (avoids extreme perspective)
   return [pt[0] / pt[2], pt[1] / pt[2]]
