@@ -51,24 +51,11 @@ logger = logging.getLogger("connect")
 
 # ─── Lifecycle hooks ──────────────────────────────────────────────────
 
-async def _start_enrichment(app: web.Application):
-    """Start the persistent background enrichment loop on server startup."""
+async def _startup(app: web.Application):
+    """Initial route scan on server startup."""
     store: RouteStore = app["store"]
     store.scan(force=True)
-    app["enrichment_task"] = asyncio.create_task(store._enrichment_loop())
-    logger.info("Background enrichment task started")
-
-
-async def _stop_enrichment(app: web.Application):
-    """Cancel the background enrichment loop on server shutdown."""
-    task = app.get("enrichment_task")
-    if task:
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-    logger.info("Background enrichment task stopped")
+    logger.info("Route scan complete, %d routes found", len(store._routes))
 
 
 # ─── App factory ──────────────────────────────────────────────────────
@@ -80,9 +67,7 @@ def create_app(data_dir: str, static_dir: str) -> web.Application:
     app["store"] = store
     app["static_dir"] = Path(static_dir)
 
-    # Background enrichment lifecycle
-    app.on_startup.append(_start_enrichment)
-    app.on_cleanup.append(_stop_enrichment)
+    app.on_startup.append(_startup)
 
     # ── comma-compatible API ──
     # Auth
