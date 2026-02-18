@@ -29,6 +29,19 @@ DEFAULT_PORT = 8082
 CACHE_TTL = 120  # seconds — route scan is expensive with metadata
 METADATA_FILE = "metadata.json"
 
+
+def _route_counter(local_id: str) -> int:
+    """Extract monotonic counter from route local_id (e.g. '00000114--abc' -> 114).
+
+    The counter is always monotonically increasing per-device, making it a
+    reliable proxy for route recency — unlike directory mtime which may
+    reflect the AGNOS build date instead of actual drive time.
+    """
+    try:
+        return int(local_id.split("--")[0])
+    except (ValueError, IndexError):
+        return 0
+
 # Add openpilot to path for LogReader
 for _p in ["/data/openpilot", "/home/oxygen/openpilot"]:
     if _p not in sys.path:
@@ -40,7 +53,7 @@ class RouteStore:
 
     Uses metadata.json (compatible with route_metadata.py) for persistent
     route metadata. Two-phase approach for fast startup:
-    1. Fast scan: directory listing only (instant) — uses cached metadata or mtime
+    1. Fast scan: directory listing only (instant) — uses cached metadata or route counter
     2. Background enrichment: parse rlog for uncached routes (non-blocking)
 
     metadata.json format (shared with route_metadata.py):
@@ -265,13 +278,14 @@ class RouteStore:
         if wtn:
             route_date = self._wall_time_to_route_date(wtn, lng)
         else:
-            dt = datetime.fromtimestamp(info["mtime"], tz=timezone.utc)
-            if lng is not None:
-                dt = dt.astimezone(timezone(timedelta(hours=round(lng / 15))))
-            route_date = dt.strftime("%Y-%m-%d--%H-%M-%S")
+            # No wallTimeNanos yet (unenriched) — use local_id as route_date
+            # placeholder. Avoids using inaccurate directory mtime.
+            route_date = local_id
 
         fullname = f"{dongle_id}/{route_date}"
-        create_time = internal.get("create_time", info["mtime"])
+        # Use route counter for ordering when enriched create_time unavailable.
+        # Counter is monotonically increasing and always reliable.
+        create_time = internal.get("create_time", _route_counter(local_id))
 
         seg_numbers = [s["number"] for s in info["segments"]]
         max_seg = max(seg_numbers) if seg_numbers else 0
@@ -450,8 +464,9 @@ class RouteStore:
                     await asyncio.sleep(90)
                     continue
 
-                # Sort newest-first by mtime so latest drive is enriched first
-                uncached.sort(key=lambda x: x[1]["mtime"], reverse=True)
+                # Sort newest-first by route counter (more reliable than mtime
+                # which can reflect AGNOS build date instead of actual drive time)
+                uncached.sort(key=lambda x: _route_counter(x[0]), reverse=True)
                 logger.info("Enrichment cycle: %d routes to process", len(uncached))
 
                 count = 0

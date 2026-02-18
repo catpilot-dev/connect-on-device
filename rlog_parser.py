@@ -1,14 +1,42 @@
 """rlog parsing utilities for Connect on Device.
 
 Reads and parses rlog files for route metadata extraction, GPS coordinates,
-segment distances, and drive event generation. Self-contained module using
-only stdlib + lazy cereal/zstandard imports.
+segment distances, drive event generation, and HUD snapshot extraction.
+Self-contained module using only stdlib + lazy cereal/zstandard imports.
 """
 
 import logging
 import math
 
 logger = logging.getLogger("connect.rlog")
+
+
+class AttributeDict(dict):
+    """Dict wrapper supporting attribute access for nested data.
+
+    Allows snapshot dicts to be accessed like cereal objects:
+        msg.position.x, msg.laneLines[0].y, msg.cruiseState.speed
+    so HudRenderer drawing methods work unchanged.
+    """
+
+    def __getattr__(self, key):
+        try:
+            val = self[key]
+        except KeyError:
+            raise AttributeError(f"AttributeDict has no key {key!r}")
+        return val
+
+    def __setattr__(self, key, value):
+        self[key] = value
+
+    @classmethod
+    def wrap(cls, obj):
+        """Recursively wrap dicts/lists into AttributeDict."""
+        if isinstance(obj, dict) and not isinstance(obj, cls):
+            return cls({k: cls.wrap(v) for k, v in obj.items()})
+        if isinstance(obj, (list, tuple)):
+            return [cls.wrap(item) for item in obj]
+        return obj
 
 
 def _iter_rlog(rlog_path: str):
@@ -237,3 +265,114 @@ def _generate_events_json(rlog_path: str, segment_num: int) -> list:
         logger.debug("events generation error for %s: %s", rlog_path, e)
 
     return events
+
+
+def _extract_xyz(obj):
+    """Extract x/y/z lists from a cereal XYZ object into plain lists."""
+    return {"x": list(obj.x), "y": list(obj.y), "z": list(obj.z)}
+
+
+def extract_hud_snapshots(rlog_path: str) -> list:
+    """Extract HUD snapshots from an rlog file for replay rendering.
+
+    Iterates the rlog, tracking latest state for carState, selfdriveState,
+    radarState, and liveCalibration. At each modelV2 event (~20Hz), captures
+    a snapshot of all current state wrapped in AttributeDict for attribute access.
+
+    Returns list of dicts: [{offset_ms, carState, selfdriveState, modelV2, radarState, liveCalibration}, ...]
+    """
+    snapshots = []
+    base_mono = None
+
+    # Latest state accumulators (plain dicts, not capnp refs)
+    latest_car = None
+    latest_sd = None
+    latest_radar = None
+    latest_calib = None
+
+    try:
+        for ev in _iter_rlog(rlog_path):
+            if base_mono is None and ev.which() != "initData":
+                base_mono = ev.logMonoTime
+
+            w = ev.which()
+
+            if w == "carState":
+                cs = ev.carState
+                cruise = cs.cruiseState
+                latest_car = {
+                    "vEgo": float(cs.vEgo),
+                    "vEgoCluster": float(getattr(cs, "vEgoCluster", 0.0)),
+                    "vCruiseCluster": float(getattr(cs, "vCruiseCluster", 0.0)),
+                    "leftBlinker": bool(cs.leftBlinker),
+                    "rightBlinker": bool(cs.rightBlinker),
+                    "cruiseState": {
+                        "speed": float(cruise.speed),
+                        "enabled": bool(cruise.enabled),
+                    },
+                }
+
+            elif w == "selfdriveState":
+                sd = ev.selfdriveState
+                latest_sd = {
+                    "state": str(sd.state),
+                    "enabled": bool(sd.enabled),
+                    "alertSize": sd.alertSize.raw if hasattr(sd.alertSize, "raw") else int(sd.alertSize),
+                    "alertText1": str(sd.alertText1) if sd.alertText1 else "",
+                    "alertText2": str(sd.alertText2) if sd.alertText2 else "",
+                    "alertStatus": sd.alertStatus.raw if hasattr(sd.alertStatus, "raw") else int(sd.alertStatus),
+                }
+
+            elif w == "radarState":
+                rs = ev.radarState
+                lead = rs.leadOne
+                latest_radar = {
+                    "leadOne": {
+                        "status": bool(lead.status),
+                        "dRel": float(lead.dRel),
+                        "yRel": float(lead.yRel),
+                        "vRel": float(lead.vRel),
+                    },
+                }
+
+            elif w == "liveCalibration":
+                lc = ev.liveCalibration
+                latest_calib = {
+                    "rpyCalib": list(lc.rpyCalib),
+                    "height": list(lc.height) if len(lc.height) > 0 else [],
+                }
+
+            elif w == "modelV2":
+                if base_mono is None:
+                    continue
+
+                model = ev.modelV2
+                pos = model.position
+                # Skip empty model frames
+                if len(pos.x) == 0:
+                    continue
+
+                model_dict = {
+                    "position": _extract_xyz(pos),
+                    "laneLines": [_extract_xyz(ll) for ll in model.laneLines],
+                    "laneLineProbs": list(model.laneLineProbs),
+                    "roadEdges": [_extract_xyz(re) for re in model.roadEdges],
+                    "roadEdgeStds": list(model.roadEdgeStds),
+                    "acceleration": {"x": list(model.acceleration.x)},
+                }
+
+                offset_ms = (ev.logMonoTime - base_mono) / 1e6
+                snapshots.append(AttributeDict.wrap({
+                    "offset_ms": offset_ms,
+                    "carState": latest_car,
+                    "selfdriveState": latest_sd,
+                    "modelV2": model_dict,
+                    "radarState": latest_radar,
+                    "liveCalibration": latest_calib,
+                }))
+
+    except Exception as e:
+        logger.warning("HUD snapshot extraction error for %s: %s", rlog_path, e)
+
+    logger.info("Extracted %d HUD snapshots from %s", len(snapshots), rlog_path)
+    return snapshots

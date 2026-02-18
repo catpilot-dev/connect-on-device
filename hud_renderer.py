@@ -354,7 +354,7 @@ class HudRenderer:
             self._sm.update(0)
 
     def render_frame(self) -> bytes | None:
-        """Render one overlay frame. Returns WebP bytes or None."""
+        """Render one overlay frame from live cereal. Returns WebP bytes or None."""
         self.update()
         self._update_blink()
 
@@ -411,6 +411,68 @@ class HudRenderer:
         # Encode to WebP
         buf = io.BytesIO()
         img.save(buf, format='WEBP', lossless=True)
+        return buf.getvalue()
+
+    def render_from_snapshot(self, snapshot) -> bytes:
+        """Render a HUD frame from a pre-extracted rlog snapshot dict.
+
+        Used for replay mode — snapshot comes from extract_hud_snapshots().
+        Snapshot fields are AttributeDict-wrapped, supporting attribute access
+        so all drawing methods work unchanged.
+
+        Renders at full 1928x1208 then downscales to 964x604 for bandwidth.
+        Returns lossy WebP bytes.
+        """
+        img = Image.new('RGBA', (WIDTH, HEIGHT), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+
+        car_state = snapshot.get("carState")
+        selfdrive_state = snapshot.get("selfdriveState")
+        model_v2 = snapshot.get("modelV2")
+        radar_state = snapshot.get("radarState")
+        live_calib = snapshot.get("liveCalibration")
+
+        # Update calibration transform from snapshot
+        if live_calib is not None:
+            rpy = list(live_calib.rpyCalib)
+            if len(rpy) == 3:
+                self._transform = build_transform(rpy)
+                if live_calib.height:
+                    self._path_offset_z = live_calib.height[0]
+
+        # 1. Engagement border
+        self._draw_engagement_border(draw, selfdrive_state)
+
+        # 2. Header gradient
+        img = self._draw_header_gradient(img)
+        draw = ImageDraw.Draw(img)
+
+        # 3-6. Model elements
+        if model_v2 is not None and self._transform is not None:
+            self._draw_model_elements(draw, img, model_v2, radar_state)
+
+        # 7. MAX speed box
+        self._draw_max_speed_box(draw, car_state, selfdrive_state)
+
+        # 8. Speed display
+        self._draw_speed_display(draw, car_state)
+
+        # 9. Turn signals (always show — no blink toggle in replay)
+        if car_state is not None:
+            left = car_state.leftBlinker
+            right = car_state.rightBlinker
+            if left or right:
+                self._draw_turn_signals_always(draw, left, right)
+
+        # 10. Alerts
+        self._draw_alerts(draw, selfdrive_state)
+
+        # Downscale to half resolution for bandwidth
+        img = img.resize((WIDTH // 2, HEIGHT // 2), Image.LANCZOS)
+
+        # Encode as lossy WebP
+        buf = io.BytesIO()
+        img.save(buf, format='WEBP', quality=80)
         return buf.getvalue()
 
     def _update_blink(self):
@@ -715,6 +777,29 @@ class HudRenderer:
         if not left and not right:
             return
 
+        arrow_w = 60
+        arrow_h = 120
+        margin = 50
+        y_center = int(HEIGHT * 0.4)
+
+        if left:
+            pts = [
+                (margin, y_center),
+                (margin + arrow_w, y_center - arrow_h // 2),
+                (margin + arrow_w, y_center + arrow_h // 2),
+            ]
+            draw.polygon(pts, fill=TURN_SIGNAL_COLOR)
+
+        if right:
+            pts = [
+                (WIDTH - margin, y_center),
+                (WIDTH - margin - arrow_w, y_center - arrow_h // 2),
+                (WIDTH - margin - arrow_w, y_center + arrow_h // 2),
+            ]
+            draw.polygon(pts, fill=TURN_SIGNAL_COLOR)
+
+    def _draw_turn_signals_always(self, draw, left, right):
+        """Draw turn signal arrows without blink toggle (for replay snapshots)."""
         arrow_w = 60
         arrow_h = 120
         margin = 50

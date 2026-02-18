@@ -13,11 +13,21 @@ from pathlib import Path
 
 from aiohttp import web
 
-from rlog_parser import _generate_coords_json, _generate_events_json
+from bisect import bisect_left
+from collections import OrderedDict
+
+from rlog_parser import _generate_coords_json, _generate_events_json, extract_hud_snapshots
 from route_helpers import _base_url, _clean_route, _resolve_local_id, _route_engagement, _set_route_url
+from route_store import _route_counter
 from storage_management import DOWNLOAD_FILES, build_download_tar, get_storage_info
 
 logger = logging.getLogger("connect")
+
+# ─── HUD replay cache ────────────────────────────────────────────────
+
+_HUD_SNAPSHOT_CACHE_MAX = 3  # max segments cached in memory
+_hud_snapshot_cache: OrderedDict = OrderedDict()  # (fullname, seg_int) -> snapshot list
+_hud_renderer = None  # lazy-initialized HudRenderer singleton
 
 
 # ─── CORS middleware ───────────────────────────────────────────────────
@@ -147,8 +157,8 @@ async def handle_device_location(request: web.Request) -> web.Response:
     store = request.app["store"]
     routes = store.scan()
 
-    # Find most recent route with GPS
-    for r in sorted(routes.values(), key=lambda x: x["create_time"], reverse=True):
+    # Find most recent route with GPS (sort by route counter, not create_time)
+    for r in sorted(routes.values(), key=lambda x: _route_counter(x.get("_local_id", "")), reverse=True):
         if r.get("start_lat"):
             return web.json_response({
                 "dongle_id": store.dongle_id,
@@ -168,17 +178,29 @@ async def handle_routes_list(request: web.Request) -> web.Response:
     routes = store.scan()
 
     limit = int(request.query.get("limit", 25))
+    # Support both counter-based and timestamp-based pagination cursors
+    before_counter = int(request.query.get("before_counter", 999999999))
     created_before = float(request.query.get("created_before", time.time() + 86400))
 
+    # Sort by route counter (reliable, monotonically increasing per device)
+    sorted_routes = sorted(routes.values(),
+                           key=lambda r: _route_counter(r.get("_local_id", "")),
+                           reverse=True)
+
     route_list = []
-    for r in routes.values():
+    for r in sorted_routes:
+        counter = _route_counter(r.get("_local_id", ""))
+        # Skip routes at or after the cursor
+        if counter >= before_counter:
+            continue
         r_with_url = _set_route_url(r, request)
         cleaned = _clean_route(r_with_url)
-        if cleaned["create_time"] < created_before:
-            route_list.append(cleaned)
+        cleaned["route_counter"] = counter
+        route_list.append(cleaned)
+        if len(route_list) >= limit:
+            break
 
-    route_list.sort(key=lambda r: r["create_time"], reverse=True)
-    return web.json_response(route_list[:limit])
+    return web.json_response(route_list)
 
 
 async def handle_routes_segments(request: web.Request) -> web.Response:
@@ -189,7 +211,9 @@ async def handle_routes_segments(request: web.Request) -> web.Response:
     route_str = request.query.get("route_str", "")
     limit = int(request.query.get("limit", 100))
 
-    sorted_routes = sorted(routes.values(), key=lambda r: r["create_time"], reverse=True)
+    sorted_routes = sorted(routes.values(),
+                           key=lambda r: _route_counter(r.get("_local_id", "")),
+                           reverse=True)
 
     results = []
     for r in sorted_routes:
@@ -220,13 +244,14 @@ async def handle_preserved_routes(request: web.Request) -> web.Response:
     store = request.app["store"]
     routes = store.scan()
     preserved = []
-    for r in routes.values():
+    for r in sorted(routes.values(),
+                    key=lambda r: _route_counter(r.get("_local_id", "")),
+                    reverse=True):
         if store.is_preserved(r["_local_id"]):
             r_with_url = _set_route_url(r, request)
             cleaned = _clean_route(r_with_url)
             cleaned["is_preserved"] = True
             preserved.append(cleaned)
-    preserved.sort(key=lambda r: r["create_time"], reverse=True)
     return web.json_response(preserved)
 
 
@@ -379,6 +404,102 @@ async def handle_storage(request: web.Request) -> web.Response:
     return web.json_response(get_storage_info(store))
 
 
+# ─── HUD replay rendering ────────────────────────────────────────────
+
+def _find_closest_snapshot(snapshots: list, t_ms: int):
+    """Binary search for the snapshot closest to t_ms."""
+    if not snapshots:
+        return None
+    offsets = [s["offset_ms"] for s in snapshots]
+    idx = bisect_left(offsets, t_ms)
+    # Pick the closer of idx-1 and idx
+    if idx == 0:
+        return snapshots[0]
+    if idx >= len(snapshots):
+        return snapshots[-1]
+    if (t_ms - offsets[idx - 1]) <= (offsets[idx] - t_ms):
+        return snapshots[idx - 1]
+    return snapshots[idx]
+
+
+def _render_hud_frame(rlog_path: str, fullname: str, seg_int: int, t_ms: int) -> bytes | None:
+    """Parse snapshots (if not cached) and render a single HUD frame. Runs in executor."""
+    global _hud_renderer, _hud_snapshot_cache
+
+    cache_key = (fullname, seg_int)
+
+    # Memory cache check
+    if cache_key in _hud_snapshot_cache:
+        _hud_snapshot_cache.move_to_end(cache_key)
+        snapshots = _hud_snapshot_cache[cache_key]
+    else:
+        snapshots = extract_hud_snapshots(rlog_path)
+        if not snapshots:
+            return None
+        _hud_snapshot_cache[cache_key] = snapshots
+        # Evict oldest if over limit
+        while len(_hud_snapshot_cache) > _HUD_SNAPSHOT_CACHE_MAX:
+            _hud_snapshot_cache.popitem(last=False)
+
+    snapshot = _find_closest_snapshot(snapshots, t_ms)
+    if snapshot is None:
+        return None
+
+    # Lazy-init renderer
+    if _hud_renderer is None:
+        from hud_renderer import HudRenderer
+        _hud_renderer = HudRenderer()
+
+    return _hud_renderer.render_from_snapshot(snapshot)
+
+
+async def _handle_hud_frame(request, store, fullname: str, seg_int: int, t_ms: int) -> web.Response:
+    """Serve a rendered HUD overlay frame for replay mode."""
+    local_id = store.get_local_id(fullname)
+    if not local_id:
+        raise web.HTTPNotFound()
+
+    seg_dir = store.data_dir / f"{local_id}--{seg_int}"
+
+    # Disk cache check
+    cache_dir = seg_dir / "hud_cache"
+    cache_file = cache_dir / f"{t_ms}.webp"
+    if cache_file.exists():
+        return web.Response(
+            body=cache_file.read_bytes(),
+            content_type="image/webp",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+
+    # Find rlog
+    rlog_path = store.resolve_segment_path(fullname, seg_int, "rlog.zst")
+    if not rlog_path:
+        rlog_path = store.resolve_segment_path(fullname, seg_int, "rlog")
+    if not rlog_path:
+        raise web.HTTPNotFound(text="No rlog for HUD rendering")
+
+    loop = asyncio.get_event_loop()
+    frame_bytes = await loop.run_in_executor(
+        None, _render_hud_frame, str(rlog_path), fullname, seg_int, t_ms
+    )
+
+    if not frame_bytes:
+        raise web.HTTPNotFound(text="No HUD data at this offset")
+
+    # Cache to disk
+    try:
+        cache_dir.mkdir(exist_ok=True)
+        cache_file.write_bytes(frame_bytes)
+    except Exception:
+        pass
+
+    return web.Response(
+        body=frame_bytes,
+        content_type="image/webp",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
 # ─── connectdata file serving ─────────────────────────────────────────
 
 async def handle_connectdata(request: web.Request) -> web.Response:
@@ -399,12 +520,17 @@ async def handle_connectdata(request: web.Request) -> web.Response:
     allowed = {"qcamera.ts", "fcamera.hevc", "ecamera.hevc", "dcamera.hevc",
                "rlog.zst", "rlog", "qlog.zst", "qlog", "sprite.jpg"}
     derived = {"coords.json", "events.json"}
-    if filename not in allowed and filename not in derived:
+    if filename not in allowed and filename not in derived and filename != "hud":
         raise web.HTTPForbidden(text="File not allowed")
 
     fullname = f"{dongle_id}/{route_date}"
     store = request.app["store"]
     seg_int = int(segment)
+
+    # HUD overlay frame: render from rlog snapshots
+    if filename == "hud":
+        t_ms = int(request.query.get("t", "0"))
+        return await _handle_hud_frame(request, store, fullname, seg_int, t_ms)
 
     # Derived files: generate from rlog on demand, cache to disk
     if filename in derived:
