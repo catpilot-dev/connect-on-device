@@ -1,52 +1,45 @@
 <script>
   import { selectedRoute } from '../stores.js'
-  import { fetchAllEvents } from '../api.js'
-  import { formatDate, formatTime, formatDuration, formatDistance, getRouteDurationMs } from '../format.js'
-  import { buildTimelineEvents, calcRouteStats } from '../derived.js'
+  import { enrichRoute, fetchRoute } from '../api.js'
+  import { formatDate, formatTime, formatDuration, formatDistance } from '../format.js'
   import Filmstrip from './Filmstrip.svelte'
-  import EventTimeline from './EventTimeline.svelte'
 
   /** @type {{ route: object }} */
   let { route } = $props()
 
-  let timelineEvents = $state([])
-  let engagedPct = $state(0)
+  let enriching = $state(false)
 
-  const durationMs = $derived(getRouteDurationMs(route))
+  const unenriched = $derived(route.platform == null)
   const durationMin = $derived(
     route.maxqlog != null ? route.maxqlog + 1 : null
   )
-
-  // Fetch events for timeline
-  $effect(() => {
-    fetchAllEvents(route).then((rawEvents) => {
-      const evts = buildTimelineEvents(rawEvents, durationMs)
-      timelineEvents = evts
-      const stats = calcRouteStats(evts)
-      engagedPct = durationMs > 0 ? Math.round((stats.engagedMs / durationMs) * 100) : 0
-    }).catch(() => {})
-  })
 
   function handleClick() {
     selectedRoute.set(route.fullname)
   }
 
-  function handleFilmstripClick(seg) {
-    selectedRoute.set(route.fullname)
+  async function handleEnrich(e) {
+    e.stopPropagation()
+    enriching = true
+    try {
+      await enrichRoute(route.fullname)
+      const updated = await fetchRoute(route.fullname)
+      Object.assign(route, updated)
+    } catch (err) {
+      console.error('Enrich failed:', err)
+    } finally {
+      enriching = false
+    }
   }
 </script>
 
 <button
-  class="card w-full text-left cursor-pointer hover:border-surface-500/50 transition-colors duration-150 overflow-hidden"
+  class="card w-full text-left cursor-pointer hover:border-surface-500/50 transition-colors duration-150 overflow-hidden {unenriched ? 'opacity-50' : ''}"
   onclick={handleClick}
 >
   <!-- Filmstrip -->
   <div class="relative">
-    <Filmstrip {route} maxSegment={route.maxqlog ?? 0} onclick={handleFilmstripClick} />
-    <!-- Timeline bar overlaid at bottom of filmstrip -->
-    <div class="absolute bottom-0 left-0 right-0 px-1 pb-0.5">
-      <EventTimeline events={timelineEvents} {durationMs} />
-    </div>
+    <Filmstrip {route} maxSegment={route.maxqlog ?? 0} onclick={() => handleClick()} />
   </div>
 
   <!-- Metadata row -->
@@ -59,20 +52,29 @@
     </div>
 
     <div class="flex items-center gap-2 text-xs text-surface-400 ml-auto">
-      {#if durationMin != null}
-        <span>{formatDuration(durationMin)}</span>
-      {/if}
-      {#if route.distance != null}
-        <span class="text-surface-600">&middot;</span>
-        <span>{formatDistance(route.distance)}</span>
-      {/if}
-      {#if engagedPct > 0}
-        <span class="text-surface-600">&middot;</span>
-        <span class="text-engage-green">{engagedPct}%</span>
-      {/if}
-      {#if route.platform}
-        <span class="text-surface-600">&middot;</span>
-        <span class="badge bg-surface-700 text-surface-300">{route.platform}</span>
+      {#if unenriched}
+        <span class="text-surface-500">Unknown car</span>
+        <span
+          role="button"
+          tabindex="0"
+          class="badge bg-surface-600 text-surface-200 hover:bg-surface-500 cursor-pointer {enriching ? 'opacity-50 pointer-events-none' : ''}"
+          onclick={handleEnrich}
+          onkeydown={(e) => e.key === 'Enter' && handleEnrich(e)}
+        >
+          {enriching ? 'Enriching...' : 'Enrich'}
+        </span>
+      {:else}
+        {#if durationMin != null}
+          <span>{formatDuration(durationMin)}</span>
+        {/if}
+        {#if route.distance != null}
+          <span class="text-surface-600">&middot;</span>
+          <span>{formatDistance(route.distance)}</span>
+        {/if}
+        {#if route.platform}
+          <span class="text-surface-600">&middot;</span>
+          <span class="badge bg-surface-700 text-surface-300">{route.platform}</span>
+        {/if}
       {/if}
       {#if route.is_preserved}
         <span title="Preserved" class="text-engage-blue">&#9733;</span>

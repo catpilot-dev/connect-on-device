@@ -211,6 +211,15 @@ async def handle_routes_segments(request: web.Request) -> web.Response:
     route_str = request.query.get("route_str", "")
     limit = int(request.query.get("limit", 100))
 
+    # On-demand enrichment when viewing a specific route
+    if route_str:
+        local_id = store.get_local_id(route_str)
+        if local_id:
+            loop = asyncio.get_event_loop()
+            enriched = await loop.run_in_executor(None, store.ensure_enriched, local_id)
+            if enriched:
+                routes = store.scan()
+
     sorted_routes = sorted(routes.values(),
                            key=lambda r: _route_counter(r.get("_local_id", "")),
                            reverse=True)
@@ -266,9 +275,35 @@ async def handle_route_get(request: web.Request) -> web.Response:
     if not route:
         raise web.HTTPNotFound(text=json.dumps({"error": f"Route {route_name} not found"}))
 
+    # On-demand enrichment: enrich when user selects a route
+    local_id = route["_local_id"]
+    loop = asyncio.get_event_loop()
+    enriched = await loop.run_in_executor(None, store.ensure_enriched, local_id)
+    if enriched:
+        route = store.get_route(route_name)
+
     r_with_url = _set_route_url(route, request)
     cleaned = _clean_route(r_with_url)
-    cleaned["is_preserved"] = store.is_preserved(route["_local_id"])
+    cleaned["is_preserved"] = store.is_preserved(local_id)
+    return web.json_response(cleaned)
+
+
+async def handle_route_enrich(request: web.Request) -> web.Response:
+    """POST /v1/route/{routeName}/enrich — on-demand enrichment of a single route"""
+    store = request.app["store"]
+    local_id = _resolve_local_id(store, request)
+
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(store._executor, store.ensure_enriched, local_id)
+
+    route_name = request.match_info["routeName"].replace("|", "/")
+    route = store.get_route(route_name)
+    if not route:
+        raise web.HTTPNotFound(text=json.dumps({"error": f"Route {route_name} not found"}))
+
+    r_with_url = _set_route_url(route, request)
+    cleaned = _clean_route(r_with_url)
+    cleaned["is_preserved"] = store.is_preserved(local_id)
     return web.json_response(cleaned)
 
 
@@ -480,7 +515,7 @@ async def _handle_hud_frame(request, store, fullname: str, seg_int: int, t_ms: i
 
     loop = asyncio.get_event_loop()
     frame_bytes = await loop.run_in_executor(
-        None, _render_hud_frame, str(rlog_path), fullname, seg_int, t_ms
+        store._executor, _render_hud_frame, str(rlog_path), fullname, seg_int, t_ms
     )
 
     if not frame_bytes:
@@ -553,7 +588,10 @@ async def handle_connectdata(request: web.Request) -> web.Response:
 
         gen_fn = _generate_coords_json if filename == "coords.json" else _generate_events_json
         loop = asyncio.get_event_loop()
-        data = await loop.run_in_executor(None, gen_fn, str(rlog), seg_int)
+        # Use store's single-worker executor to serialize rlog decompression.
+        # Prevents parallel requests from decompressing 30 rlogs simultaneously
+        # (each ~200MB), keeping peak memory bounded to 1 rlog at a time.
+        data = await loop.run_in_executor(store._executor, gen_fn, str(rlog), seg_int)
 
         try:
             cache_path.write_text(json.dumps(data))

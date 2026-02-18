@@ -30,6 +30,7 @@ from handlers import (
     handle_preserved_routes,
     handle_route_delete,
     handle_route_download,
+    handle_route_enrich,
     handle_route_files,
     handle_route_get,
     handle_route_preserve,
@@ -107,6 +108,7 @@ def create_app(data_dir: str, static_dir: str) -> web.Application:
     app.router.add_post("/v1/route/{routeName}/preserve", handle_route_preserve)
     app.router.add_delete("/v1/route/{routeName}/preserve", handle_route_unpreserve)
     app.router.add_get("/v1/route/{routeName}/download", handle_route_download)
+    app.router.add_post("/v1/route/{routeName}/enrich", handle_route_enrich)
 
     # Stubs for endpoints the frontend may query
     app.router.add_get("/v1/devices/{dongleId}/athena_offline_queue", handle_stub_empty_array)

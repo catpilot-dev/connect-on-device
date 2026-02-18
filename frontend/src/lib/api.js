@@ -52,6 +52,12 @@ export async function fetchRouteFiles(routeName) {
   return res.json()
 }
 
+export async function enrichRoute(routeName) {
+  const res = await fetch(`/v1/route/${encodeRouteName(routeName)}/enrich`, { method: 'POST' })
+  if (!res.ok) throw new Error(`enrichRoute: ${res.status}`)
+  return res.json()
+}
+
 // ── Route actions ───────────────────────────────────────────
 
 export async function preserveRoute(routeName) {

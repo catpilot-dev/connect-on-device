@@ -12,7 +12,7 @@
   let storage = $state(null)
   let error = $state(null)
 
-  const PAGE_SIZE = 15
+  const PAGE_SIZE = 5
 
   async function loadRoutes(id) {
     loading = true
