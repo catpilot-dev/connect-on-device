@@ -623,7 +623,10 @@ class RouteStore:
         Called when the user selects a route in the UI. Synchronous — blocks the
         request briefly (~1-2s for 5MB head read) but avoids background CPU churn
         for routes the user never looks at.
+        Skips enrichment while driving to avoid competing with openpilot.
         """
+        if self._is_onroad():
+            return False
         if not self._needs_enrich(local_id):
             return False
         info = self._raw.get(local_id)
