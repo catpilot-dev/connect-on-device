@@ -282,6 +282,17 @@ async def handle_route_get(request: web.Request) -> web.Response:
     if enriched:
         route = store.get_route(route_name)
 
+    # Compute and persist engagement % from cached events.json
+    meta = store._metadata.get(local_id, {})
+    if meta and meta.get("engagement_pct") is None:
+        engaged_ms, total_ms = _route_engagement(store, route)
+        if total_ms > 0 and engaged_ms > 0:
+            pct = round(engaged_ms / total_ms * 100)
+            meta["engagement_pct"] = pct
+            store._rebuild_routes()
+            store._save_metadata()
+            route = store.get_route(route_name)
+
     r_with_url = _set_route_url(route, request)
     cleaned = _clean_route(r_with_url)
     cleaned["is_preserved"] = store.is_preserved(local_id)

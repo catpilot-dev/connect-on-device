@@ -71,9 +71,9 @@
           <span class="text-surface-600">&middot;</span>
           <span>{formatDistance(route.distance)}</span>
         {/if}
-        {#if route.platform}
+        {#if route.engagement_pct != null}
           <span class="text-surface-600">&middot;</span>
-          <span class="badge bg-surface-700 text-surface-300">{route.platform}</span>
+          <span class="text-engage-green">{route.engagement_pct}%</span>
         {/if}
       {/if}
       {#if route.is_preserved}

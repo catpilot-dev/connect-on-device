@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from rlog_parser import _find_first_gps, _parse_rlog_metadata, _segment_gps_distance
+from rlog_parser import _find_first_gps, _parse_rlog_metadata
 from storage_management import run_cleanup
 
 logger = logging.getLogger("connect")
@@ -210,6 +210,11 @@ class RouteStore:
         if dt:
             result["device_type"] = dt
 
+        # Engagement
+        ep = meta.get("engagement_pct")
+        if ep is not None:
+            result["engagement_pct"] = ep
+
         return result
 
     def _needs_enrich(self, lid: str) -> bool:
@@ -217,6 +222,10 @@ class RouteStore:
         meta = self._metadata.get(lid)
         if not meta:
             return True
+        # Once enrichment has run, don't re-run — GPS/distance are best-effort
+        # and come from the 5MB head read. Re-enriching won't find more data.
+        if meta.get("enriched"):
+            return False
         if not meta.get("car_fingerprint"):
             return True
         if not meta.get("device_type"):
@@ -225,7 +234,7 @@ class RouteStore:
         ct = meta.get("creation_time", "")
         if isinstance(ct, str) and ct.startswith("2025-07-02"):
             return True
-        return not meta.get("gps_coordinates") or not meta.get("total_distance_m")
+        return False
 
     @staticmethod
     def _find_rlog(seg_path: str) -> str | None:
@@ -317,6 +326,7 @@ class RouteStore:
             "is_public": True,
             "distance": self._calc_route_distance(local_id, info["segments"]),
             "maxqlog": max_seg,
+            "engagement_pct": internal.get("engagement_pct"),
             "platform": internal.get("car_fingerprint"),
             "procqlog": len(seg_numbers),
             "start_lat": internal.get("start_lat"),
@@ -372,14 +382,17 @@ class RouteStore:
     def _enrich_one(self, local_id: str, segments: list) -> dict | None:
         """Parse rlog metadata for a single route. Runs in thread pool.
 
-        Tries segment 0 first for initData + GPS + distance, then checks later
-        segments for GPS only (cold starts can delay GPS lock).
-        Computes total distance across ALL segments, reusing seg 0's distance
-        from _parse_rlog_metadata to avoid decompressing it twice.
+        Tries segment 0 first for initData + GPS + partial distance (from
+        the 5MB head read), then checks later segments for GPS only (cold
+        starts can delay GPS lock).
+
+        Per-segment distance accumulation is intentionally omitted — the UI
+        computes accurate distance from coords.json on first route view.
+        The partial seg-0 distance serves as a non-zero fallback estimate.
         """
         sorted_segs = sorted(segments, key=lambda s: s["number"])
 
-        # Parse segment 0 for full metadata (initData + GPS + seg0 distance)
+        # Parse segment 0 for full metadata (initData + GPS + partial distance)
         result = None
         seg0_rlog = self._find_rlog(sorted_segs[0]["path"]) if sorted_segs else None
         if seg0_rlog:
@@ -400,17 +413,10 @@ class RouteStore:
                     result["start_lng"] = gps[1]
                     break
 
-        # Compute total distance: start from seg 0's already-computed distance,
-        # then add remaining segments (avoids re-decompressing seg 0)
-        total_dist = result.pop("segment_distance_m", 0.0)
-        for seg in sorted_segs[1:]:
-            rlog = self._find_rlog(seg["path"])
-            if not rlog:
-                continue
-            total_dist += _segment_gps_distance(rlog)
-
-        if total_dist > 0:
-            result["total_distance_m"] = total_dist
+        # Use seg 0's partial distance as fallback estimate
+        seg_dist = result.pop("segment_distance_m", 0.0)
+        if seg_dist > 0:
+            result["total_distance_m"] = seg_dist
 
         return result if result else None
 
@@ -438,20 +444,36 @@ class RouteStore:
         entry["git_remote"] = rlog_meta.get("git_remote")
         entry["device_type"] = rlog_meta.get("device_type")
         entry["source"] = "connect_server"
+        entry["enriched"] = True
 
         return entry
+
+    @staticmethod
+    def _is_onroad() -> bool:
+        """Check if openpilot is currently driving. Yields CPU to controls when True."""
+        try:
+            return Path("/data/params/d/IsOnroad").read_bytes().strip() == b"1"
+        except Exception:
+            return False
 
     async def _enrichment_loop(self):
         """Persistent background loop that enriches route metadata.
 
         Polls every 90s, re-scans directories, enriches newest routes first.
         Runs as a single asyncio task — no re-entrancy guard needed.
+        Pauses while openpilot is driving. Caps at 5 routes per cycle.
         """
         await asyncio.sleep(5)  # let server bind first
         loop = asyncio.get_event_loop()
 
         while True:
             try:
+                # Pause enrichment while driving — zero CPU competition with openpilot
+                if self._is_onroad():
+                    logger.debug("Onroad — skipping enrichment cycle")
+                    await asyncio.sleep(300)
+                    continue
+
                 # Re-scan directories to pick up new routes/segments
                 self.scan(force=True)
 
@@ -467,28 +489,27 @@ class RouteStore:
                 # Sort newest-first by route counter (more reliable than mtime
                 # which can reflect AGNOS build date instead of actual drive time)
                 uncached.sort(key=lambda x: _route_counter(x[0]), reverse=True)
-                logger.info("Enrichment cycle: %d routes to process", len(uncached))
+                total_pending = len(uncached)
 
-                count = 0
-                for local_id, info in uncached:
-                    try:
-                        rlog_meta = await loop.run_in_executor(
-                            self._executor, self._enrich_one, local_id, info["segments"])
-                        if rlog_meta:
-                            entry = self._rlog_to_metadata_entry(local_id, rlog_meta)
-                            self._metadata[local_id] = entry
-                            count += 1
-                            if count % 5 == 0:
-                                self._rebuild_routes()
-                                self._save_metadata()
-                                logger.info("  enriched %d/%d routes...", count, len(uncached))
-                    except Exception as e:
-                        logger.debug("enrich error for %s: %s", local_id, e)
+                # Only enrich the 1 newest route per cycle — remaining routes
+                # are enriched on-demand when the user selects them
+                uncached = uncached[:1]
+                logger.info("Enrichment cycle: processing newest of %d pending routes",
+                            total_pending)
 
-                if count > 0:
-                    self._rebuild_routes()
-                    self._save_metadata()
-                    logger.info("Enrichment cycle complete: %d routes enriched", count)
+                local_id, info = uncached[0]
+                try:
+                    rlog_meta = await loop.run_in_executor(
+                        self._executor, self._enrich_one, local_id, info["segments"])
+                    if rlog_meta:
+                        entry = self._rlog_to_metadata_entry(local_id, rlog_meta)
+                        self._metadata[local_id] = entry
+                        self._rebuild_routes()
+                        self._save_metadata()
+                        logger.info("Enriched newest route %s (%d still pending)",
+                                    local_id, total_pending - 1)
+                except Exception as e:
+                    logger.debug("enrich error for %s: %s", local_id, e)
 
             except asyncio.CancelledError:
                 logger.info("Enrichment loop cancelled")
@@ -595,3 +616,25 @@ class RouteStore:
             return None
         path = self.data_dir / f"{local_id}--{segment}" / filename
         return path if path.exists() else None
+
+    def ensure_enriched(self, local_id: str) -> bool:
+        """On-demand enrichment for a single route. Returns True if newly enriched.
+
+        Called when the user selects a route in the UI. Synchronous — blocks the
+        request briefly (~1-2s for 5MB head read) but avoids background CPU churn
+        for routes the user never looks at.
+        """
+        if not self._needs_enrich(local_id):
+            return False
+        info = self._raw.get(local_id)
+        if not info:
+            return False
+        rlog_meta = self._enrich_one(local_id, info["segments"])
+        if rlog_meta:
+            entry = self._rlog_to_metadata_entry(local_id, rlog_meta)
+            self._metadata[local_id] = entry
+            self._rebuild_routes()
+            self._save_metadata()
+            logger.info("On-demand enriched route %s", local_id)
+            return True
+        return False
