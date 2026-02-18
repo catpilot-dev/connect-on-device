@@ -20,10 +20,11 @@
    * - x5-video-orientation="portraint": WeChat landscape prevention
    */
 
-  /** @type {{ route: object, files: object, currentTime?: number, duration?: number, onTimeUpdate?: (t: number) => void, onDurationChange?: (d: number) => void }} */
+  /** @type {{ route: object, files: object, hudEnabled?: boolean, currentTime?: number, duration?: number, onTimeUpdate?: (t: number) => void, onDurationChange?: (d: number) => void }} */
   let {
     route,
     files,
+    hudEnabled = false,
     currentTime = $bindable(0),
     duration = $bindable(0),
     onTimeUpdate,
@@ -194,14 +195,17 @@
     if (files) initPlayer()
   })
 
-  // React to play/pause for HUD timer
+  // React to play/pause and hudEnabled for HUD timer
   $effect(() => {
-    if (isPlaying) {
+    if (hudEnabled && isPlaying) {
       startHudUpdates()
-      updateHud() // Immediate first frame
+      updateHud()
     } else {
       stopHudUpdates()
-      updateHud() // Update on pause too
+      if (hudEnabled) updateHud()
+    }
+    if (!hudEnabled) {
+      hudVisible = false
     }
   })
 
@@ -249,16 +253,18 @@
     Your browser does not support video playback.
   </video>
 
-  <!-- HUD overlay — absolutely positioned over video -->
-  <img
-    bind:this={hudImg}
-    class="absolute inset-0 w-full h-full object-contain pointer-events-none transition-opacity duration-150"
-    class:opacity-0={!hudVisible}
-    class:opacity-100={hudVisible}
-    alt=""
-    onload={handleHudLoad}
-    onerror={handleHudError}
-  />
+  <!-- HUD overlay — absolutely positioned over video, only rendered when enabled -->
+  {#if hudEnabled}
+    <img
+      bind:this={hudImg}
+      class="absolute inset-0 w-full h-full object-contain pointer-events-none transition-opacity duration-150"
+      class:opacity-0={!hudVisible}
+      class:opacity-100={hudVisible}
+      alt=""
+      onload={handleHudLoad}
+      onerror={handleHudError}
+    />
+  {/if}
 
   <!-- Loading indicator when no video loaded -->
   {#if !files?.qcameras?.some(u => u)}

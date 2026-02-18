@@ -19,6 +19,7 @@
   let currentTime = $state(0)
   let duration = $state(0)
   let isPlaying = $state(false)
+  let hudEnabled = $state(false)
 
   let videoPlayer = $state(null)
 
@@ -102,6 +103,7 @@
           bind:this={videoPlayer}
           {route}
           {files}
+          {hudEnabled}
           bind:currentTime
           bind:duration
           onTimeUpdate={handleTimeUpdate}
@@ -131,8 +133,12 @@
         />
 
         <!-- Actions -->
-        <div class="card p-3">
+        <div class="card p-3 space-y-2">
           <RouteActions {route} />
+          <label class="flex items-center gap-2 text-sm text-surface-300 cursor-pointer">
+            <input type="checkbox" bind:checked={hudEnabled} class="accent-engage-green" />
+            HUD overlay
+          </label>
         </div>
 
         <!-- Metadata -->
