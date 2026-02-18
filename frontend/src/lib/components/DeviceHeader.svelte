@@ -1,33 +1,21 @@
 <script>
   import { onMount } from 'svelte'
   import { dongleId } from '../stores.js'
-  import { fetchDeviceStats, fetchStorage } from '../api.js'
-  import { formatDistance, formatDuration, formatBytes, storageLevel } from '../format.js'
+  import { fetchStorage } from '../api.js'
+  import { formatBytes, storageLevel } from '../format.js'
 
-  let stats = $state(null)
   let storage = $state(null)
 
   onMount(async () => {
     dongleId.subscribe(async (id) => {
       if (!id) return
       try {
-        const [s, st] = await Promise.all([
-          fetchDeviceStats(id),
-          fetchStorage(),
-        ])
-        stats = s
-        storage = st
+        storage = await fetchStorage()
       } catch (e) {
         console.warn('DeviceHeader fetch error:', e)
       }
     })
   })
-
-  const engagedPct = $derived(
-    stats?.all?.total_minutes_with_events > 0
-      ? Math.round((stats.all.engaged_minutes / stats.all.total_minutes_with_events) * 100)
-      : 0
-  )
 
   const storagePct = $derived(storage ? Math.round(100 - storage.percent_free) : 0)
   const level = $derived(storage ? storageLevel(storage.percent_free) : 'ok')
@@ -42,19 +30,6 @@
         <span class="badge bg-surface-700 text-surface-300">{$dongleId}</span>
       {/if}
     </div>
-
-    <!-- Stats chips -->
-    {#if stats}
-      <div class="hidden sm:flex items-center gap-3 text-xs text-surface-400">
-        <span>{stats.all.routes} routes</span>
-        <span class="text-surface-600">|</span>
-        <span>{formatDistance(stats.all.distance)}</span>
-        <span class="text-surface-600">|</span>
-        <span>{formatDuration(stats.all.minutes)}</span>
-        <span class="text-surface-600">|</span>
-        <span class="text-engage-green">{engagedPct}% engaged</span>
-      </div>
-    {/if}
 
     <!-- Storage bar -->
     {#if storage}
