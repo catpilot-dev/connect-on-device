@@ -295,7 +295,8 @@ async def handle_route_get(request: web.Request) -> web.Response:
             route = store.get_route(route_name)
 
     # Reverse-geocode start/end addresses (runs in thread pool, cached)
-    if meta and meta.get("start_address") is None and meta.get("gps_coordinates"):
+    needs_geocode = meta.get("start_address") is None or meta.get("end_address") is None
+    if meta and needs_geocode and meta.get("gps_coordinates"):
         await loop.run_in_executor(None, store.geocode_route, local_id)
         route = store.get_route(route_name)
 

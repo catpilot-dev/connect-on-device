@@ -18,7 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from rlog_parser import _find_first_gps, _find_first_gps_time, _parse_rlog_metadata
+from rlog_parser import _find_first_gps, _find_first_gps_time, _find_last_gps, _parse_rlog_metadata
 from storage_management import run_cleanup
 
 logger = logging.getLogger("connect")
@@ -425,6 +425,10 @@ class RouteStore:
             if route["maxqlog"] < 1 and not route.get("distance"):
                 continue
 
+            # Hide routes with no GPS time (would show "Invalid Date" in UI)
+            if not internal.get("wall_time_nanos"):
+                continue
+
             fullname = route["fullname"]
             routes[fullname] = route
             fullname_map[fullname] = local_id
@@ -516,48 +520,43 @@ class RouteStore:
         return entry
 
     def geocode_route(self, local_id: str) -> bool:
-        """Reverse-geocode start (and end if coords available) for a route.
+        """Reverse-geocode start and end locations for a route.
 
-        Reads end GPS from last coords.json segment. Stores results in metadata.
+        Gets end GPS from last segment's rlog (last fixed GPS position).
         Returns True if metadata was updated.
         """
         meta = self._metadata.get(local_id)
         if not meta:
             return False
 
-        # Skip if already geocoded
-        if meta.get("start_address") is not None:
+        # Skip if fully geocoded (both start and end)
+        if meta.get("start_address") is not None and meta.get("end_address") is not None:
             return False
 
         updated = False
-        gps = meta.get("gps_coordinates")
-        if gps and len(gps) == 2 and gps[0] and gps[1]:
-            addr = _reverse_geocode(gps[0], gps[1])
-            if addr:
-                meta["start_address"] = addr
-                updated = True
+        if meta.get("start_address") is None:
+            gps = meta.get("gps_coordinates")
+            if gps and len(gps) == 2 and gps[0] and gps[1]:
+                addr = _reverse_geocode(gps[0], gps[1])
+                if addr:
+                    meta["start_address"] = addr
+                    updated = True
 
-        # Find end GPS from last segment's coords.json
+        # Find end GPS from last segment's rlog
         info = self._raw.get(local_id)
-        if info:
+        if info and meta.get("end_address") is None:
             sorted_segs = sorted(info["segments"], key=lambda s: s["number"], reverse=True)
             for seg in sorted_segs[:3]:
-                coords_path = Path(seg["path"]) / "coords.json"
-                if not coords_path.exists():
+                rlog = self._find_rlog(seg["path"])
+                if not rlog:
                     continue
-                try:
-                    coords = json.loads(coords_path.read_text())
-                    if coords:
-                        last = coords[-1]
-                        end_lat, end_lng = last.get("lat"), last.get("lng")
-                        if end_lat and end_lng:
-                            addr = _reverse_geocode(end_lat, end_lng)
-                            if addr:
-                                meta["end_address"] = addr
-                                updated = True
-                            break
-                except Exception:
-                    pass
+                end_gps = _find_last_gps(rlog)
+                if end_gps:
+                    addr = _reverse_geocode(end_gps[0], end_gps[1])
+                    if addr:
+                        meta["end_address"] = addr
+                        updated = True
+                    break
 
         if updated:
             self._rebuild_routes()

@@ -185,6 +185,20 @@ def _find_first_gps_time(rlog_path: str) -> float | None:
     return None
 
 
+def _find_last_gps(rlog_path: str) -> tuple | None:
+    """Scan full rlog and return last fixed GPS (lat, lng) or None."""
+    last = None
+    try:
+        for ev in _iter_rlog(rlog_path):
+            if ev.which() == "gpsLocationExternal":
+                gps = ev.gpsLocationExternal
+                if gps.flags & 1 and gps.latitude != 0 and gps.longitude != 0:
+                    last = (gps.latitude, gps.longitude)
+    except Exception:
+        pass
+    return last
+
+
 def _segment_gps_distance(rlog_path: str) -> float:
     """Calculate GPS distance in meters for a single segment's rlog."""
     last_lat = last_lng = None
