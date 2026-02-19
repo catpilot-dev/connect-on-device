@@ -1,7 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte'
   import Hls from 'hls.js'
-  import { hudUrl } from '../api.js'
+  import { hudUrl, spriteUrl } from '../api.js'
 
   /**
    * Cross-browser HLS video player with HUD overlay.
@@ -20,7 +20,7 @@
    * - x5-video-orientation="portraint": WeChat landscape prevention
    */
 
-  /** @type {{ route: object, files: object, hudEnabled?: boolean, currentTime?: number, duration?: number, onTimeUpdate?: (t: number) => void, onDurationChange?: (d: number) => void }} */
+  /** @type {{ route: object, files: object, hudEnabled?: boolean, currentTime?: number, duration?: number, onTimeUpdate?: (t: number) => void, onDurationChange?: (d: number) => void, onPlay?: () => void, onPause?: () => void }} */
   let {
     route,
     files,
@@ -29,6 +29,8 @@
     duration = $bindable(0),
     onTimeUpdate,
     onDurationChange,
+    onPlay,
+    onPause,
   } = $props()
 
   let videoEl = $state(null)
@@ -40,6 +42,8 @@
   let hudTimer = null
   let lastHudSeg = -1
   let lastHudOffset = -1
+
+  const posterUrl = $derived(route ? spriteUrl(route, 0) : null)
 
   // Build M3U8 playlist from qcamera URLs
   function buildManifest(qcameraUrls) {
@@ -157,8 +161,8 @@
     onDurationChange?.(videoEl.duration)
   }
 
-  function handlePlay() { isPlaying = true }
-  function handlePause() { isPlaying = false }
+  function handlePlay() { isPlaying = true; onPlay?.() }
+  function handlePause() { isPlaying = false; onPause?.() }
 
   // HUD overlay: update every 500ms when playing
   function startHudUpdates() {
@@ -243,6 +247,7 @@
     playsinline
     webkit-playsinline
     x5-video-player-type="h5"
+    poster={posterUrl}
     preload="auto"
     ontimeupdate={handleTimeUpdate}
     ondurationchange={handleDurationChange}

@@ -73,6 +73,30 @@ export function formatVideoTime(totalSeconds) {
   return `${m}:${s}`
 }
 
+/** Format start time (epoch or ISO string) + offset seconds to HH:MM:SS local time */
+export function formatAbsoluteTime(start, offsetSeconds) {
+  if (!start) return null
+  const baseMs = typeof start === 'number'
+    ? (start < 1_000_000_000 ? null : start * 1000)
+    : new Date(start).getTime()
+  if (!baseMs || isNaN(baseMs)) return null
+  const d = new Date(baseMs + offsetSeconds * 1000)
+  if (isNaN(d.getTime()) || d.getFullYear() < 2000) return null
+  return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+}
+
+/** Format start time + offset to HH:MM (no seconds) */
+export function formatAbsoluteTimeHM(start, offsetSeconds) {
+  if (!start) return null
+  const baseMs = typeof start === 'number'
+    ? (start < 1_000_000_000 ? null : start * 1000)
+    : new Date(start).getTime()
+  if (!baseMs || isNaN(baseMs)) return null
+  const d = new Date(baseMs + offsetSeconds * 1000)
+  if (isNaN(d.getTime()) || d.getFullYear() < 2000) return null
+  return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+}
+
 /** Format bytes to human-readable */
 export function formatBytes(bytes) {
   if (bytes == null || bytes === 0) return '0 B'

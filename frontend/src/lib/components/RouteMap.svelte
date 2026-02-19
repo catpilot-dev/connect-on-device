@@ -8,8 +8,8 @@
    * - Auto-fit bounds on load
    */
 
-  /** @type {{ coords: Array, events?: Array, currentTime?: number, durationMs?: number }} */
-  let { coords = [], events = [], currentTime = 0, durationMs = 0 } = $props()
+  /** @type {{ coords: Array, events?: Array, currentTime?: number, durationMs?: number, selectionStart?: number, selectionEnd?: number }} */
+  let { coords = [], events = [], currentTime = 0, durationMs = 0, selectionStart = 0, selectionEnd = 0 } = $props()
 
   let mapContainer = $state(null)
   let map = null
@@ -37,16 +37,22 @@
       attributionControl: false,
     })
 
-    // Dark tile layer
+    // Dark Matter tile layer — dark theme with readable labels
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
       maxZoom: 19,
       subdomains: 'abcd',
+    }).addTo(map)
+    // Voyager labels on top for readable road names
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}{r}.png', {
+      maxZoom: 19,
+      subdomains: 'abcd',
+      pane: 'overlayPane',
     }).addTo(map)
 
     // Position marker
     positionMarker = L.circleMarker([0, 0], {
       radius: 6,
-      fillColor: '#3b82f6',
+      fillColor: '#80D8A6',
       fillOpacity: 1,
       color: '#ffffff',
       weight: 2,
@@ -72,37 +78,60 @@
       .map(e => [e.route_offset_millis, e.end_route_offset_millis])
 
     function getColor(timeMs) {
-      for (const [s, e] of engagedRanges) if (timeMs >= s && timeMs <= e) return '#22c55e'
-      for (const [s, e] of overrideRanges) if (timeMs >= s && timeMs <= e) return '#3b82f6'
-      return '#6b7280'
+      for (const [s, e] of engagedRanges) if (timeMs >= s && timeMs <= e) return '#178644'
+      for (const [s, e] of overrideRanges) if (timeMs >= s && timeMs <= e) return '#919B95'
+      return '#173349'
     }
 
-    // Build colored segments — group consecutive points by color
+    const hasSelection = selectionStart > 0 || (selectionEnd > 0 && selectionEnd < (durationMs / 1000) - 0.5)
+
+    // Build colored segments — group consecutive points by color + selection state
     let currentColor = null
+    let currentInSel = null
     let segment = []
 
     for (const pt of coords) {
       const color = getColor(pt.t * 1000)
-      if (color !== currentColor && segment.length > 1) {
-        const line = L.polyline(segment, { color: currentColor, weight: 3, opacity: 0.8 })
+      const inSel = !hasSelection || (pt.t >= selectionStart && pt.t <= selectionEnd)
+
+      if ((color !== currentColor || inSel !== currentInSel) && segment.length > 1) {
+        const line = L.polyline(segment, {
+          color: currentColor,
+          weight: currentInSel ? 3 : 2,
+          opacity: currentInSel ? 0.8 : 0.2,
+        })
         line.addTo(map)
         pathLayers.push(line)
-        segment = [segment[segment.length - 1]] // Keep last point for continuity
+        segment = [segment[segment.length - 1]]
       }
       currentColor = color
+      currentInSel = inSel
       segment.push([pt.lat, pt.lng])
     }
     // Final segment
     if (segment.length > 1) {
-      const line = L.polyline(segment, { color: currentColor, weight: 3, opacity: 0.8 })
+      const line = L.polyline(segment, {
+        color: currentColor,
+        weight: currentInSel ? 3 : 2,
+        opacity: currentInSel ? 0.8 : 0.2,
+      })
       line.addTo(map)
       pathLayers.push(line)
     }
 
-    // Fit bounds
-    const allPoints = coords.map(c => [c.lat, c.lng])
-    if (allPoints.length > 0) {
-      map.fitBounds(L.latLngBounds(allPoints), { padding: [20, 20] })
+    // Fit bounds to selection if active, otherwise full route
+    if (hasSelection) {
+      const selPoints = coords
+        .filter(c => c.t >= selectionStart && c.t <= selectionEnd)
+        .map(c => [c.lat, c.lng])
+      if (selPoints.length > 1) {
+        map.fitBounds(L.latLngBounds(selPoints), { padding: [20, 20] })
+      }
+    } else {
+      const allPoints = coords.map(c => [c.lat, c.lng])
+      if (allPoints.length > 0) {
+        map.fitBounds(L.latLngBounds(allPoints), { padding: [20, 20] })
+      }
     }
   }
 
@@ -125,8 +154,10 @@
     }
   })
 
-  // Redraw path when coords/events change
+  // Redraw path when coords/events/selection change
   $effect(() => {
+    // Track dependencies
+    coords; events; selectionStart; selectionEnd;
     if (coords.length > 0 && L) drawPath()
   })
 

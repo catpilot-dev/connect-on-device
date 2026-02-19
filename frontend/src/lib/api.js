@@ -148,3 +148,20 @@ export async function fetchAllEvents(route) {
   )
   return results.flat()
 }
+
+/** Fetch events for all segments with progress callback */
+export async function fetchAllEventsWithProgress(route, onProgress) {
+  const count = (route.maxqlog ?? 0) + 1
+  let done = 0
+  const results = new Array(count)
+  await Promise.all(
+    Array.from({ length: count }, (_, i) =>
+      fetchEvents(route, i).catch(() => []).then(data => {
+        results[i] = data
+        done++
+        onProgress?.(done, count)
+      })
+    )
+  )
+  return results.flat()
+}

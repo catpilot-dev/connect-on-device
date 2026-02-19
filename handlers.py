@@ -196,6 +196,7 @@ async def handle_routes_list(request: web.Request) -> web.Response:
         r_with_url = _set_route_url(r, request)
         cleaned = _clean_route(r_with_url)
         cleaned["route_counter"] = counter
+        cleaned["is_preserved"] = store.is_preserved(r["_local_id"])
         route_list.append(cleaned)
         if len(route_list) >= limit:
             break
@@ -292,6 +293,11 @@ async def handle_route_get(request: web.Request) -> web.Response:
             store._rebuild_routes()
             store._save_metadata()
             route = store.get_route(route_name)
+
+    # Reverse-geocode start/end addresses (runs in thread pool, cached)
+    if meta and meta.get("start_address") is None and meta.get("gps_coordinates"):
+        await loop.run_in_executor(None, store.geocode_route, local_id)
+        route = store.get_route(route_name)
 
     r_with_url = _set_route_url(route, request)
     cleaned = _clean_route(r_with_url)

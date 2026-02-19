@@ -11,12 +11,14 @@ import logging
 import re
 import sys
 import time
+import urllib.request
+import urllib.error
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from rlog_parser import _find_first_gps, _parse_rlog_metadata
+from rlog_parser import _find_first_gps, _find_first_gps_time, _parse_rlog_metadata
 from storage_management import run_cleanup
 
 logger = logging.getLogger("connect")
@@ -28,6 +30,42 @@ DEFAULT_DATA_DIR = "/data/media/0/realdata"
 DEFAULT_PORT = 8082
 CACHE_TTL = 120  # seconds — route scan is expensive with metadata
 METADATA_FILE = "metadata.json"
+
+# Nominatim reverse geocoding (OSM)
+_NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse"
+_NOMINATIM_HEADERS = {"User-Agent": "connect-on-device/1.0"}
+_last_geocode_time = 0.0
+
+
+def _reverse_geocode(lat: float, lng: float) -> str | None:
+    """Reverse geocode lat/lng to a short road/place name via Nominatim.
+
+    Returns a string like "Zhongshan Rd" or "Huaihai Middle Rd".
+    Respects Nominatim rate limit (1 req/sec). Returns None on failure.
+    """
+    global _last_geocode_time
+    # Rate limit: 1 request per second
+    elapsed = time.time() - _last_geocode_time
+    if elapsed < 1.1:
+        time.sleep(1.1 - elapsed)
+
+    url = f"{_NOMINATIM_URL}?lat={lat}&lon={lng}&format=json&zoom=16&accept-language=zh,en"
+    req = urllib.request.Request(url, headers=_NOMINATIM_HEADERS)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            _last_geocode_time = time.time()
+            data = json.loads(resp.read())
+            addr = data.get("address", {})
+            # Prefer road name, fall back to neighbourhood/suburb/town
+            return (addr.get("road")
+                    or addr.get("neighbourhood")
+                    or addr.get("suburb")
+                    or addr.get("town")
+                    or addr.get("city"))
+    except Exception as e:
+        _last_geocode_time = time.time()
+        logger.debug("Reverse geocode failed for %.5f,%.5f: %s", lat, lng, e)
+        return None
 
 
 def _route_counter(local_id: str) -> int:
@@ -164,15 +202,22 @@ class RouteStore:
         if did and did != "Unknown":
             result["dongle_id"] = did
 
-        # creation_time -> wall_time_nanos + create_time
-        ct = meta.get("creation_time")
-        if ct and isinstance(ct, str) and not ct.startswith("GPS"):
-            try:
-                dt = datetime.fromisoformat(ct)
-                result["create_time"] = dt.timestamp()
-                result["wall_time_nanos"] = int(dt.timestamp() * 1e9)
-            except (ValueError, OSError):
-                pass
+        # GPS time → wall_time_nanos (used for route_date in fullname)
+        # Only GPS time is used for naming — wallTimeNanos can be AGNOS build date
+        gps_t = meta.get("gps_time")
+        if gps_t:
+            result["wall_time_nanos"] = int(gps_t * 1e9)
+            result["create_time"] = gps_t
+
+        # Fall back to creation_time for create_time ordering (but NOT for route naming)
+        if "create_time" not in result:
+            ct = meta.get("creation_time")
+            if ct and isinstance(ct, str) and not ct.startswith("GPS"):
+                try:
+                    dt = datetime.fromisoformat(ct)
+                    result["create_time"] = dt.timestamp()
+                except (ValueError, OSError):
+                    pass
 
         # GPS
         gps = meta.get("gps_coordinates")
@@ -215,12 +260,24 @@ class RouteStore:
         if ep is not None:
             result["engagement_pct"] = ep
 
+        # Addresses (reverse geocoded)
+        sa = meta.get("start_address")
+        if sa:
+            result["start_address"] = sa
+        ea = meta.get("end_address")
+        if ea:
+            result["end_address"] = ea
+
         return result
 
     def _needs_enrich(self, lid: str) -> bool:
         """Check if a route needs background enrichment."""
         meta = self._metadata.get(lid)
         if not meta:
+            return True
+        # Re-enrich routes missing gps_time (enriched before GPS time extraction)
+        if meta.get("enriched") and meta.get("gps_time") is None:
+            meta.pop("enriched", None)
             return True
         # Once enrichment has run, don't re-run — GPS/distance are best-effort
         # and come from the 5MB head read. Re-enriching won't find more data.
@@ -229,10 +286,6 @@ class RouteStore:
         if not meta.get("car_fingerprint"):
             return True
         if not meta.get("device_type"):
-            return True
-        # Re-enrich routes with known-bad AGNOS build date as creation_time
-        ct = meta.get("creation_time", "")
-        if isinstance(ct, str) and ct.startswith("2025-07-02"):
             return True
         return False
 
@@ -342,6 +395,8 @@ class RouteStore:
             "version_id": None,
             "device_type": internal.get("device_type"),
             "agnos_version": self._agnos_version,
+            "start_address": internal.get("start_address"),
+            "end_address": internal.get("end_address"),
             "local_id": local_id,
             "_local_id": local_id,
             "_segments": info["segments"],
@@ -401,16 +456,27 @@ class RouteStore:
         if not result:
             result = {}
 
-        # If no GPS yet, try later segments (GPS lock can take 5+ minutes)
-        if not result.get("start_lat"):
-            for seg in sorted_segs[1:10]:
+        # If no GPS coords or time, try later segments (GPS lock can take 5+ min)
+        need_coords = not result.get("start_lat")
+        need_time = not result.get("gps_time")
+        if need_coords or need_time:
+            for seg in sorted_segs[1:]:
                 rlog = self._find_rlog(seg["path"])
                 if not rlog:
                     continue
-                gps = _find_first_gps(rlog)
-                if gps:
-                    result["start_lat"] = gps[0]
-                    result["start_lng"] = gps[1]
+                if need_coords:
+                    gps = _find_first_gps(rlog)
+                    if gps:
+                        result["start_lat"] = gps[0]
+                        result["start_lng"] = gps[1]
+                        need_coords = False
+                if need_time:
+                    gps_t = _find_first_gps_time(rlog)
+                    if gps_t:
+                        # Adjust back to segment 0 start time
+                        result["gps_time"] = gps_t - seg["number"] * 60
+                        need_time = False
+                if not need_coords and not need_time:
                     break
 
         # Use seg 0's partial distance as fallback estimate
@@ -443,10 +509,62 @@ class RouteStore:
         entry["car_fingerprint"] = rlog_meta.get("car_fingerprint")
         entry["git_remote"] = rlog_meta.get("git_remote")
         entry["device_type"] = rlog_meta.get("device_type")
+        entry["gps_time"] = rlog_meta.get("gps_time")
         entry["source"] = "connect_server"
         entry["enriched"] = True
 
         return entry
+
+    def geocode_route(self, local_id: str) -> bool:
+        """Reverse-geocode start (and end if coords available) for a route.
+
+        Reads end GPS from last coords.json segment. Stores results in metadata.
+        Returns True if metadata was updated.
+        """
+        meta = self._metadata.get(local_id)
+        if not meta:
+            return False
+
+        # Skip if already geocoded
+        if meta.get("start_address") is not None:
+            return False
+
+        updated = False
+        gps = meta.get("gps_coordinates")
+        if gps and len(gps) == 2 and gps[0] and gps[1]:
+            addr = _reverse_geocode(gps[0], gps[1])
+            if addr:
+                meta["start_address"] = addr
+                updated = True
+
+        # Find end GPS from last segment's coords.json
+        info = self._raw.get(local_id)
+        if info:
+            sorted_segs = sorted(info["segments"], key=lambda s: s["number"], reverse=True)
+            for seg in sorted_segs[:3]:
+                coords_path = Path(seg["path"]) / "coords.json"
+                if not coords_path.exists():
+                    continue
+                try:
+                    coords = json.loads(coords_path.read_text())
+                    if coords:
+                        last = coords[-1]
+                        end_lat, end_lng = last.get("lat"), last.get("lng")
+                        if end_lat and end_lng:
+                            addr = _reverse_geocode(end_lat, end_lng)
+                            if addr:
+                                meta["end_address"] = addr
+                                updated = True
+                            break
+                except Exception:
+                    pass
+
+        if updated:
+            self._rebuild_routes()
+            self._save_metadata()
+            logger.info("Geocoded route %s: %s → %s",
+                        local_id, meta.get("start_address"), meta.get("end_address"))
+        return updated
 
     @staticmethod
     def _is_onroad() -> bool:

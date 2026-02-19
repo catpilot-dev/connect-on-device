@@ -53,6 +53,26 @@ def _iter_rlog(rlog_path: str):
     return capnp_log.Event.read_multiple_bytes(data)
 
 
+def _iter_rlog_head(rlog_path: str, max_bytes: int = 5_000_000):
+    """Iterate over the first max_bytes of decompressed rlog data.
+
+    Reads only a bounded prefix of the rlog — enough for initData (~msg 1),
+    carParams (~msg 100), and often first GPS (~msg 500-5000) — while keeping
+    memory usage to ~5MB instead of the full 50-200MB per segment.
+    """
+    from cereal import log as capnp_log
+    import zstandard as zstd
+
+    if rlog_path.endswith(".zst"):
+        with open(rlog_path, "rb") as f:
+            data = zstd.ZstdDecompressor().stream_reader(f).read(max_bytes)
+    else:
+        with open(rlog_path, "rb") as f:
+            data = f.read(max_bytes)
+
+    return capnp_log.Event.read_multiple_bytes(data)
+
+
 def _haversine_dist(lat1, lon1, lat2, lon2):
     """Distance in meters between two GPS points."""
     dlat = math.radians(lat2 - lat1)
@@ -64,11 +84,11 @@ def _haversine_dist(lat1, lon1, lat2, lon2):
 
 
 def _parse_rlog_metadata(rlog_path: str) -> dict:
-    """Parse initData + first GPS + segment distance from an rlog file.
+    """Parse initData + first GPS + partial segment distance from an rlog file.
 
-    GPS lock can take 30-60+ seconds (24,000+ messages), so we scan the
-    entire rlog — the file is already in memory from _iter_rlog anyway.
-    Also accumulates GPS distance for the segment.
+    Uses _iter_rlog_head() to read only the first ~5MB of decompressed data,
+    keeping memory usage bounded. This covers initData, carParams, and often
+    first GPS fix. Distance is partial (within the 5MB window only).
     """
     meta = {}
     has_init = False
@@ -79,7 +99,7 @@ def _parse_rlog_metadata(rlog_path: str) -> dict:
     seg_dist = 0.0
 
     try:
-        for ev in _iter_rlog(rlog_path):
+        for ev in _iter_rlog_head(rlog_path):
             w = ev.which()
             if w == "initData" and not has_init:
                 init = ev.initData
@@ -124,13 +144,8 @@ def _parse_rlog_metadata(rlog_path: str) -> dict:
     except Exception as e:
         logger.debug("rlog parse error: %s", e)
 
-    # Prefer GPS time over wallTimeNanos when they differ by >24h
-    # (wallTimeNanos often reflects AGNOS build date, not recording time)
-    gps_t = meta.get("gps_time")
-    wall_t = meta.get("create_time")
-    if gps_t and wall_t and abs(gps_t - wall_t) > 86400:
-        meta["create_time"] = gps_t
-        meta["wall_time_nanos"] = int(gps_t * 1e9)
+    # gps_time is stored separately — route naming uses GPS time exclusively.
+    # wallTimeNanos/create_time kept as-is for reference only.
 
     if seg_dist > 0:
         meta["segment_distance_m"] = seg_dist
@@ -141,13 +156,30 @@ def _parse_rlog_metadata(rlog_path: str) -> dict:
 def _find_first_gps(rlog_path: str) -> tuple | None:
     """Fast GPS-only scan — returns (lat, lng) or None.
     Accepts unfixed GPS (flags=0) if coordinates are non-zero,
-    since that's sufficient for timezone estimation."""
+    since that's sufficient for timezone estimation.
+    Uses _iter_rlog_head() to cap memory at ~5MB."""
     try:
-        for ev in _iter_rlog(rlog_path):
+        for ev in _iter_rlog_head(rlog_path):
             if ev.which() == "gpsLocationExternal":
                 gps = ev.gpsLocationExternal
                 if gps.latitude != 0 and gps.longitude != 0:
                     return (gps.latitude, gps.longitude)
+    except Exception:
+        pass
+    return None
+
+
+def _find_first_gps_time(rlog_path: str) -> float | None:
+    """Fast scan for first GPS time (unix seconds) from a fixed position.
+    Returns None if no fixed GPS with valid timestamp found."""
+    try:
+        for ev in _iter_rlog_head(rlog_path):
+            if ev.which() == "gpsLocationExternal":
+                gps = ev.gpsLocationExternal
+                if gps.flags & 1 and gps.latitude != 0 and gps.longitude != 0:
+                    ms = getattr(gps, "unixTimestampMillis", 0)
+                    if ms > 0:
+                        return ms / 1000.0
     except Exception:
         pass
     return None
