@@ -29,26 +29,38 @@
   let timelineEl = $state(null)
   let isDragging = $state(false)
   let draggingHandle = $state(null) // 'start' | 'end' | null
+  let dragOrigin = $state(null) // time where bar drag started
+  let prevSel = { start: 0, end: 0 } // selection before bar drag
   let showSpeedMenu = $state(false)
   let playbackRate = $state(1)
+  let viewStart = $state(0)
+  let viewEnd = $state(0)
 
-  // Initialize selEnd to full duration when it becomes known
+  // Initialize selEnd and viewEnd to full duration when it becomes known
   $effect(() => {
     if (duration > 0 && selectionEnd === 0) {
       selectionEnd = duration
+    }
+    if (duration > 0 && viewEnd === 0) {
+      viewEnd = duration
     }
   })
 
   const speeds = [0.5, 1, 1.5, 2]
   const GUTTER = 5 // percent reserved on each side for handles
   const INNER = 100 - 2 * GUTTER // 90% for filmstrip
-  const progress = $derived(duration > 0 ? (currentTime / duration) * 100 : 0)
-  const selStartPct = $derived(duration > 0 ? (selectionStart / duration) * 100 : 0)
-  const selEndPct = $derived(duration > 0 ? (selectionEnd / duration) * 100 : 0)
+  const viewDur = $derived(viewEnd - viewStart)
+  // All percentages are view-relative: 0% = viewStart, 100% = viewEnd
+  const progress = $derived(viewDur > 0 ? Math.max(0, Math.min(100, ((currentTime - viewStart) / viewDur) * 100)) : 0)
+  const selStartPct = $derived(viewDur > 0 ? Math.max(0, Math.min(100, ((selectionStart - viewStart) / viewDur) * 100)) : 0)
+  const selEndPct = $derived(viewDur > 0 ? Math.max(0, Math.min(100, ((selectionEnd - viewStart) / viewDur) * 100)) : 0)
   // Handle positions mapped to outer container coordinates
   const handleStartLeft = $derived(GUTTER + selStartPct * INNER / 100)
   const handleEndLeft = $derived(GUTTER + selEndPct * INNER / 100)
   const playheadLeft = $derived(GUTTER + progress * INNER / 100)
+  // Filmstrip zoom: scale and translate to show only the view window
+  const filmScaleX = $derived(viewDur > 0 && duration > 0 ? duration / viewDur : 1)
+  const filmTranslateX = $derived(duration > 0 ? -(viewStart / duration) * 100 : 0)
   const hasAbsTime = $derived(!!formatAbsoluteTime(startTime, 0))
   const currentSeg = $derived(Math.floor(currentTime / 60))
   const totalSegs = $derived(route?.maxqlog != null ? route.maxqlog + 1 : Math.ceil(duration / 60))
@@ -62,8 +74,12 @@
     if (!timelineEl || duration <= 0) return 0
     const rect = timelineEl.getBoundingClientRect()
     const clientX = e.touches ? e.touches[0].clientX : e.clientX
-    const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width))
-    return pct * duration
+    const pct = (clientX - rect.left) / rect.width
+    if (draggingHandle) {
+      // Allow extrapolation beyond view so handles can expand the selection
+      return Math.max(0, Math.min(duration, viewStart + pct * viewDur))
+    }
+    return viewStart + Math.max(0, Math.min(1, pct)) * viewDur
   }
 
   function startHandleDrag(handle, e) {
@@ -76,9 +92,9 @@
   function startDrag(e) {
     isDragging = true
     const t = getTimeFromEvent(e)
+    dragOrigin = t
+    prevSel = { start: selectionStart, end: selectionEnd }
     onSeek(t)
-
-    // Prevent text selection during drag
     e.preventDefault()
   }
 
@@ -87,24 +103,44 @@
     const t = getTimeFromEvent(e)
     if (draggingHandle === 'start') {
       selectionStart = Math.max(0, Math.min(t, selectionEnd - 1))
+      if (selectionStart < viewStart) viewStart = selectionStart
       onSeek(selectionStart)
     } else if (draggingHandle === 'end') {
       selectionEnd = Math.min(duration, Math.max(t, selectionStart + 1))
+      if (selectionEnd > viewEnd) viewEnd = selectionEnd
       onSeek(selectionStart)
-    } else {
-      // Constrain playhead within selection; drag handles if needed
-      if (t < selectionStart) {
-        selectionStart = Math.max(0, t)
-      } else if (t > selectionEnd) {
-        selectionEnd = Math.min(duration, t)
+    } else if (dragOrigin != null) {
+      // Bar drag-to-select: create selection from drag origin to current
+      const lo = Math.max(0, Math.min(dragOrigin, t))
+      const hi = Math.min(duration, Math.max(dragOrigin, t))
+      if (hi - lo > 5) {
+        selectionStart = lo
+        selectionEnd = hi
       }
       onSeek(t)
     }
   }
 
   function endDrag() {
+    const selDur = selectionEnd - selectionStart
+    if (draggingHandle && selDur > 0) {
+      // Handle drag → zoom to selection
+      const padding = selDur / 2
+      viewStart = Math.max(0, selectionStart - padding)
+      viewEnd = Math.min(duration, selectionEnd + padding)
+    } else if (dragOrigin != null && selDur > 5 && selDur < duration - 5) {
+      // Bar drag created a meaningful selection → zoom
+      const padding = selDur / 2
+      viewStart = Math.max(0, selectionStart - padding)
+      viewEnd = Math.min(duration, selectionEnd + padding)
+    } else if (dragOrigin != null && selDur <= 5) {
+      // Tap or micro-drag: restore previous selection
+      selectionStart = prevSel.start
+      selectionEnd = prevSel.end
+    }
     isDragging = false
     draggingHandle = null
+    dragOrigin = null
   }
 
   // Global mouse/touch listeners for dragging outside timeline
@@ -133,6 +169,13 @@
     playbackRate = rate
     onRate(rate)
     showSpeedMenu = false
+  }
+
+  function resetView() {
+    selectionStart = 0
+    selectionEnd = duration
+    viewStart = 0
+    viewEnd = duration
   }
 
   function toggleFullscreen() {
@@ -167,29 +210,36 @@
       aria-valuemax={Math.round(duration)}
       onmousedown={startDrag}
       ontouchstart={startDrag}
+      ondblclick={resetView}
       onkeydown={(e) => {
         if (e.key === 'ArrowRight') onSeek(Math.min(duration, currentTime + 5))
         else if (e.key === 'ArrowLeft') onSeek(Math.max(0, currentTime - 5))
       }}
     >
-      <!-- Filmstrip background -->
-      <div class="absolute inset-0 flex opacity-40">
-        {#each filmstripSegs as seg}
-          <div class="flex-1 min-w-0 overflow-hidden">
-            <img
-              src={spriteUrl(route, seg)}
-              alt=""
-              class="w-full h-full object-cover"
-              loading="lazy"
-              onerror={(e) => e.target.style.visibility = 'hidden'}
-            />
-          </div>
-        {/each}
-      </div>
+      <!-- Filmstrip + events (zoomed with view window) -->
+      <div
+        class="absolute inset-0"
+        style="transform-origin: 0 0; transform: scaleX({filmScaleX}) translateX({filmTranslateX}%){isDragging ? '' : '; transition: transform 0.3s ease-out'}"
+      >
+        <!-- Filmstrip background -->
+        <div class="absolute inset-0 flex opacity-40">
+          {#each filmstripSegs as seg}
+            <div class="flex-1 min-w-0 overflow-hidden">
+              <img
+                src={spriteUrl(route, seg)}
+                alt=""
+                class="w-full h-full object-cover"
+                loading="lazy"
+                onerror={(e) => e.target.style.visibility = 'hidden'}
+              />
+            </div>
+          {/each}
+        </div>
 
-      <!-- Event timeline overlay -->
-      <div class="absolute bottom-0 left-0 right-0">
-        <EventTimeline {events} {durationMs} height="3px" />
+        <!-- Event timeline overlay -->
+        <div class="absolute bottom-0 left-0 right-0">
+          <EventTimeline {events} {durationMs} height="3px" />
+        </div>
       </div>
 
       <!-- Dark overlay for played region contrast -->
