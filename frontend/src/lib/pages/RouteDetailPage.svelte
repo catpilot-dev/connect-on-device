@@ -1,7 +1,7 @@
 <script>
-  import { onMount } from 'svelte'
+  import { onMount, onDestroy } from 'svelte'
   import { selectedRoute, dongleId } from '../stores.js'
-  import { fetchRoute, fetchRouteFiles, fetchAllCoords, fetchAllEventsWithProgress } from '../api.js'
+  import { fetchRoute, fetchRouteFiles, fetchAllCoords, fetchAllEventsWithProgress, startHudStream, stopHudStream, hudStreamStatus, hudStreamUrl, prerenderHud, hudProgress, hudVideoUrl, cancelHudRender } from '../api.js'
   import { formatDate, formatTime, formatDistance, formatDuration, getRouteDurationMs } from '../format.js'
   import { buildTimelineEvents } from '../derived.js'
   import VideoPlayer from '../components/VideoPlayer.svelte'
@@ -19,7 +19,47 @@
   let currentTime = $state(0)
   let duration = $state(0)
   let isPlaying = $state(false)
-  let hudEnabled = $state(false)
+  let hudWanted = $state(false)
+  let hudStarting = $state(false)
+  let hudStreaming = $state(false)
+  let hudError = $state(null)
+  let hudPollTimer = null
+  let hudTickTimer = null
+  let hudStartTime = 0  // currentTime when stream was started
+  const hudLiveUrl = $derived(hudStreaming ? hudStreamUrl() : null)
+  // HUD download (pre-render to MP4)
+  let dlRendering = $state(false)
+  let dlReady = $state(false)
+  let dlError = $state(null)
+  let dlElapsed = $state(0)
+  let dlTotal = $state(0)
+  let dlPhase = $state('')
+  let dlFrame = $state(0)
+  let dlTotalFrames = $state(0)
+  let dlRemainingSec = $state(0)
+  let dlRenderStart = $state(0)
+  let dlPollTimer = null
+
+  // Quality slider: controls resolution continuously (0-100)
+  // Single-pass render at 0.2x replay speed → 25fps unique route content from 5fps capture
+  let dlQualityPct = $state(50)
+  const DL_RECORD_SPEED = 0.2
+  const DL_FPS = 20
+  // Resolution: slider interpolates width from 540 to 2160 (height is half)
+  // Round to even — libx264 requires dimensions divisible by 2
+  const dlWidth = $derived(Math.round((540 + (dlQualityPct / 100) * 1620) / 2) * 2)   // 540 → 2160
+  const dlHeight = $derived(Math.round((dlWidth / 2) / 2) * 2)                         // 270 → 1080
+  // Use scale filter when below native (2160x1080)
+  const dlScale = $derived(dlQualityPct < 100 ? `${dlWidth}:${dlHeight}` : null)
+  // Bitrate scales roughly with pixel count (quadratic with width)
+  const dlBitrate = $derived(0.4 + 2.6 * Math.pow(dlQualityPct / 100, 2))   // ~0.4 → 3.0 Mbps
+  const dlDurationSec = $derived(
+    (selectionEnd > 0 ? selectionEnd : duration || ((route?.maxqlog ?? 0) + 1) * 60) - (selectionStart || 0)
+  )
+  const dlEstimatedMB = $derived(Math.round(dlDurationSec * dlBitrate / 8))
+  // Single-pass render at 0.2x speed + setup overhead
+  const dlEstimatedRenderSec = $derived(Math.round(dlDurationSec / DL_RECORD_SPEED + 30))
+
   let selectionStart = $state(0)
   let selectionEnd = $state(0)
   let enrichDone = $state(0)
@@ -59,6 +99,14 @@
     }
   })
 
+  onDestroy(() => {
+    // Stop HUD stream if active when navigating away
+    if (hudPollTimer) { clearInterval(hudPollTimer); hudPollTimer = null }
+    if (dlPollTimer) { clearInterval(dlPollTimer); dlPollTimer = null }
+    stopHudTick()
+    if (hudWanted) stopHudStream().catch(() => {})
+  })
+
   function goBack() {
     selectedRoute.set(null)
   }
@@ -93,6 +141,170 @@
   function handlePause() {
     isPlaying = false
   }
+
+  function stopHudTick() {
+    if (hudTickTimer) { clearInterval(hudTickTimer); hudTickTimer = null }
+  }
+
+  function startHudTick() {
+    stopHudTick()
+    hudStartTime = currentTime
+    // Advance playhead at 1s/s — replay runs at real-time
+    hudTickTimer = setInterval(() => {
+      currentTime += 1
+      // Respect selection range (selectionEnd defaults to duration)
+      if (selectionEnd > 0 && currentTime >= selectionEnd) {
+        currentTime = selectionStart
+        hudStartTime = selectionStart
+      } else if (duration > 0 && currentTime >= duration) {
+        currentTime = 0
+        hudStartTime = 0
+      }
+    }, 1000)
+  }
+
+  function restoreVideoDefaults() {
+    // Restore normal video playback after HUD stream or download finishes
+    videoPlayer?.setPlaybackRate(1.0)
+    videoPlayer?.pause()
+    isPlaying = false
+  }
+
+  async function toggleHud() {
+    if (hudWanted) {
+      // Turning off — stop stream and restore normal video
+      hudWanted = false
+      if (hudPollTimer) { clearInterval(hudPollTimer); hudPollTimer = null }
+      stopHudTick()
+      hudStarting = false
+      hudStreaming = false
+      hudError = null
+      stopHudStream().catch(() => {})
+      restoreVideoDefaults()
+      return
+    }
+    hudWanted = true
+    hudStarting = true
+    hudStreaming = false
+    hudError = null
+    try {
+      await startHudStream(route.fullname, currentTime)
+      // Poll for streaming status
+      hudPollTimer = setInterval(async () => {
+        try {
+          const s = await hudStreamStatus()
+          if (s.status === 'streaming') {
+            clearInterval(hudPollTimer)
+            hudPollTimer = null
+            hudStarting = false
+            hudStreaming = true
+            startHudTick()
+          } else if (s.status === 'error') {
+            clearInterval(hudPollTimer)
+            hudPollTimer = null
+            hudStarting = false
+            hudError = s.error || 'Stream failed'
+            hudWanted = false
+          }
+        } catch { /* ignore poll errors */ }
+      }, 2000)
+    } catch (e) {
+      hudStarting = false
+      hudError = e.message
+      hudWanted = false
+    }
+  }
+
+  async function startDownload() {
+    if (dlRendering || dlReady) return
+    dlRendering = true
+    dlReady = false
+    dlError = null
+    dlElapsed = 0
+    dlTotal = 0
+    dlPhase = ''
+    dlFrame = 0
+    dlTotalFrames = 0
+    dlRemainingSec = 0
+    dlRenderStart = selectionStart || 0
+
+    try {
+      const start = selectionStart || 0
+      const end = selectionEnd > 0 ? selectionEnd : duration || ((route.maxqlog + 1) * 60)
+      const res = await prerenderHud(route.fullname, start, end, {
+        scale: dlScale,
+        fps: DL_FPS,
+      })
+
+      if (res.status === 'complete') {
+        dlRendering = false
+        dlReady = true
+        return
+      }
+
+      dlTotal = res.total_sec || (end - start)
+
+      // Seek video to render start (frozen=dlRendering keeps it paused)
+      videoPlayer?.seek(start)
+
+      // Poll for progress — seek video preview to follow render position
+      dlPollTimer = setInterval(async () => {
+        try {
+          const p = await hudProgress(route.fullname)
+          dlElapsed = p.elapsed_sec || 0
+          dlTotal = p.total_sec || dlTotal
+          dlPhase = p.phase || ''
+          dlFrame = p.frame || 0
+          dlTotalFrames = p.total_frames || dlTotalFrames
+          dlRemainingSec = p.remaining_sec ?? dlRemainingSec
+
+          // Sync video preview to current render position (frozen prop keeps it paused)
+          if (p.elapsed_sec != null && p.status === 'rendering') {
+            const renderPos = dlRenderStart + (p.elapsed_sec || 0)
+            currentTime = renderPos
+            videoPlayer?.seek(renderPos)
+          }
+
+          if (p.status === 'complete') {
+            clearInterval(dlPollTimer)
+            dlPollTimer = null
+            dlRendering = false
+            dlReady = true
+            restoreVideoDefaults()
+          } else if (p.status === 'error') {
+            clearInterval(dlPollTimer)
+            dlPollTimer = null
+            dlRendering = false
+            dlError = p.error || 'Render failed'
+            restoreVideoDefaults()
+          }
+        } catch { /* ignore poll errors */ }
+      }, 2000)
+    } catch (e) {
+      dlRendering = false
+      dlError = e.message
+      restoreVideoDefaults()
+    }
+  }
+
+  async function cancelDownload() {
+    if (dlPollTimer) { clearInterval(dlPollTimer); dlPollTimer = null }
+    dlRendering = false
+    dlReady = false
+    dlError = null
+    restoreVideoDefaults()
+    try {
+      if (route) await cancelHudRender(route.fullname)
+    } catch { /* ignore */ }
+  }
+
+  function openDownload() {
+    if (!route) return
+    const a = document.createElement('a')
+    a.href = hudVideoUrl(route.fullname)
+    a.download = `${route.fullname.replace('/', '_')}_hud.mp4`
+    a.click()
+  }
 </script>
 
 <div class="mx-auto max-w-6xl px-4 py-4">
@@ -122,17 +334,22 @@
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
       <!-- Video player + controls -->
       <div class="space-y-3" data-video-container>
+        <div class="rounded-lg overflow-hidden" class:recording-border={dlRendering}>
         <VideoPlayer
           bind:this={videoPlayer}
           {route}
           {files}
-          {hudEnabled}
+          {hudLiveUrl}
+          frozen={dlRendering}
+          {selectionStart}
+          {selectionEnd}
           bind:currentTime
           bind:duration
           onTimeUpdate={handleTimeUpdate}
           onPlay={handlePlay}
           onPause={handlePause}
         />
+        </div>
 
         {#if enriching}
           <div class="space-y-1">
@@ -176,12 +393,93 @@
           />
 
           <!-- Actions -->
-          <div class="card p-3 space-y-2">
+          <div class="card p-3">
             <RouteActions {route} />
-            <label class="flex items-center gap-2 text-sm text-surface-300 cursor-pointer">
-              <input type="checkbox" bind:checked={hudEnabled} class="accent-engage-green" />
-              HUD overlay
+          </div>
+
+          <!-- HUD Live Stream -->
+          <div class="card p-3 space-y-2" class:opacity-50={dlRendering}>
+            <label class="flex items-center gap-2 text-sm text-surface-200" class:cursor-pointer={!dlRendering} class:cursor-not-allowed={dlRendering}>
+              <input type="checkbox" checked={hudWanted} onchange={toggleHud} disabled={dlRendering} class="accent-engage-green" />
+              HUD Live Stream
             </label>
+            {#if dlRendering}
+              <p class="text-xs text-yellow-400">Unavailable while rendering video</p>
+            {/if}
+            {#if hudStarting}
+              <div class="flex items-center gap-2">
+                <div class="w-3 h-3 border-2 border-engage-green border-t-transparent rounded-full animate-spin"></div>
+                <p class="text-xs text-surface-400">Starting stream...</p>
+              </div>
+            {/if}
+            {#if hudStreaming}
+              <div class="flex items-center gap-2">
+                <div class="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
+                <p class="text-xs text-surface-400">LIVE</p>
+              </div>
+            {/if}
+            {#if hudError}
+              <p class="text-xs text-red-400">{hudError}</p>
+            {/if}
+          </div>
+
+          <!-- Download HUD Video -->
+          <div class="card p-3 space-y-2" class:opacity-50={hudWanted}>
+            <p class="text-sm text-surface-200">Download HUD Video</p>
+            {#if hudWanted}
+              <p class="text-xs text-surface-500">Stop live stream to render video</p>
+            {:else}
+              <p class="text-xs text-surface-400">Render openpilot UI overlay via slow-motion replay{selectionEnd > 0 ? ' (selection range)' : ''}</p>
+
+              {#if !dlRendering && !dlReady}
+                <!-- Quality slider (continuous) -->
+                <div class="flex items-center gap-3">
+                  <span class="text-xs text-surface-500 shrink-0">Low</span>
+                  <input type="range" min="0" max="100" step="1" bind:value={dlQualityPct}
+                    class="flex-1 accent-engage-green h-1.5" />
+                  <span class="text-xs text-surface-500 shrink-0">High</span>
+                </div>
+                <p class="text-xs text-surface-300">{dlWidth}x{dlHeight} @ 20fps</p>
+                <p class="text-xs text-surface-400">
+                  ~{dlEstimatedMB} MB
+                  · ~{Math.ceil(dlEstimatedRenderSec / 60)} min render time
+                </p>
+                <button class="btn btn-sm bg-surface-700 hover:bg-surface-600 text-surface-200 px-3 py-1 rounded text-xs" onclick={startDownload}>
+                  Render & Download
+                </button>
+              {:else if dlRendering}
+                <div class="space-y-1">
+                  <div class="h-2 bg-surface-700 rounded-full overflow-hidden">
+                    <div
+                      class="h-full bg-engage-green rounded-full transition-all duration-300"
+                      style="width: {dlTotal > 0 ? (dlElapsed / dlTotal) * 100 : 0}%"
+                    ></div>
+                  </div>
+                  <p class="text-xs text-surface-400 text-center">
+                    {dlPhase === 'encoding' ? 'Encoding' : 'Rendering'}... {dlFrame} / {dlTotalFrames} frames
+                    {#if dlRemainingSec > 60}
+                      · ~{Math.ceil(dlRemainingSec / 60)} min remaining
+                    {:else if dlRemainingSec > 0}
+                      · ~{dlRemainingSec}s remaining
+                    {/if}
+                  </p>
+                  <button class="btn btn-sm bg-surface-700 hover:bg-red-900 text-surface-300 px-3 py-1 rounded text-xs" onclick={cancelDownload}>
+                    Stop
+                  </button>
+                </div>
+              {:else if dlReady}
+                <button class="btn btn-sm bg-engage-green text-black font-medium px-3 py-1 rounded" onclick={openDownload}>
+                  Download MP4
+                </button>
+                <button class="btn btn-sm bg-surface-700 hover:bg-surface-600 text-surface-200 px-3 py-1 rounded text-xs ml-2"
+                  onclick={() => { dlReady = false; dlRendering = false }}>
+                  Re-render
+                </button>
+              {/if}
+              {#if dlError}
+                <p class="text-xs text-red-400">{dlError}</p>
+              {/if}
+            {/if}
           </div>
         {/if}
 
@@ -280,3 +578,14 @@
     </div>
   {/if}
 </div>
+
+<style>
+  .recording-border {
+    border: 2px solid transparent;
+    animation: recording-blink 1s ease-in-out infinite;
+  }
+  @keyframes recording-blink {
+    0%, 100% { border-color: transparent; }
+    50% { border-color: #ef4444; }
+  }
+</style>

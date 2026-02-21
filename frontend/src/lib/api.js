@@ -85,6 +85,70 @@ export function downloadUrl(routeName, fileTypes = ['rlog'], segments = null) {
   return url
 }
 
+// ── HUD pre-render ─────────────────────────────────────────
+
+/**
+ * Start HUD video prerender.
+ * @param {string} routeName
+ * @param {number} start - start time in seconds
+ * @param {number} end - end time in seconds
+ * @param {object} params - render params {speed, scale, fps}
+ */
+export async function prerenderHud(routeName, start, end, params = {}) {
+  const res = await fetch(`/v1/route/${encodeRouteName(routeName)}/hud/prerender`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ start, end, ...params }),
+  })
+  if (!res.ok) throw new Error(`prerenderHud: ${res.status}`)
+  return res.json()
+}
+
+export async function cancelHudRender(routeName) {
+  const res = await fetch(`/v1/route/${encodeRouteName(routeName)}/hud/cancel`, { method: 'POST' })
+  if (!res.ok) throw new Error(`cancelHudRender: ${res.status}`)
+  return res.json()
+}
+
+export async function hudProgress(routeName) {
+  const res = await fetch(`/v1/route/${encodeRouteName(routeName)}/hud/progress`)
+  if (!res.ok) throw new Error(`hudProgress: ${res.status}`)
+  return res.json()
+}
+
+export function hudVideoUrl(routeName) {
+  return `/v1/route/${encodeRouteName(routeName)}/hud/video`
+}
+
+// ── HUD live streaming ────────────────────────────────────
+
+export async function startHudStream(routeName, start = 0) {
+  const res = await fetch('/v1/hud/stream/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ route: encodeRouteName(routeName), start }),
+  })
+  if (!res.ok) throw new Error(`startHudStream: ${res.status}`)
+  return res.json()
+}
+
+export async function stopHudStream() {
+  const res = await fetch('/v1/hud/stream/stop', { method: 'POST' })
+  if (!res.ok) throw new Error(`stopHudStream: ${res.status}`)
+  return res.json()
+}
+
+export async function hudStreamStatus() {
+  const res = await fetch('/v1/hud/stream/status')
+  if (!res.ok) throw new Error(`hudStreamStatus: ${res.status}`)
+  return res.json()
+}
+
+/** HLS live stream playlist URL */
+export function hudStreamUrl() {
+  return '/v1/hud/stream/stream.m3u8'
+}
+
 // ── Connectdata URL builders ────────────────────────────────
 
 /** Build /connectdata/... URL for media files */

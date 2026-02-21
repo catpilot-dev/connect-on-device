@@ -25,6 +25,14 @@ from handlers import (
     handle_device_location,
     handle_device_stats,
     handle_devices,
+    handle_hud_cancel,
+    handle_hud_prerender,
+    handle_hud_progress,
+    handle_hud_stream_serve,
+    handle_hud_stream_start,
+    handle_hud_stream_status,
+    handle_hud_stream_stop,
+    handle_hud_video,
     handle_hud_ws,
     handle_me,
     handle_preserved_routes,
@@ -44,6 +52,7 @@ from handlers import (
     handle_stub_error,
     handle_webrtc,
 )
+from hud_stream import HudStreamManager, is_available as hud_stream_available
 from route_store import DEFAULT_DATA_DIR, DEFAULT_PORT, RouteStore
 
 logger = logging.getLogger("connect")
@@ -57,6 +66,21 @@ async def _startup(app: web.Application):
     store.scan(force=True)
     logger.info("Route scan complete, %d routes found", len(store._routes))
 
+    # Initialize HUD stream manager if C3 binaries are available
+    if hud_stream_available():
+        app["stream_manager"] = HudStreamManager()
+        logger.info("HUD live streaming available")
+    else:
+        logger.info("HUD live streaming not available (missing C3 binaries)")
+
+
+async def _shutdown(app: web.Application):
+    """Clean shutdown — stop any active HUD stream."""
+    mgr = app.get("stream_manager")
+    if mgr and mgr.is_active:
+        logger.info("Stopping active HUD stream on shutdown...")
+        await mgr.stop()
+
 
 # ─── App factory ──────────────────────────────────────────────────────
 
@@ -68,6 +92,7 @@ def create_app(data_dir: str, static_dir: str) -> web.Application:
     app["static_dir"] = Path(static_dir)
 
     app.on_startup.append(_startup)
+    app.on_shutdown.append(_shutdown)
 
     # ── comma-compatible API ──
     # Auth
@@ -94,6 +119,18 @@ def create_app(data_dir: str, static_dir: str) -> web.Application:
     app.router.add_delete("/v1/route/{routeName}/preserve", handle_route_unpreserve)
     app.router.add_get("/v1/route/{routeName}/download", handle_route_download)
     app.router.add_post("/v1/route/{routeName}/enrich", handle_route_enrich)
+
+    # HUD video rendering (pre-render to MP4)
+    app.router.add_post("/v1/route/{routeName}/hud/prerender", handle_hud_prerender)
+    app.router.add_post("/v1/route/{routeName}/hud/cancel", handle_hud_cancel)
+    app.router.add_get("/v1/route/{routeName}/hud/progress", handle_hud_progress)
+    app.router.add_get("/v1/route/{routeName}/hud/video", handle_hud_video)
+
+    # HUD live streaming (wayland screenshooter → HLS)
+    app.router.add_post("/v1/hud/stream/start", handle_hud_stream_start)
+    app.router.add_post("/v1/hud/stream/stop", handle_hud_stream_stop)
+    app.router.add_get("/v1/hud/stream/status", handle_hud_stream_status)
+    app.router.add_get("/v1/hud/stream/{filename}", handle_hud_stream_serve)
 
     # Stubs for endpoints the frontend may query
     app.router.add_get("/v1/devices/{dongleId}/athena_offline_queue", handle_stub_empty_array)

@@ -4,27 +4,26 @@
   import { hudUrl, spriteUrl } from '../api.js'
 
   /**
-   * Cross-browser HLS video player with HUD overlay.
+   * Cross-browser HLS video player with HUD live stream support.
+   *
+   * Two video elements:
+   * 1. HLS video (qcamera segments) — always loaded, hidden when HUD active
+   * 2. HUD live stream video — shown when hudLiveUrl is set, plays live HLS from C3 compositor capture
    *
    * Compatibility strategy:
    * 1. hls.js (Chrome, Firefox, Edge, Opera, Android Chrome/Firefox/Samsung)
    * 2. Native HLS (Safari macOS, Safari iOS, Chrome iOS — all WebKit)
    * 3. Direct .ts fallback (single segment for any remaining edge cases)
-   *
-   * Mobile considerations:
-   * - playsInline: prevents iOS fullscreen takeover
-   * - muted: enables autoplay on all mobile browsers (autoplay policy)
-   * - preload="auto": hints browser to buffer ahead
-   * - webkit-playsinline: legacy iOS support
-   * - x5-video-player-type="h5": Tencent WebView (WeChat browser) inline
-   * - x5-video-orientation="portraint": WeChat landscape prevention
    */
 
-  /** @type {{ route: object, files: object, hudEnabled?: boolean, currentTime?: number, duration?: number, onTimeUpdate?: (t: number) => void, onDurationChange?: (d: number) => void, onPlay?: () => void, onPause?: () => void }} */
+  /** @type {{ route: object, files: object, hudLiveUrl?: string|null, selectionStart?: number, selectionEnd?: number, currentTime?: number, duration?: number, onTimeUpdate?: (t: number) => void, onDurationChange?: (d: number) => void, onPlay?: () => void, onPause?: () => void }} */
   let {
     route,
     files,
-    hudEnabled = false,
+    hudLiveUrl = null,
+    frozen = false,
+    selectionStart = 0,
+    selectionEnd = 0,
     currentTime = $bindable(0),
     duration = $bindable(0),
     onTimeUpdate,
@@ -34,14 +33,15 @@
   } = $props()
 
   let videoEl = $state(null)
-  let hudImg = $state(null)
+  let hudVideoEl = $state(null)
   let hls = null
+  let hudHls = null
   let manifestUrl = null
   let isPlaying = $state(false)
-  let hudVisible = $state(false)
-  let hudTimer = null
-  let lastHudSeg = -1
-  let lastHudOffset = -1
+
+  // Track which video is active for control methods
+  const showingHud = $derived(!!hudLiveUrl)
+  const activeVideo = $derived(showingHud ? hudVideoEl : videoEl)
 
   const posterUrl = $derived(route ? spriteUrl(route, 0) : null)
 
@@ -68,22 +68,18 @@
   function initPlayer() {
     if (!videoEl || !files?.qcameras) return
 
-    cleanup()
+    cleanupHls()
 
     const manifest = buildManifest(files.qcameras)
     const blob = new Blob([manifest], { type: 'application/vnd.apple.mpegurl' })
     manifestUrl = URL.createObjectURL(blob)
 
     if (Hls.isSupported()) {
-      // Path 1: hls.js — Chrome, Firefox, Edge, Opera, Android browsers
       hls = new Hls({
         enableWorker: true,
-        // Generous buffering for smooth playback on slower devices
         maxBufferLength: 30,
         maxMaxBufferLength: 120,
-        // Start from lowest quality for fast initial load on mobile
         startLevel: 0,
-        // Avoid stalling on slow connections
         fragLoadingTimeOut: 20000,
         fragLoadingMaxRetry: 6,
         levelLoadingTimeOut: 10000,
@@ -92,7 +88,7 @@
       hls.attachMedia(videoEl)
 
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        videoEl.play().catch(() => {})
+        if (!showingHud && !frozen) videoEl.play().catch(() => {})
       })
 
       hls.on(Hls.Events.ERROR, (_event, data) => {
@@ -114,26 +110,22 @@
         }
       })
     } else if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
-      // Path 2: Native HLS — Safari (macOS + iOS), Chrome iOS, Firefox iOS
-      // All iOS browsers use WebKit which has native HLS support
       videoEl.src = manifestUrl
       videoEl.addEventListener('loadedmetadata', () => {
-        videoEl.play().catch(() => {})
+        if (!showingHud) videoEl.play().catch(() => {})
       }, { once: true })
     } else {
-      // Path 3: Direct source fallback — extremely rare edge case
-      // Try first available qcamera.ts directly
       const firstUrl = files.qcameras?.find(u => u)
       if (firstUrl) {
         videoEl.src = firstUrl
         videoEl.addEventListener('loadedmetadata', () => {
-          videoEl.play().catch(() => {})
+          if (!showingHud) videoEl.play().catch(() => {})
         }, { once: true })
       }
     }
   }
 
-  function cleanup() {
+  function cleanupHls() {
     if (hls) {
       hls.destroy()
       hls = null
@@ -142,134 +134,201 @@
       URL.revokeObjectURL(manifestUrl)
       manifestUrl = null
     }
-    if (hudTimer) {
-      clearInterval(hudTimer)
-      hudTimer = null
-    }
   }
 
-  // Handle video time updates — throttled to avoid excessive events
-  function handleTimeUpdate() {
-    if (!videoEl) return
+  function cleanup() {
+    cleanupHls()
+    cleanupHudHls()
+  }
+
+  // ── HLS video event handlers ──────────────────────────────
+  function handleHlsTimeUpdate() {
+    if (!videoEl || showingHud) return
     currentTime = videoEl.currentTime
     onTimeUpdate?.(videoEl.currentTime)
   }
 
-  function handleDurationChange() {
-    if (!videoEl) return
+  function handleHlsDurationChange() {
+    if (!videoEl || showingHud) return
     duration = videoEl.duration
     onDurationChange?.(videoEl.duration)
   }
 
-  function handlePlay() { isPlaying = true; onPlay?.() }
-  function handlePause() { isPlaying = false; onPause?.() }
-
-  // HUD overlay: update every 500ms when playing
-  function startHudUpdates() {
-    if (hudTimer) clearInterval(hudTimer)
-    hudTimer = setInterval(updateHud, 500)
+  function handleHlsPlay() {
+    if (showingHud) return
+    if (frozen) { videoEl?.pause(); return }
+    isPlaying = true
+    onPlay?.()
   }
 
-  function stopHudUpdates() {
-    if (hudTimer) {
-      clearInterval(hudTimer)
-      hudTimer = null
+  function handleHlsPause() {
+    if (showingHud) return
+    isPlaying = false
+    onPause?.()
+  }
+
+  // ── HUD live stream event handlers ───────────────────────
+  function handleHudTimeUpdate() {
+    // Time tracking handled by RouteDetailPage tick timer during live stream
+  }
+
+  function handleHudDurationChange() {
+    // Keep duration from HLS (full route), not from live stream
+  }
+
+  function handleHudPlay() {
+    if (!showingHud) return
+    isPlaying = true
+    onPlay?.()
+  }
+
+  function handleHudPause() {
+    if (!showingHud) return
+    isPlaying = false
+    onPause?.()
+  }
+
+  function cleanupHudHls() {
+    if (hudHls) {
+      hudHls.destroy()
+      hudHls = null
     }
   }
 
-  function updateHud() {
-    if (!hudImg || !route || !videoEl) return
-    const t = videoEl.currentTime
-    const seg = Math.floor(t / 60)
-    const offsetMs = Math.round((t % 60) * 1000)
+  // ── Swap logic: react to hudLiveUrl changes ───────────────
+  $effect(() => {
+    if (hudLiveUrl && hudVideoEl) {
+      // Switching TO HUD live stream
+      videoEl?.pause()
 
-    // Skip if same frame
-    if (seg === lastHudSeg && Math.abs(offsetMs - lastHudOffset) < 400) return
-    lastHudSeg = seg
-    lastHudOffset = offsetMs
+      cleanupHudHls()
 
-    hudImg.src = hudUrl(route, seg, offsetMs)
-  }
+      if (Hls.isSupported()) {
+        hudHls = new Hls({
+          enableWorker: true,
+          liveSyncDurationCount: 2,
+          liveMaxLatencyDurationCount: 5,
+          maxBufferLength: 10,
+          startLevel: 0,
+        })
+        hudHls.loadSource(hudLiveUrl)
+        hudHls.attachMedia(hudVideoEl)
+        hudHls.on(Hls.Events.MANIFEST_PARSED, () => {
+          hudVideoEl.play().catch(() => {})
+        })
+        hudHls.on(Hls.Events.ERROR, (_event, data) => {
+          if (data.fatal) {
+            if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+              hudHls.startLoad()
+            } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+              hudHls.recoverMediaError()
+            }
+          }
+        })
+      } else if (hudVideoEl.canPlayType('application/vnd.apple.mpegurl')) {
+        // Safari native HLS
+        hudVideoEl.src = hudLiveUrl
+        hudVideoEl.addEventListener('loadedmetadata', () => {
+          hudVideoEl.play().catch(() => {})
+        }, { once: true })
+      }
+    } else if (!hudLiveUrl && videoEl) {
+      // Switching FROM HUD back to qcamera HLS
+      cleanupHudHls()
+      if (hudVideoEl) {
+        hudVideoEl.pause()
+        hudVideoEl.removeAttribute('src')
+        hudVideoEl.load()
+      }
+      // Resume qcamera at current time
+      videoEl.currentTime = currentTime
+      if (isPlaying) videoEl.play().catch(() => {})
+    }
+  })
 
-  function handleHudLoad() { hudVisible = true }
-  function handleHudError() { hudVisible = false }
+  // Freeze: pause video immediately when frozen prop is set
+  $effect(() => {
+    if (frozen && videoEl && !videoEl.paused) {
+      videoEl.pause()
+    }
+  })
 
   // React to files changing (route switch)
   $effect(() => {
     if (files) initPlayer()
   })
 
-  // React to play/pause and hudEnabled for HUD timer
-  $effect(() => {
-    if (hudEnabled && isPlaying) {
-      startHudUpdates()
-      updateHud()
-    } else {
-      stopHudUpdates()
-      if (hudEnabled) updateHud()
-    }
-    if (!hudEnabled) {
-      hudVisible = false
-    }
-  })
-
   onDestroy(cleanup)
 
-  // Expose seek method for external control
+  // ── Exported control methods — operate on active video ────
   export function seek(time) {
-    if (videoEl) videoEl.currentTime = time
+    if (showingHud) {
+      // Live stream — seeking not supported, ignore
+      return
+    }
+    if (videoEl) {
+      videoEl.currentTime = time
+    }
   }
 
   export function play() {
-    videoEl?.play().catch(() => {})
+    activeVideo?.play().catch(() => {})
   }
 
   export function pause() {
-    videoEl?.pause()
+    activeVideo?.pause()
   }
 
   export function toggle() {
-    if (!videoEl) return
-    videoEl.paused ? videoEl.play().catch(() => {}) : videoEl.pause()
+    const v = activeVideo
+    if (!v) return
+    v.paused ? v.play().catch(() => {}) : v.pause()
   }
 
   export function setPlaybackRate(rate) {
     if (videoEl) videoEl.playbackRate = rate
+    if (hudVideoEl) hudVideoEl.playbackRate = rate
   }
 </script>
 
 <div class="relative w-full bg-black rounded-lg overflow-hidden">
-  <!-- Video element with maximum compatibility attributes -->
+  <!-- HLS video element — hidden when HUD video is active -->
   <video
     bind:this={videoEl}
     class="w-full aspect-video object-contain bg-black"
+    class:hidden={showingHud}
     muted
     playsinline
     webkit-playsinline
     x5-video-player-type="h5"
     poster={posterUrl}
     preload="auto"
-    ontimeupdate={handleTimeUpdate}
-    ondurationchange={handleDurationChange}
-    onplay={handlePlay}
-    onpause={handlePause}
-    onended={handlePause}
+    ontimeupdate={handleHlsTimeUpdate}
+    ondurationchange={handleHlsDurationChange}
+    onplay={handleHlsPlay}
+    onpause={handleHlsPause}
+    onended={handleHlsPause}
   >
     Your browser does not support video playback.
   </video>
 
-  <!-- HUD overlay — absolutely positioned over video, only rendered when enabled -->
-  {#if hudEnabled}
-    <img
-      bind:this={hudImg}
-      class="absolute inset-0 w-full h-full object-contain pointer-events-none transition-opacity duration-150"
-      class:opacity-0={!hudVisible}
-      class:opacity-100={hudVisible}
-      alt=""
-      onload={handleHudLoad}
-      onerror={handleHudError}
-    />
-  {/if}
+  <!-- HUD live stream video element — shown when hudLiveUrl is active -->
+  <video
+    bind:this={hudVideoEl}
+    class="w-full aspect-video object-contain bg-black"
+    class:hidden={!showingHud}
+    muted
+    playsinline
+    webkit-playsinline
+    x5-video-player-type="h5"
+    preload="auto"
+    ontimeupdate={handleHudTimeUpdate}
+    ondurationchange={handleHudDurationChange}
+    onplay={handleHudPlay}
+    onpause={handleHudPause}
+    onended={handleHudPause}
+  >
+  </video>
 
   <!-- Loading indicator when no video loaded -->
   {#if !files?.qcameras?.some(u => u)}
