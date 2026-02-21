@@ -78,6 +78,16 @@ export async function deleteRoute(routeName) {
   return res.json()
 }
 
+export async function saveNote(routeName, note) {
+  const res = await fetch(`/v1/route/${encodeRouteName(routeName)}/note`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note }),
+  })
+  if (!res.ok) throw new Error(`saveNote: ${res.status}`)
+  return res.json()
+}
+
 /** Build download URL with file type and segment selection */
 export function downloadUrl(routeName, fileTypes = ['rlog'], segments = null) {
   let url = `/v1/route/${encodeRouteName(routeName)}/download?files=${fileTypes.join(',')}`

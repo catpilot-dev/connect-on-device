@@ -267,6 +267,11 @@ class RouteStore:
         if ea:
             result["end_address"] = ea
 
+        # Notes
+        notes = meta.get("notes")
+        if notes:
+            result["notes"] = notes
+
         return result
 
     def _needs_enrich(self, lid: str) -> bool:
@@ -408,6 +413,7 @@ class RouteStore:
             "agnos_version": self._agnos_version,
             "start_address": internal.get("start_address"),
             "end_address": internal.get("end_address"),
+            "notes": internal.get("notes"),
             "local_id": local_id,
             "_local_id": local_id,
             "_segments": info["segments"],
@@ -745,6 +751,16 @@ class RouteStore:
 
     def is_preserved(self, local_id: str) -> bool:
         return local_id in self._preserved
+
+    def set_note(self, local_id: str, note: str):
+        """Set or update the note for a route."""
+        meta = self._metadata.get(local_id)
+        if not meta:
+            meta = {"route_id": local_id}
+            self._metadata[local_id] = meta
+        meta["notes"] = note
+        self._rebuild_routes()
+        self._save_metadata()
 
     def resolve_segment_path(self, fullname: str, segment: int, filename: str) -> Path | None:
         """Resolve a comma-style path to a local file."""

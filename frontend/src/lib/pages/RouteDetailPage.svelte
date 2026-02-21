@@ -1,9 +1,10 @@
 <script>
   import { onMount, onDestroy } from 'svelte'
   import { selectedRoute, dongleId } from '../stores.js'
-  import { fetchRoute, fetchRouteFiles, fetchAllCoords, fetchAllEventsWithProgress, startHudStream, stopHudStream, hudStreamStatus, hudStreamUrl, prerenderHud, hudProgress, hudVideoUrl, cancelHudRender } from '../api.js'
+  import { fetchRoute, fetchRouteFiles, fetchAllCoords, fetchAllEventsWithProgress, startHudStream, stopHudStream, hudStreamStatus, hudStreamUrl, prerenderHud, hudProgress, hudVideoUrl, cancelHudRender, saveNote } from '../api.js'
   import { formatDate, formatTime, formatDistance, formatDuration, getRouteDurationMs } from '../format.js'
   import { buildTimelineEvents } from '../derived.js'
+  import snarkdown from 'snarkdown'
   import VideoPlayer from '../components/VideoPlayer.svelte'
   import VideoControls from '../components/VideoControls.svelte'
   import RouteMap from '../components/RouteMap.svelte'
@@ -60,6 +61,9 @@
   // Single-pass render at 0.2x speed + setup overhead
   const dlEstimatedRenderSec = $derived(Math.round(dlDurationSec / DL_RECORD_SPEED + 30))
 
+  let noteText = $state('')
+  let editingNote = $state(false)
+
   let selectionStart = $state(0)
   let selectionEnd = $state(0)
   let enrichDone = $state(0)
@@ -82,6 +86,7 @@
       ])
       route = r
       files = f
+      noteText = r.notes || ''
 
       // Fetch coords and events in background (non-blocking)
       fetchAllCoords(r).then(c => coords = c).catch(() => {})
@@ -298,6 +303,11 @@
     } catch { /* ignore */ }
   }
 
+  async function saveNoteHandler() {
+    editingNote = false
+    if (route) await saveNote(route.fullname, noteText)
+  }
+
   function openDownload() {
     if (!route) return
     const a = document.createElement('a')
@@ -377,6 +387,37 @@
             bind:selectionEnd
           />
         {/if}
+
+        <!-- Note -->
+        <div class="card p-4 space-y-2">
+          <h3 class="text-sm font-medium text-surface-200">Note</h3>
+          {#if editingNote}
+            <!-- svelte-ignore a11y_autofocus -->
+            <textarea
+              class="w-full bg-surface-700 text-surface-100 rounded p-2 text-sm resize-y min-h-[80px] outline-none focus:ring-1 focus:ring-surface-500"
+              bind:value={noteText}
+              onblur={saveNoteHandler}
+              onkeydown={(e) => { if (e.ctrlKey && e.key === 'Enter') saveNoteHandler() }}
+              autofocus
+            ></textarea>
+          {:else if noteText}
+            <button
+              type="button"
+              class="w-full text-left text-sm cursor-pointer text-surface-200 note-rendered"
+              onclick={() => { editingNote = true }}
+            >
+              {@html snarkdown(noteText)}
+            </button>
+          {:else}
+            <button
+              type="button"
+              class="w-full text-left text-sm cursor-pointer text-surface-500"
+              onclick={() => { editingNote = true }}
+            >
+              Click to add a note...
+            </button>
+          {/if}
+        </div>
       </div>
 
       <!-- Map + info -->
@@ -588,4 +629,14 @@
     0%, 100% { border-color: transparent; }
     50% { border-color: #ef4444; }
   }
+  .note-rendered :global(h1) { font-size: 1.25em; font-weight: 600; margin: 0.4em 0 0.2em; }
+  .note-rendered :global(h2) { font-size: 1.1em; font-weight: 600; margin: 0.4em 0 0.2em; }
+  .note-rendered :global(h3) { font-size: 1em; font-weight: 600; margin: 0.3em 0 0.2em; }
+  .note-rendered :global(p) { margin: 0.25em 0; }
+  .note-rendered :global(a) { color: #58a6ff; text-decoration: underline; }
+  .note-rendered :global(code) { background: rgba(255,255,255,0.08); padding: 0.1em 0.3em; border-radius: 3px; font-size: 0.85em; }
+  .note-rendered :global(strong) { color: #e2e8f0; }
+  .note-rendered :global(ul) { padding-left: 1.2em; margin: 0.25em 0; list-style: disc; }
+  .note-rendered :global(ol) { padding-left: 1.2em; margin: 0.25em 0; list-style: decimal; }
+  .note-rendered :global(li) { margin: 0.1em 0; }
 </style>

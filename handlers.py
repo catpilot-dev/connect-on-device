@@ -451,6 +451,16 @@ async def handle_route_delete(request: web.Request) -> web.Response:
     return web.json_response({"success": 1})
 
 
+async def handle_route_note(request: web.Request) -> web.Response:
+    """POST /v1/route/{routeName}/note — set or update a route note"""
+    store = request.app["store"]
+    local_id = _resolve_local_id(store, request)
+    body = await request.json()
+    note = body.get("note", "")
+    store.set_note(local_id, note)
+    return web.json_response({"status": "ok"})
+
+
 async def handle_route_preserve(request: web.Request) -> web.Response:
     """POST /v1/route/{routeName}/preserve — mark route as preserved"""
     store = request.app["store"]

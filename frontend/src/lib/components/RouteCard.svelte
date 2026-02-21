@@ -55,6 +55,11 @@
     </div>
   {/if}
 
+  <!-- Note preview -->
+  {#if route.notes}
+    <p class="px-3 pt-1 text-xs text-surface-500 truncate">{route.notes.split('\n')[0]}</p>
+  {/if}
+
   <!-- Metadata row -->
   <div class="px-3 py-2.5 flex items-center gap-3 flex-wrap text-sm">
     <div class="flex items-center gap-2 min-w-0">
