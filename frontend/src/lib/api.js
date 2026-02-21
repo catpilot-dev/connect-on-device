@@ -88,6 +88,16 @@ export async function saveNote(routeName, note) {
   return res.json()
 }
 
+export async function takeScreenshot(routeName, timeSec) {
+  const res = await fetch(`/v1/route/${encodeRouteName(routeName)}/screenshot`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ time: timeSec }),
+  })
+  if (!res.ok) throw new Error(`screenshot: ${res.status}`)
+  return res  // Raw response for blob download
+}
+
 /** Build download URL with file type and segment selection */
 export function downloadUrl(routeName, fileTypes = ['rlog'], segments = null) {
   let url = `/v1/route/${encodeRouteName(routeName)}/download?files=${fileTypes.join(',')}`

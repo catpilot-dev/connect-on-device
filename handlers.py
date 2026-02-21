@@ -5,12 +5,14 @@ REST API so the asiusai/connect React frontend works unchanged.
 """
 
 import asyncio
+import io
 import json
 import logging
 import os
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from math import floor
 from pathlib import Path
 
@@ -520,6 +522,149 @@ async def handle_route_download(request: web.Request) -> web.Response:
         body=buf.read(),
         content_type="application/gzip",
         headers={"Content-Disposition": f'attachment; filename="{safe_name}.tar.gz"'},
+    )
+
+
+def _decimal_to_dms(decimal):
+    """Convert decimal degrees to EXIF DMS as IFDRational tuples."""
+    from PIL.TiffImagePlugin import IFDRational
+    d = int(decimal)
+    m = int((decimal - d) * 60)
+    s = round((decimal - d - m / 60) * 3600, 2)
+    return (IFDRational(d), IFDRational(m), IFDRational(int(s * 100), 100))
+
+
+def _extract_frame(fcamera_path: str, offset: float) -> bytes:
+    """Extract a single JPEG frame from fcamera.hevc at the given offset.
+
+    Uses cv2.VideoCapture which handles raw HEVC seeking via keyframe detection,
+    avoiding the slow ffmpeg mux-then-seek workaround (~1.3s vs ~7s).
+    Runs in executor thread.
+    """
+    import cv2
+    cap = cv2.VideoCapture(fcamera_path)
+    try:
+        cap.set(cv2.CAP_PROP_POS_MSEC, offset * 1000)
+        ret, frame = cap.read()
+        if not ret or frame is None:
+            raise RuntimeError(f"cv2 failed to read frame at {offset:.1f}s")
+        ok, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        if not ok:
+            raise RuntimeError("cv2 JPEG encoding failed")
+        return buf.tobytes()
+    finally:
+        cap.release()
+
+
+def _add_exif(frame_bytes: bytes, lat: float | None, lng: float | None,
+              timestamp: float, description: str) -> bytes:
+    """Embed GPS and timestamp EXIF metadata into a JPEG frame."""
+    from PIL import Image
+    from PIL.ExifTags import IFD, GPS, Base
+
+    img = Image.open(io.BytesIO(frame_bytes))
+    exif = img.getexif()
+
+    # GPS IFD
+    if lat is not None and lng is not None:
+        gps_ifd = exif.get_ifd(IFD.GPSInfo)
+        gps_ifd[GPS.GPSLatitudeRef] = 'N' if lat >= 0 else 'S'
+        gps_ifd[GPS.GPSLatitude] = _decimal_to_dms(abs(lat))
+        gps_ifd[GPS.GPSLongitudeRef] = 'E' if lng >= 0 else 'W'
+        gps_ifd[GPS.GPSLongitude] = _decimal_to_dms(abs(lng))
+
+    # Description
+    exif[Base.ImageDescription] = description
+
+    # DateTimeOriginal
+    dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+    exif[Base.DateTimeOriginal] = dt.strftime("%Y:%m:%d %H:%M:%S")
+
+    buf = io.BytesIO()
+    img.save(buf, format='JPEG', quality=95, exif=exif.tobytes())
+    return buf.getvalue()
+
+
+async def handle_screenshot(request: web.Request) -> web.Response:
+    """POST /v1/route/{routeName}/screenshot — extract fcamera frame with EXIF metadata."""
+    store = request.app["store"]
+    route_name = request.match_info["routeName"].replace("|", "/")
+    route = store.get_route(route_name)
+    if not route:
+        raise web.HTTPNotFound(text=json.dumps({"error": f"Route {route_name} not found"}))
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise web.HTTPBadRequest(text=json.dumps({"error": "Invalid JSON body"}))
+
+    t = body.get("time", 0)
+    segment = int(t // 60)
+    offset = t % 60
+
+    fullname = route["fullname"]
+    local_id = route["_local_id"]
+
+    # Find fcamera.hevc
+    fcamera = store.resolve_segment_path(fullname, segment, "fcamera.hevc")
+    if not fcamera:
+        raise web.HTTPNotFound(text=json.dumps({"error": f"No fcamera.hevc for segment {segment}"}))
+
+    # Extract frame via ffmpeg in thread executor
+    loop = asyncio.get_event_loop()
+    try:
+        frame_bytes = await loop.run_in_executor(
+            store._executor, _extract_frame, str(fcamera), offset
+        )
+    except Exception as e:
+        raise web.HTTPInternalServerError(text=json.dumps({"error": f"Frame extraction failed: {e}"}))
+
+    # Look up GPS from coords.json
+    lat, lng = None, None
+    seg_dir = store.data_dir / f"{local_id}--{segment}"
+    coords_file = seg_dir / "coords.json"
+    if coords_file.exists():
+        try:
+            coords = json.loads(coords_file.read_text())
+            if coords:
+                times = [c["t"] for c in coords]
+                idx = bisect_left(times, t)
+                # Pick closest
+                if idx == 0:
+                    best = coords[0]
+                elif idx >= len(coords):
+                    best = coords[-1]
+                elif (t - times[idx - 1]) <= (times[idx] - t):
+                    best = coords[idx - 1]
+                else:
+                    best = coords[idx]
+                lat, lng = best.get("lat"), best.get("lng")
+        except Exception:
+            pass
+
+    # Build EXIF metadata
+    create_time = route.get("create_time", 0)
+    timestamp = create_time + t
+    description = f"{fullname} {local_id}"
+
+    try:
+        jpeg_bytes = await loop.run_in_executor(
+            None, _add_exif, frame_bytes, lat, lng, timestamp, description
+        )
+    except Exception:
+        # If EXIF embedding fails (e.g. Pillow not available), return raw frame
+        jpeg_bytes = frame_bytes
+
+    # Build filename: {route_date}_{MM}m{SS}s.jpg
+    route_date = fullname.split("/")[-1]  # e.g. "2026-02-20--10-47-46"
+    mm = int(t // 60)
+    ss = int(t % 60)
+    filename = f"{route_date}_{mm:02d}m{ss:02d}s.jpg"
+
+    return web.Response(
+        body=jpeg_bytes,
+        content_type="image/jpeg",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

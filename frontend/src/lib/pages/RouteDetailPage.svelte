@@ -1,7 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte'
   import { selectedRoute, dongleId } from '../stores.js'
-  import { fetchRoute, fetchRouteFiles, fetchAllCoords, fetchAllEventsWithProgress, enrichRoute, startHudStream, stopHudStream, hudStreamStatus, hudStreamUrl, prerenderHud, hudProgress, hudVideoUrl, cancelHudRender, saveNote } from '../api.js'
+  import { fetchRoute, fetchRouteFiles, fetchAllCoords, fetchAllEventsWithProgress, enrichRoute, startHudStream, stopHudStream, hudStreamStatus, hudStreamUrl, prerenderHud, hudProgress, hudVideoUrl, cancelHudRender, saveNote, takeScreenshot } from '../api.js'
   import { formatDate, formatTime, formatDistance, formatDuration, getRouteDurationMs } from '../format.js'
   import { buildTimelineEvents } from '../derived.js'
   import snarkdown from 'snarkdown'
@@ -60,6 +60,8 @@
   const dlEstimatedMB = $derived(Math.round(dlDurationSec * dlBitrate / 8))
   // Single-pass render at 0.2x speed + setup overhead
   const dlEstimatedRenderSec = $derived(Math.round(dlDurationSec / DL_RECORD_SPEED + 30))
+
+  let screenshotBusy = $state(false)
 
   let noteText = $state('')
   let editingNote = $state(false)
@@ -146,6 +148,28 @@
 
   function handlePause() {
     isPlaying = false
+  }
+
+  async function handleScreenshot() {
+    if (!route || screenshotBusy) return
+    screenshotBusy = true
+    try {
+      const res = await takeScreenshot(route.fullname, currentTime)
+      const blob = await res.blob()
+      // Extract filename from Content-Disposition header, or build fallback
+      const cd = res.headers.get('Content-Disposition') || ''
+      const match = cd.match(/filename="?([^"]+)"?/)
+      const filename = match ? match[1] : 'screenshot.jpg'
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = filename
+      a.click()
+      URL.revokeObjectURL(a.href)
+    } catch (e) {
+      console.error('Screenshot failed:', e)
+    } finally {
+      screenshotBusy = false
+    }
   }
 
   function stopHudTick() {
@@ -408,7 +432,9 @@
             onSeek={handleSeek}
             onToggle={handleToggle}
             onRate={handleRate}
+            onScreenshot={handleScreenshot}
             {isPlaying}
+            {screenshotBusy}
             bind:selectionStart
             bind:selectionEnd
           />

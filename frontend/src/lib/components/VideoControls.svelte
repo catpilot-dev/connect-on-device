@@ -10,7 +10,7 @@
    * Touch support: dragging on the timeline works with both mouse and touch.
    */
 
-  /** @type {{ route: object, currentTime: number, duration: number, events?: Array, durationMs?: number, startTime?: number, onSeek: (t: number) => void, onToggle: () => void, onRate: (r: number) => void, isPlaying?: boolean, selectionStart?: number, selectionEnd?: number }} */
+  /** @type {{ route: object, currentTime: number, duration: number, events?: Array, durationMs?: number, startTime?: number, onSeek: (t: number) => void, onToggle: () => void, onRate: (r: number) => void, onScreenshot?: () => void, isPlaying?: boolean, screenshotBusy?: boolean, selectionStart?: number, selectionEnd?: number }} */
   let {
     route,
     currentTime = 0,
@@ -21,7 +21,9 @@
     onSeek,
     onToggle,
     onRate,
+    onScreenshot,
     isPlaying = false,
+    screenshotBusy = false,
     selectionStart = $bindable(0),
     selectionEnd = $bindable(0),
   } = $props()
@@ -330,6 +332,25 @@
     </span>
 
     <div class="flex-1"></div>
+
+    <!-- Screenshot -->
+    {#if onScreenshot}
+      <button
+        class="btn-ghost p-2 disabled:opacity-30"
+        onclick={onScreenshot}
+        disabled={isPlaying || screenshotBusy}
+        aria-label="Screenshot"
+      >
+        {#if screenshotBusy}
+          <div class="w-4 h-4 border-2 border-surface-300 border-t-transparent rounded-full animate-spin"></div>
+        {:else}
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/>
+            <circle cx="12" cy="13" r="4"/>
+          </svg>
+        {/if}
+      </button>
+    {/if}
 
     <!-- Speed selector -->
     <div class="relative">
