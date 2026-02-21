@@ -13,6 +13,7 @@ import time
 import urllib.request
 import urllib.error
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -125,6 +126,7 @@ class RouteStore:
         self._preserved: set = set()      # local_ids protected from cleanup
         self._metadata_path = Path(data_dir) / METADATA_FILE
         self._agnos_version: str | None = None
+        self._executor = ThreadPoolExecutor(max_workers=1)
 
         self._load_metadata()
         self._detect_dongle_id()
@@ -769,6 +771,26 @@ class RouteStore:
             return None
         path = self.data_dir / f"{local_id}--{segment}" / filename
         return path if path.exists() else None
+
+    def clear_derived(self, local_id: str) -> int:
+        """Delete cached events.json and coords.json for a route.
+
+        Returns count of files deleted. The next events/coords fetch will
+        regenerate them from rlogs with the latest parser code.
+        """
+        info = self._raw.get(local_id)
+        if not info:
+            return 0
+        deleted = 0
+        for seg in info["segments"]:
+            for fname in ("events.json", "coords.json"):
+                p = Path(seg["path"]) / fname
+                if p.exists():
+                    p.unlink()
+                    deleted += 1
+        if deleted:
+            logger.info("Cleared %d derived files for %s", deleted, local_id)
+        return deleted
 
     def ensure_enriched(self, local_id: str) -> bool:
         """On-demand enrichment for a single route. Returns True if newly enriched.

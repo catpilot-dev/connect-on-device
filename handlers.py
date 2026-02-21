@@ -21,7 +21,7 @@ from collections import OrderedDict
 
 from hud_stream import HLS_DIR, HudStreamManager
 from rlog_parser import _generate_coords_json, _generate_events_json, extract_hud_snapshots
-from route_helpers import _base_url, _clean_route, _resolve_local_id, _route_engagement, _set_route_url
+from route_helpers import _base_url, _clean_route, _resolve_local_id, _route_bookmarks, _route_engagement, _set_route_url
 from route_store import _route_counter
 from storage_management import DOWNLOAD_FILES, build_download_tar, get_storage_info
 
@@ -351,19 +351,29 @@ async def handle_route_get(request: web.Request) -> web.Response:
         await loop.run_in_executor(None, store.geocode_route, local_id)
         route = store.get_route(route_name)
 
+    # Collect bookmarks from cached events.json (no rlog parsing needed)
+    bookmarks = _route_bookmarks(route)
+
     r_with_url = _set_route_url(route, request)
     cleaned = _clean_route(r_with_url)
     cleaned["is_preserved"] = store.is_preserved(local_id)
+    if bookmarks:
+        cleaned["bookmarks"] = bookmarks
     return web.json_response(cleaned)
 
 
 async def handle_route_enrich(request: web.Request) -> web.Response:
-    """POST /v1/route/{routeName}/enrich — on-demand enrichment of a single route"""
+    """POST /v1/route/{routeName}/enrich — re-enrich a route.
+
+    Clears cached events.json/coords.json so they regenerate with latest
+    parser code (e.g. new bookmark detection). Also re-runs metadata enrichment.
+    """
     store = request.app["store"]
     local_id = _resolve_local_id(store, request)
 
     loop = asyncio.get_event_loop()
-    await loop.run_in_executor(store._executor, store.ensure_enriched, local_id)
+    cleared = await loop.run_in_executor(None, store.clear_derived, local_id)
+    await loop.run_in_executor(None, store.ensure_enriched, local_id)
 
     route_name = request.match_info["routeName"].replace("|", "/")
     route = store.get_route(route_name)
@@ -373,6 +383,7 @@ async def handle_route_enrich(request: web.Request) -> web.Response:
     r_with_url = _set_route_url(route, request)
     cleaned = _clean_route(r_with_url)
     cleaned["is_preserved"] = store.is_preserved(local_id)
+    cleaned["cleared_files"] = cleared
     return web.json_response(cleaned)
 
 

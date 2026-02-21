@@ -1,7 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte'
   import { selectedRoute, dongleId } from '../stores.js'
-  import { fetchRoute, fetchRouteFiles, fetchAllCoords, fetchAllEventsWithProgress, startHudStream, stopHudStream, hudStreamStatus, hudStreamUrl, prerenderHud, hudProgress, hudVideoUrl, cancelHudRender, saveNote } from '../api.js'
+  import { fetchRoute, fetchRouteFiles, fetchAllCoords, fetchAllEventsWithProgress, enrichRoute, startHudStream, stopHudStream, hudStreamStatus, hudStreamUrl, prerenderHud, hudProgress, hudVideoUrl, cancelHudRender, saveNote } from '../api.js'
   import { formatDate, formatTime, formatDistance, formatDuration, getRouteDurationMs } from '../format.js'
   import { buildTimelineEvents } from '../derived.js'
   import snarkdown from 'snarkdown'
@@ -74,6 +74,7 @@
 
   const durationMs = $derived(route ? getRouteDurationMs(route) : 0)
   const durationMin = $derived(route?.maxqlog != null ? route.maxqlog + 1 : null)
+  const bookmarks = $derived(timelineEvents.filter(e => e.type === 'user_flag').map(e => e.route_offset_millis))
 
   onMount(async () => {
     const name = $selectedRoute
@@ -308,6 +309,31 @@
     if (route) await saveNote(route.fullname, noteText)
   }
 
+  let reEnriching = $state(false)
+
+  async function reEnrich() {
+    if (!route || reEnriching) return
+    reEnriching = true
+    try {
+      // Clear cached derived files on server
+      await enrichRoute(route.fullname)
+      // Re-fetch events (regenerates events.json from rlogs)
+      enrichDone = 0
+      enrichTotal = (route.maxqlog ?? 0) + 1
+      const raw = await fetchAllEventsWithProgress(route, (done, total) => {
+        enrichDone = done
+        enrichTotal = total
+      })
+      timelineEvents = buildTimelineEvents(raw, getRouteDurationMs(route))
+      // Re-fetch coords too
+      fetchAllCoords(route).then(c => coords = c).catch(() => {})
+    } catch (e) {
+      console.error('Re-enrich failed:', e)
+    } finally {
+      reEnriching = false
+    }
+  }
+
   function openDownload() {
     if (!route) return
     const a = document.createElement('a')
@@ -418,6 +444,26 @@
             </button>
           {/if}
         </div>
+
+        <!-- Bookmarks -->
+        {#if bookmarks.length}
+          <div class="card p-4 space-y-2">
+            <h3 class="text-sm font-medium text-surface-200">Bookmarks</h3>
+            <div class="flex flex-wrap gap-2">
+              {#each bookmarks as bm, i}
+                {@const totalSec = Math.floor(bm / 1000)}
+                {@const mm = Math.floor(totalSec / 60)}
+                {@const ss = (totalSec % 60).toString().padStart(2, '0')}
+                <button
+                  class="px-2 py-1 text-xs font-mono rounded bg-surface-700 hover:bg-surface-600 text-surface-200"
+                  onclick={() => handleSeek(Math.max(0, bm / 1000 - 2))}
+                >
+                  {mm}:{ss}
+                </button>
+              {/each}
+            </div>
+          </div>
+        {/if}
       </div>
 
       <!-- Map + info -->
@@ -566,6 +612,13 @@
               <p class="text-surface-200">{(route.maxqlog ?? 0) + 1}</p>
             </div>
           </div>
+          <button
+            class="btn btn-sm bg-surface-700 hover:bg-surface-600 text-surface-200 px-3 py-1 rounded text-xs disabled:opacity-50"
+            onclick={reEnrich}
+            disabled={reEnriching || enriching}
+          >
+            {reEnriching ? 'Re-enriching...' : 'Re-enrich'}
+          </button>
         </div>
 
         <!-- Device Info -->

@@ -9,7 +9,7 @@
     alert_prompt: '#FE8C34', // openpilot userPrompt orange
     alert_critical: '#C92231', // openpilot critical red
     alert: '#FE8C34',        // fallback for untyped alerts
-    user_flag: '#C92231',    // red marker
+    user_flag: '#EAB308',    // yellow bookmark marker
   }
 </script>
 

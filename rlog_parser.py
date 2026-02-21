@@ -258,6 +258,33 @@ def _generate_coords_json(rlog_path: str, segment_num: int) -> list:
     return coords
 
 
+def _extract_bookmarks(rlog_path: str, segment_num: int) -> list:
+    """Extract userBookmark timestamps from an rlog file.
+
+    Returns sorted list of route_offset_millis integers for each bookmark
+    found in the segment.
+    """
+    bookmarks = []
+    base_mono = None
+
+    try:
+        for ev in _iter_rlog(rlog_path):
+            if base_mono is None and ev.which() != "initData":
+                base_mono = ev.logMonoTime
+
+            if ev.which() == "userBookmark":
+                if base_mono is not None:
+                    offset_ms = (ev.logMonoTime - base_mono) / 1e6
+                else:
+                    offset_ms = 0
+                route_offset_ms = segment_num * 60000 + offset_ms
+                bookmarks.append(round(route_offset_ms))
+    except Exception as e:
+        logger.debug("bookmark extraction error for %s: %s", rlog_path, e)
+
+    return sorted(bookmarks)
+
+
 def _generate_events_json(rlog_path: str, segment_num: int) -> list:
     """Generate drive events (events.json) from an rlog file."""
     events = []
@@ -272,6 +299,20 @@ def _generate_events_json(rlog_path: str, segment_num: int) -> list:
                 base_mono = ev.logMonoTime
 
             w = ev.which()
+
+            # Bookmark events → user_flag markers on timeline
+            if w == "userBookmark":
+                if base_mono is not None:
+                    offset_ms = (ev.logMonoTime - base_mono) / 1e6
+                else:
+                    offset_ms = 0
+                route_offset_ms = segment_num * 60000 + offset_ms
+                events.append({
+                    "type": "user_flag",
+                    "route_offset_millis": round(route_offset_ms),
+                })
+                continue
+
             state = enabled = alert_status = None
 
             # Support both controlsState (older) and selfdriveState (0.10.x+)

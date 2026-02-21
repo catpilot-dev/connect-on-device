@@ -82,3 +82,23 @@ def _route_engagement(store, route: dict) -> tuple[float, float]:
             pass
 
     return (engaged_ms, total_duration_ms)
+
+
+def _route_bookmarks(route: dict) -> list[int]:
+    """Collect user_flag timestamps from cached events.json files.
+
+    Returns sorted list of route_offset_millis for bookmark events.
+    Only reads already-cached events.json (no rlog parsing).
+    """
+    bookmarks = []
+    for seg in route.get("_segments", []):
+        events_path = Path(seg["path"]) / "events.json"
+        if not events_path.exists():
+            continue
+        try:
+            for ev in json.loads(events_path.read_text()):
+                if ev.get("type") == "user_flag":
+                    bookmarks.append(ev["route_offset_millis"])
+        except Exception:
+            pass
+    return sorted(bookmarks)
