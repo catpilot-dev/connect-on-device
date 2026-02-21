@@ -333,6 +333,11 @@
     if (route) await saveNote(route.fullname, noteText)
   }
 
+  let showMap = $state(false)
+  let showHudOverlay = $state(false)
+  let showRouteInfo = $state(false)
+  let showDeviceInfo = $state(false)
+
   let reEnriching = $state(false)
 
   async function reEnrich() {
@@ -377,7 +382,8 @@
       Back
     </button>
     {#if route}
-      <span class="text-sm text-surface-200 font-mono truncate">{route.fullname?.split('/')[1] ?? route.fullname}</span>
+      <span class="text-sm text-surface-100 font-medium">{formatDate(route.create_time)}</span>
+      <span class="text-xs text-surface-400">{formatTime(route.start_time)}</span>
     {/if}
   </div>
 
@@ -501,201 +507,243 @@
       <div class="space-y-4">
         {#if !enriching}
           <!-- Map -->
-          <RouteMap
-            {coords}
-            events={timelineEvents}
-            {currentTime}
-            {durationMs}
-            {selectionStart}
-            {selectionEnd}
-          />
-
-          <!-- Actions -->
-          <div class="card p-3">
-            <RouteActions {route} />
-          </div>
-
-          <!-- HUD Live Stream -->
-          <div class="card p-3 space-y-2" class:opacity-50={dlRendering}>
-            <label class="flex items-center gap-2 text-sm text-surface-200" class:cursor-pointer={!dlRendering} class:cursor-not-allowed={dlRendering}>
-              <input type="checkbox" checked={hudWanted} onchange={toggleHud} disabled={dlRendering} class="accent-engage-green" />
-              HUD Live Stream
-            </label>
-            {#if dlRendering}
-              <p class="text-xs text-yellow-400">Unavailable while rendering video</p>
-            {/if}
-            {#if hudStarting}
-              <div class="flex items-center gap-2">
-                <div class="w-3 h-3 border-2 border-engage-green border-t-transparent rounded-full animate-spin"></div>
-                <p class="text-xs text-surface-400">Starting stream...</p>
+          <div class="card">
+            <button class="w-full flex items-center justify-between p-4" onclick={() => showMap = !showMap}>
+              <h3 class="text-sm font-semibold text-surface-200">Map</h3>
+              <svg class="w-4 h-4 text-surface-400 transition-transform" class:rotate-180={showMap} fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path d="M19 9l-7 7-7-7"/>
+              </svg>
+            </button>
+            {#if showMap}
+              <div class="px-4 pb-4">
+                <RouteMap
+                  {coords}
+                  events={timelineEvents}
+                  {currentTime}
+                  {durationMs}
+                  {selectionStart}
+                  {selectionEnd}
+                />
               </div>
-            {/if}
-            {#if hudStreaming}
-              <div class="flex items-center gap-2">
-                <div class="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
-                <p class="text-xs text-surface-400">LIVE</p>
-              </div>
-            {/if}
-            {#if hudError}
-              <p class="text-xs text-red-400">{hudError}</p>
             {/if}
           </div>
 
-          <!-- Download HUD Video -->
-          <div class="card p-3 space-y-2" class:opacity-50={hudWanted}>
-            <p class="text-sm text-surface-200">Download HUD Video</p>
-            {#if hudWanted}
-              <p class="text-xs text-surface-500">Stop live stream to render video</p>
-            {:else}
-              <p class="text-xs text-surface-400">Render openpilot UI overlay via slow-motion replay{selectionEnd > 0 ? ' (selection range)' : ''}</p>
-
-              {#if !dlRendering && !dlReady}
-                <!-- Quality slider (continuous) -->
-                <div class="flex items-center gap-3">
-                  <span class="text-xs text-surface-500 shrink-0">Low</span>
-                  <input type="range" min="0" max="100" step="1" bind:value={dlQualityPct}
-                    class="flex-1 accent-engage-green h-1.5" />
-                  <span class="text-xs text-surface-500 shrink-0">High</span>
+          <!-- Openpilot UI Overlay (HUD stream + download) -->
+          <div class="card">
+            <button class="w-full flex items-center justify-between p-4" onclick={() => showHudOverlay = !showHudOverlay}>
+              <h3 class="text-sm font-semibold text-surface-200">Openpilot UI Overlay</h3>
+              <svg class="w-4 h-4 text-surface-400 transition-transform" class:rotate-180={showHudOverlay} fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path d="M19 9l-7 7-7-7"/>
+              </svg>
+            </button>
+            {#if showHudOverlay}
+              <div class="px-4 pb-4 space-y-4">
+                <!-- HUD Live Stream -->
+                <div class="space-y-2" class:opacity-50={dlRendering}>
+                  <label class="flex items-center gap-2 text-sm text-surface-200" class:cursor-pointer={!dlRendering} class:cursor-not-allowed={dlRendering}>
+                    <input type="checkbox" checked={hudWanted} onchange={toggleHud} disabled={dlRendering} class="accent-engage-green" />
+                    HUD Live Stream
+                  </label>
+                  {#if dlRendering}
+                    <p class="text-xs text-yellow-400">Unavailable while rendering video</p>
+                  {/if}
+                  {#if hudStarting}
+                    <div class="flex items-center gap-2">
+                      <div class="w-3 h-3 border-2 border-engage-green border-t-transparent rounded-full animate-spin"></div>
+                      <p class="text-xs text-surface-400">Starting stream...</p>
+                    </div>
+                  {/if}
+                  {#if hudStreaming}
+                    <div class="flex items-center gap-2">
+                      <div class="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
+                      <p class="text-xs text-surface-400">LIVE</p>
+                    </div>
+                  {/if}
+                  {#if hudError}
+                    <p class="text-xs text-red-400">{hudError}</p>
+                  {/if}
                 </div>
-                <p class="text-xs text-surface-300">{dlWidth}x{dlHeight} @ 20fps</p>
-                <p class="text-xs text-surface-400">
-                  ~{dlEstimatedMB} MB
-                  · ~{Math.ceil(dlEstimatedRenderSec / 60)} min render time
-                </p>
-                <button class="btn btn-sm bg-surface-700 hover:bg-surface-600 text-surface-200 px-3 py-1 rounded text-xs" onclick={startDownload}>
-                  Render & Download
-                </button>
-              {:else if dlRendering}
-                <div class="space-y-1">
-                  <div class="h-2 bg-surface-700 rounded-full overflow-hidden">
-                    <div
-                      class="h-full bg-engage-green rounded-full transition-all duration-300"
-                      style="width: {dlTotal > 0 ? (dlElapsed / dlTotal) * 100 : 0}%"
-                    ></div>
-                  </div>
-                  <p class="text-xs text-surface-400 text-center">
-                    {dlPhase === 'encoding' ? 'Encoding' : 'Rendering'}... {dlFrame} / {dlTotalFrames} frames
-                    {#if dlRemainingSec > 60}
-                      · ~{Math.ceil(dlRemainingSec / 60)} min remaining
-                    {:else if dlRemainingSec > 0}
-                      · ~{dlRemainingSec}s remaining
+
+                <div class="border-t border-surface-700/50"></div>
+
+                <!-- Download HUD Video -->
+                <div class="space-y-2" class:opacity-50={hudWanted}>
+                  <p class="text-sm text-surface-200">Download HUD Video</p>
+                  {#if hudWanted}
+                    <p class="text-xs text-surface-500">Stop live stream to render video</p>
+                  {:else}
+                    <p class="text-xs text-surface-400">Render openpilot UI overlay via slow-motion replay{selectionEnd > 0 ? ' (selection range)' : ''}</p>
+
+                    {#if !dlRendering && !dlReady}
+                      <!-- Quality slider (continuous) -->
+                      <div class="flex items-center gap-3">
+                        <span class="text-xs text-surface-500 shrink-0">Low</span>
+                        <input type="range" min="0" max="100" step="1" bind:value={dlQualityPct}
+                          class="flex-1 accent-engage-green h-1.5" />
+                        <span class="text-xs text-surface-500 shrink-0">High</span>
+                      </div>
+                      <p class="text-xs text-surface-300">{dlWidth}x{dlHeight} @ 20fps</p>
+                      <p class="text-xs text-surface-400">
+                        ~{dlEstimatedMB} MB
+                        · ~{Math.ceil(dlEstimatedRenderSec / 60)} min render time
+                      </p>
+                      <button class="btn btn-sm bg-surface-700 hover:bg-surface-600 text-surface-200 px-3 py-1 rounded text-xs" onclick={startDownload}>
+                        Render & Download
+                      </button>
+                    {:else if dlRendering}
+                      <div class="space-y-1">
+                        <div class="h-2 bg-surface-700 rounded-full overflow-hidden">
+                          <div
+                            class="h-full bg-engage-green rounded-full transition-all duration-300"
+                            style="width: {dlTotal > 0 ? (dlElapsed / dlTotal) * 100 : 0}%"
+                          ></div>
+                        </div>
+                        <p class="text-xs text-surface-400 text-center">
+                          {dlPhase === 'encoding' ? 'Encoding' : 'Rendering'}... {dlFrame} / {dlTotalFrames} frames
+                          {#if dlRemainingSec > 60}
+                            · ~{Math.ceil(dlRemainingSec / 60)} min remaining
+                          {:else if dlRemainingSec > 0}
+                            · ~{dlRemainingSec}s remaining
+                          {/if}
+                        </p>
+                        <button class="btn btn-sm bg-surface-700 hover:bg-red-900 text-surface-300 px-3 py-1 rounded text-xs" onclick={cancelDownload}>
+                          Stop
+                        </button>
+                      </div>
+                    {:else if dlReady}
+                      <button class="btn btn-sm bg-engage-green text-black font-medium px-3 py-1 rounded" onclick={openDownload}>
+                        Download MP4
+                      </button>
+                      <button class="btn btn-sm bg-surface-700 hover:bg-surface-600 text-surface-200 px-3 py-1 rounded text-xs ml-2"
+                        onclick={() => { dlReady = false; dlRendering = false }}>
+                        Re-render
+                      </button>
                     {/if}
-                  </p>
-                  <button class="btn btn-sm bg-surface-700 hover:bg-red-900 text-surface-300 px-3 py-1 rounded text-xs" onclick={cancelDownload}>
-                    Stop
-                  </button>
+                    {#if dlError}
+                      <p class="text-xs text-red-400">{dlError}</p>
+                    {/if}
+                  {/if}
                 </div>
-              {:else if dlReady}
-                <button class="btn btn-sm bg-engage-green text-black font-medium px-3 py-1 rounded" onclick={openDownload}>
-                  Download MP4
-                </button>
-                <button class="btn btn-sm bg-surface-700 hover:bg-surface-600 text-surface-200 px-3 py-1 rounded text-xs ml-2"
-                  onclick={() => { dlReady = false; dlRendering = false }}>
-                  Re-render
-                </button>
-              {/if}
-              {#if dlError}
-                <p class="text-xs text-red-400">{dlError}</p>
-              {/if}
+              </div>
             {/if}
           </div>
         {/if}
 
         <!-- Metadata -->
-        <div class="card p-4 space-y-3">
-          <h3 class="text-sm font-semibold text-surface-200">Route Info</h3>
-
-          <div class="grid grid-cols-2 gap-2 text-sm">
-            {#if route.local_id}
-              <div class="col-span-2">
-                <p class="text-xs text-surface-500">Disk ID</p>
-                <p class="text-surface-200 font-mono truncate">{route.local_id}</p>
-              </div>
-            {/if}
-            {#if route.start_address}
-              <div>
-                <p class="text-xs text-surface-500">Start</p>
-                <p class="text-surface-200 truncate">{route.start_address}</p>
-              </div>
-              {#if route.end_address && route.end_address !== route.start_address}
-                <div>
-                  <p class="text-xs text-surface-500">End</p>
-                  <p class="text-surface-200 truncate">{route.end_address}</p>
-                </div>
-              {/if}
-            {/if}
-            <div>
-              <p class="text-xs text-surface-500">Duration</p>
-              <p class="text-surface-200">{durationMin != null ? formatDuration(durationMin) : '--'}</p>
-            </div>
-            <div>
-              <p class="text-xs text-surface-500">Distance</p>
-              <p class="text-surface-200">{formatDistance(route.distance)}</p>
-            </div>
-            {#if route.platform}
-              <div>
-                <p class="text-xs text-surface-500">Car</p>
-                <p class="text-surface-200">{route.platform}</p>
-              </div>
-            {/if}
-            <div>
-              <p class="text-xs text-surface-500">Segments</p>
-              <p class="text-surface-200">{(route.maxqlog ?? 0) + 1}</p>
-            </div>
-          </div>
-          <button
-            class="btn btn-sm bg-surface-700 hover:bg-surface-600 text-surface-200 px-3 py-1 rounded text-xs disabled:opacity-50"
-            onclick={reEnrich}
-            disabled={reEnriching || enriching}
-          >
-            {reEnriching ? 'Re-enriching...' : 'Re-enrich'}
+        <div class="card">
+          <button class="w-full flex items-center justify-between p-4" onclick={() => showRouteInfo = !showRouteInfo}>
+            <h3 class="text-sm font-semibold text-surface-200">Route Info</h3>
+            <svg class="w-4 h-4 text-surface-400 transition-transform" class:rotate-180={showRouteInfo} fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path d="M19 9l-7 7-7-7"/>
+            </svg>
           </button>
+          {#if showRouteInfo}
+            <div class="px-4 pb-4 space-y-3">
+              <div class="grid grid-cols-2 gap-2 text-sm">
+                {#if route.local_id}
+                  <div class="col-span-2">
+                    <p class="text-xs text-surface-500">Disk ID</p>
+                    <p class="text-surface-200 font-mono truncate">{route.local_id}</p>
+                  </div>
+                {/if}
+                {#if route.start_address}
+                  <div>
+                    <p class="text-xs text-surface-500">Start</p>
+                    <p class="text-surface-200 truncate">{route.start_address}</p>
+                  </div>
+                  {#if route.end_address && route.end_address !== route.start_address}
+                    <div>
+                      <p class="text-xs text-surface-500">End</p>
+                      <p class="text-surface-200 truncate">{route.end_address}</p>
+                    </div>
+                  {/if}
+                {/if}
+                <div>
+                  <p class="text-xs text-surface-500">Duration</p>
+                  <p class="text-surface-200">{durationMin != null ? formatDuration(durationMin) : '--'}</p>
+                </div>
+                <div>
+                  <p class="text-xs text-surface-500">Distance</p>
+                  <p class="text-surface-200">{formatDistance(route.distance)}</p>
+                </div>
+                {#if route.platform}
+                  <div>
+                    <p class="text-xs text-surface-500">Car</p>
+                    <p class="text-surface-200">{route.platform}</p>
+                  </div>
+                {/if}
+                <div>
+                  <p class="text-xs text-surface-500">Segments</p>
+                  <p class="text-surface-200">{(route.maxqlog ?? 0) + 1}</p>
+                </div>
+              </div>
+              <button
+                class="btn btn-sm bg-surface-700 hover:bg-surface-600 text-surface-200 px-3 py-1 rounded text-xs disabled:opacity-50"
+                onclick={reEnrich}
+                disabled={reEnriching || enriching}
+              >
+                {reEnriching ? 'Re-enriching...' : 'Re-enrich'}
+              </button>
+
+              <div class="border-t border-surface-700/50 pt-3">
+                <RouteActions {route} />
+              </div>
+            </div>
+          {/if}
         </div>
 
         <!-- Device Info -->
-        <div class="card p-4 space-y-3">
-          <h3 class="text-sm font-semibold text-surface-200">Device Info</h3>
+        <div class="card">
+          <button class="w-full flex items-center justify-between p-4" onclick={() => showDeviceInfo = !showDeviceInfo}>
+            <h3 class="text-sm font-semibold text-surface-200">Device Info</h3>
+            <svg class="w-4 h-4 text-surface-400 transition-transform" class:rotate-180={showDeviceInfo} fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path d="M19 9l-7 7-7-7"/>
+            </svg>
+          </button>
+          {#if showDeviceInfo}
+            <div class="px-4 pb-4 space-y-3">
+              <div class="grid grid-cols-2 gap-2 text-sm">
+                <div>
+                  <p class="text-xs text-surface-500">Device</p>
+                  <p class="text-surface-200">{route.device_type === 'tici' ? 'Comma 3' : route.device_type === 'tizi' ? 'Comma 3X' : route.device_type === 'mici' ? 'Comma 4' : route.device_type ?? '--'}</p>
+                </div>
+                {#if route.agnos_version}
+                  <div>
+                    <p class="text-xs text-surface-500">AGNOS</p>
+                    <p class="text-surface-200">{route.agnos_version}</p>
+                  </div>
+                {/if}
+                {#if route.version}
+                  <div>
+                    <p class="text-xs text-surface-500">Openpilot</p>
+                    <p class="text-surface-200">{route.version}</p>
+                  </div>
+                {/if}
+                {#if route.git_branch}
+                  <div>
+                    <p class="text-xs text-surface-500">Branch</p>
+                    <p class="text-surface-200 truncate">{route.git_branch}</p>
+                  </div>
+                {/if}
+              </div>
 
-          <div class="grid grid-cols-2 gap-2 text-sm">
-            <div>
-              <p class="text-xs text-surface-500">Device</p>
-              <p class="text-surface-200">{route.device_type === 'tici' ? 'Comma 3' : route.device_type === 'tizi' ? 'Comma 3X' : route.device_type === 'mici' ? 'Comma 4' : route.device_type ?? '--'}</p>
-            </div>
-            {#if route.agnos_version}
-              <div>
-                <p class="text-xs text-surface-500">AGNOS</p>
-                <p class="text-surface-200">{route.agnos_version}</p>
-              </div>
-            {/if}
-            {#if route.version}
-              <div>
-                <p class="text-xs text-surface-500">Openpilot</p>
-                <p class="text-surface-200">{route.version}</p>
-              </div>
-            {/if}
-            {#if route.git_branch}
-              <div>
-                <p class="text-xs text-surface-500">Branch</p>
-                <p class="text-surface-200 truncate">{route.git_branch}</p>
-              </div>
-            {/if}
-          </div>
-
-          {#if route.git_commit && route.git_remote}
-            {@const repoUrl = route.git_remote.replace(/\.git$/, '')}
-            <div class="pt-2 border-t border-surface-700/50">
-              <p class="text-xs text-surface-500 mb-1">Commit</p>
-              <a
-                href="{repoUrl}/commit/{route.git_commit}"
-                target="_blank"
-                rel="noopener"
-                class="text-xs text-engage-blue font-mono hover:underline truncate block"
-              >{route.git_commit.slice(0, 12)}</a>
-            </div>
-          {:else if route.git_commit}
-            <div class="pt-2 border-t border-surface-700/50">
-              <p class="text-xs text-surface-500 mb-1">Commit</p>
-              <p class="text-xs text-surface-300 font-mono truncate">{route.git_commit.slice(0, 12)}</p>
+              {#if route.git_commit && route.git_remote}
+                {@const repoUrl = route.git_remote.replace(/\.git$/, '')}
+                <div class="pt-2 border-t border-surface-700/50">
+                  <p class="text-xs text-surface-500 mb-1">Commit</p>
+                  <a
+                    href="{repoUrl}/commit/{route.git_commit}"
+                    target="_blank"
+                    rel="noopener"
+                    class="text-xs text-engage-blue font-mono hover:underline truncate block"
+                  >{route.git_commit.slice(0, 12)}</a>
+                </div>
+              {:else if route.git_commit}
+                <div class="pt-2 border-t border-surface-700/50">
+                  <p class="text-xs text-surface-500 mb-1">Commit</p>
+                  <p class="text-xs text-surface-300 font-mono truncate">{route.git_commit.slice(0, 12)}</p>
+                </div>
+              {/if}
             </div>
           {/if}
         </div>

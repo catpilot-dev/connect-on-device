@@ -534,15 +534,40 @@ def _decimal_to_dms(decimal):
     return (IFDRational(d), IFDRational(m), IFDRational(int(s * 100), 100))
 
 
-def _extract_frame(fcamera_path: str, offset: float) -> bytes:
+def _extract_frame(hevc_path: str, offset: float) -> bytes:
     """Extract a single JPEG frame from fcamera.hevc at the given offset.
 
-    Uses cv2.VideoCapture which handles raw HEVC seeking via keyframe detection,
-    avoiding the slow ffmpeg mux-then-seek workaround (~1.3s vs ~7s).
+    Raw HEVC lacks container timestamps so cv2 seeking is broken.
+    Strategy: mux to mp4 (codec copy, ~1.5s one-time) then cv2 seeks in the
+    container.  Cached mp4 is stored in /tmp to avoid writing to route data.
     Runs in executor thread.
     """
     import cv2
-    cap = cv2.VideoCapture(fcamera_path)
+    import subprocess
+    import hashlib
+
+    # Build a stable cache path on /data (tmpfs /tmp is only 150MB, too small for fcamera)
+    cache_dir = "/data/connect_on_device/cache"
+    os.makedirs(cache_dir, exist_ok=True)
+    path_hash = hashlib.md5(hevc_path.encode()).hexdigest()[:12]
+    mp4_path = os.path.join(cache_dir, f"fcamera_{path_hash}.mp4")
+
+    if not os.path.exists(mp4_path):
+        import tempfile
+        fd, tmp_path = tempfile.mkstemp(suffix='.mp4', dir=cache_dir)
+        os.close(fd)
+        try:
+            subprocess.run([
+                'ffmpeg', '-y', '-hide_banner', '-loglevel', 'error',
+                '-framerate', '20', '-i', hevc_path,
+                '-c', 'copy', '-movflags', '+faststart', tmp_path,
+            ], check=True, timeout=60)
+            os.rename(tmp_path, mp4_path)
+        except Exception:
+            os.unlink(tmp_path)
+            raise
+
+    cap = cv2.VideoCapture(mp4_path)
     try:
         cap.set(cv2.CAP_PROP_POS_MSEC, offset * 1000)
         ret, frame = cap.read()
@@ -605,12 +630,12 @@ async def handle_screenshot(request: web.Request) -> web.Response:
     fullname = route["fullname"]
     local_id = route["_local_id"]
 
-    # Find fcamera.hevc
+    # Find fcamera.hevc (full resolution 1928x1208)
     fcamera = store.resolve_segment_path(fullname, segment, "fcamera.hevc")
     if not fcamera:
         raise web.HTTPNotFound(text=json.dumps({"error": f"No fcamera.hevc for segment {segment}"}))
 
-    # Extract frame via ffmpeg in thread executor
+    # Extract frame via cached mp4 mux + cv2 seek in thread executor
     loop = asyncio.get_event_loop()
     try:
         frame_bytes = await loop.run_in_executor(
