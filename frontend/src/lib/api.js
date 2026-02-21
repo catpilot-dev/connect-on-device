@@ -98,6 +98,11 @@ export async function takeScreenshot(routeName, timeSec) {
   return res  // Raw response for blob download
 }
 
+/** Build GET URL for a fcamera frame at the given time (opens as JPEG in browser) */
+export function frameUrl(routeName, timeSec) {
+  return `/v1/route/${encodeRouteName(routeName)}/frame?t=${timeSec.toFixed(2)}`
+}
+
 /** Build download URL with file type and segment selection */
 export function downloadUrl(routeName, fileTypes = ['rlog'], segments = null) {
   let url = `/v1/route/${encodeRouteName(routeName)}/download?files=${fileTypes.join(',')}`

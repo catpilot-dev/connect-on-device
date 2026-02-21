@@ -132,6 +132,14 @@
     videoPlayer?.setPlaybackRate(r)
   }
 
+  function handleStepFrame(delta) {
+    // 20fps = 0.05s per frame
+    const step = delta * (1 / 20)
+    const t = Math.max(0, Math.min(duration, currentTime + step))
+    currentTime = t
+    videoPlayer?.seek(t)
+  }
+
   function handleTimeUpdate(t) {
     // Loop within selection range
     if (selectionEnd > 0 && t >= selectionEnd) {
@@ -439,6 +447,7 @@
             onToggle={handleToggle}
             onRate={handleRate}
             onScreenshot={handleScreenshot}
+            onStepFrame={handleStepFrame}
             {isPlaying}
             {screenshotBusy}
             bind:selectionStart

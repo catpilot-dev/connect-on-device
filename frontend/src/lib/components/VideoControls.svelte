@@ -1,6 +1,6 @@
 <script>
   import { formatVideoTime, formatAbsoluteTime, formatAbsoluteTimeHM } from '../format.js'
-  import { spriteUrl } from '../api.js'
+  import { spriteUrl, frameUrl } from '../api.js'
   import EventTimeline from './EventTimeline.svelte'
 
   /**
@@ -10,7 +10,7 @@
    * Touch support: dragging on the timeline works with both mouse and touch.
    */
 
-  /** @type {{ route: object, currentTime: number, duration: number, events?: Array, durationMs?: number, startTime?: number, onSeek: (t: number) => void, onToggle: () => void, onRate: (r: number) => void, onScreenshot?: () => void, isPlaying?: boolean, screenshotBusy?: boolean, selectionStart?: number, selectionEnd?: number }} */
+  /** @type {{ route: object, currentTime: number, duration: number, events?: Array, durationMs?: number, startTime?: number, onSeek: (t: number) => void, onToggle: () => void, onRate: (r: number) => void, onScreenshot?: () => void, onStepFrame?: (delta: number) => void, isPlaying?: boolean, screenshotBusy?: boolean, selectionStart?: number, selectionEnd?: number }} */
   let {
     route,
     currentTime = 0,
@@ -22,6 +22,7 @@
     onToggle,
     onRate,
     onScreenshot,
+    onStepFrame,
     isPlaying = false,
     screenshotBusy = false,
     selectionStart = $bindable(0),
@@ -307,6 +308,19 @@
 
   <!-- Controls row -->
   <div class="flex items-center gap-2">
+    <!-- Frame step back -->
+    <button
+      class="btn-ghost p-1.5 disabled:opacity-30"
+      onclick={() => onStepFrame?.(-1)}
+      disabled={isPlaying}
+      aria-label="Previous frame"
+    >
+      <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+        <path d="M15.7 17.16a1.5 1.5 0 002.3-1.27V4.11a1.5 1.5 0 00-2.3-1.27L6.36 8.73a1.5 1.5 0 000 2.54l9.34 5.89z"/>
+        <rect x="2" y="3" width="2.5" height="14" rx="0.75"/>
+      </svg>
+    </button>
+
     <!-- Play/Pause -->
     <button
       class="btn-ghost p-2"
@@ -324,12 +338,38 @@
       {/if}
     </button>
 
+    <!-- Frame step forward -->
+    <button
+      class="btn-ghost p-1.5 disabled:opacity-30"
+      onclick={() => onStepFrame?.(1)}
+      disabled={isPlaying}
+      aria-label="Next frame"
+    >
+      <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+        <path d="M4.3 2.84A1.5 1.5 0 002 4.11v11.78a1.5 1.5 0 002.3 1.27l9.34-5.89a1.5 1.5 0 000-2.54L4.3 2.84z"/>
+        <rect x="15.5" y="3" width="2.5" height="14" rx="0.75"/>
+      </svg>
+    </button>
+
     <!-- Time display: [abs_start  +playhead  +end] -->
     <span class="text-xs font-mono tabular-nums">
       <span class="text-surface-400">{hasAbsTime ? formatAbsoluteTimeHM(startTime, selectionStart) : formatVideoTime(selectionStart)}</span>
       <span class="text-surface-300 mx-1">+{formatVideoTime(currentTime - selectionStart)}</span>
       <span class="text-surface-400">+{formatVideoTime(selectionEnd - selectionStart)}</span>
     </span>
+
+    <!-- Frame URL: open in new tab -->
+    <a
+      href={frameUrl(route.fullname, currentTime)}
+      target="_blank"
+      rel="noopener"
+      class="btn-ghost p-1.5 text-surface-400 hover:text-surface-200"
+      title="Open frame in new tab"
+    >
+      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3"/>
+      </svg>
+    </a>
 
     <div class="flex-1"></div>
 

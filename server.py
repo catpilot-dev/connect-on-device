@@ -46,6 +46,7 @@ from handlers import (
     handle_route_unpreserve,
     handle_routes_list,
     handle_routes_segments,
+    handle_frame,
     handle_screenshot,
     handle_share_signature,
     handle_spa,
@@ -123,6 +124,7 @@ def create_app(data_dir: str, static_dir: str) -> web.Application:
     app.router.add_get("/v1/route/{routeName}/download", handle_route_download)
     app.router.add_post("/v1/route/{routeName}/enrich", handle_route_enrich)
     app.router.add_post("/v1/route/{routeName}/screenshot", handle_screenshot)
+    app.router.add_get("/v1/route/{routeName}/frame", handle_frame)
 
     # HUD video rendering (pre-render to MP4)
     app.router.add_post("/v1/route/{routeName}/hud/prerender", handle_hud_prerender)
