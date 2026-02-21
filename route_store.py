@@ -5,7 +5,6 @@ and provides comma-compatible route objects. Handles background enrichment
 of route metadata from rlog files.
 """
 
-import asyncio
 import json
 import logging
 import re
@@ -14,7 +13,6 @@ import time
 import urllib.request
 import urllib.error
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -69,14 +67,15 @@ def _reverse_geocode(lat: float, lng: float) -> str | None:
 
 
 def _route_counter(local_id: str) -> int:
-    """Extract monotonic counter from route local_id (e.g. '00000114--abc' -> 114).
+    """Extract monotonic counter from route local_id (e.g. '0000011d--abc' -> 285).
 
+    Openpilot uses hex counters (0-9a-f), so parse as base 16.
     The counter is always monotonically increasing per-device, making it a
     reliable proxy for route recency — unlike directory mtime which may
     reflect the AGNOS build date instead of actual drive time.
     """
     try:
-        return int(local_id.split("--")[0])
+        return int(local_id.split("--")[0], 16)
     except (ValueError, IndexError):
         return 0
 
@@ -124,7 +123,6 @@ class RouteStore:
         self._metadata: dict = {}         # route_id -> route_metadata.py format
         self._hidden: set = set()         # local_ids soft-deleted (hidden from list)
         self._preserved: set = set()      # local_ids protected from cleanup
-        self._executor = ThreadPoolExecutor(max_workers=1)
         self._metadata_path = Path(data_dir) / METADATA_FILE
         self._agnos_version: str | None = None
 
@@ -203,19 +201,20 @@ class RouteStore:
             result["dongle_id"] = did
 
         # GPS time → wall_time_nanos (used for route_date in fullname)
-        # Only GPS time is used for naming — wallTimeNanos can be AGNOS build date
+        # Prefer GPS time (accurate), fall back to initData wallTimeNanos
+        # (may be AGNOS build date on old firmware, but corrected by background enrichment)
         gps_t = meta.get("gps_time")
         if gps_t:
             result["wall_time_nanos"] = int(gps_t * 1e9)
             result["create_time"] = gps_t
-
-        # Fall back to creation_time for create_time ordering (but NOT for route naming)
-        if "create_time" not in result:
+        else:
             ct = meta.get("creation_time")
             if ct and isinstance(ct, str) and not ct.startswith("GPS"):
                 try:
                     dt = datetime.fromisoformat(ct)
-                    result["create_time"] = dt.timestamp()
+                    ts = dt.timestamp()
+                    result["wall_time_nanos"] = int(ts * 1e9)
+                    result["create_time"] = ts
                 except (ValueError, OSError):
                     pass
 
@@ -279,15 +278,11 @@ class RouteStore:
         if meta.get("enriched") and meta.get("gps_time") is None:
             meta.pop("enriched", None)
             return True
-        # Once enrichment has run, don't re-run — GPS/distance are best-effort
-        # and come from the 5MB head read. Re-enriching won't find more data.
+        # Fully enriched — done (multi-segment GPS fallback + geocoding complete)
         if meta.get("enriched"):
             return False
-        if not meta.get("car_fingerprint"):
-            return True
-        if not meta.get("device_type"):
-            return True
-        return False
+        # Quick-enriched or partially-enriched — needs full enrichment
+        return True
 
     @staticmethod
     def _find_rlog(seg_path: str) -> str | None:
@@ -298,6 +293,22 @@ class RouteStore:
         rlog = Path(seg_path) / "rlog"
         if rlog.exists():
             return str(rlog)
+        return None
+
+    @staticmethod
+    def _find_qlog(seg_path: str) -> str | None:
+        """Find qlog file in a segment directory, preferring .zst.
+
+        qlog is much smaller than rlog (~2-5MB vs 50-200MB) and contains
+        initData, carParams, and gpsLocationExternal — sufficient for
+        quick metadata extraction without full rlog decompression.
+        """
+        qlog = Path(seg_path) / "qlog.zst"
+        if qlog.exists():
+            return str(qlog)
+        qlog = Path(seg_path) / "qlog"
+        if qlog.exists():
+            return str(qlog)
         return None
 
     def _calc_route_distance(self, local_id: str, segments: list) -> float | None:
@@ -573,71 +584,79 @@ class RouteStore:
         except Exception:
             return False
 
-    async def _enrichment_loop(self):
-        """Persistent background loop that enriches route metadata.
+    def _quick_enrich_new(self):
+        """Inline enrichment for routes not yet in metadata.
 
-        Polls every 90s, re-scans directories, enriches newest routes first.
-        Runs as a single asyncio task — no re-entrancy guard needed.
-        Pauses while openpilot is driving. Caps at 5 routes per cycle.
+        Called during scan() to make new routes immediately visible in the list.
+        Prefers qlog (~2-5MB total) over rlog (50-200MB) since both contain
+        initData, carParams, and gpsLocationExternal. Falls back to rlog if
+        qlog is unavailable. Tries later segments for GPS if seg 0 has no fix
+        (cold start). Caps at 5 routes per scan to keep page loads fast.
         """
-        await asyncio.sleep(5)  # let server bind first
-        loop = asyncio.get_event_loop()
+        new_routes = [
+            (lid, info) for lid, info in self._raw.items()
+            if lid not in self._metadata and lid not in self._hidden
+        ]
+        if not new_routes:
+            return
 
-        while True:
+        # Sort newest first, cap at 5 per scan
+        new_routes.sort(key=lambda x: _route_counter(x[0]), reverse=True)
+        new_routes = new_routes[:5]
+
+        logger.info("Quick-enriching %d new routes", len(new_routes))
+        enriched = 0
+
+        for local_id, info in new_routes:
             try:
-                # Pause enrichment while driving — zero CPU competition with openpilot
-                if self._is_onroad():
-                    logger.debug("Onroad — skipping enrichment cycle")
-                    await asyncio.sleep(300)
+                sorted_segs = sorted(info["segments"], key=lambda s: s["number"])
+
+                # Parse seg 0: prefer qlog (tiny) over rlog (huge)
+                log_file = None
+                for seg in sorted_segs[:1]:
+                    log_file = self._find_qlog(seg["path"]) or self._find_rlog(seg["path"])
+                if not log_file:
                     continue
 
-                # Re-scan directories to pick up new routes/segments
-                self.scan(force=True)
-
-                # Find routes needing enrichment, newest first
-                uncached = [
-                    (lid, info) for lid, info in self._raw.items()
-                    if self._needs_enrich(lid)
-                ]
-                if not uncached:
-                    await asyncio.sleep(90)
+                result = _parse_rlog_metadata(log_file)
+                if not result:
                     continue
 
-                # Sort newest-first by route counter (more reliable than mtime
-                # which can reflect AGNOS build date instead of actual drive time)
-                uncached.sort(key=lambda x: _route_counter(x[0]), reverse=True)
-                total_pending = len(uncached)
+                # If no GPS in seg 0, try later segments (cold start)
+                need_coords = not result.get("start_lat")
+                need_time = not result.get("gps_time")
+                if need_coords or need_time:
+                    for seg in sorted_segs[1:]:
+                        log = self._find_qlog(seg["path"]) or self._find_rlog(seg["path"])
+                        if not log:
+                            continue
+                        if need_coords:
+                            gps = _find_first_gps(log)
+                            if gps:
+                                result["start_lat"] = gps[0]
+                                result["start_lng"] = gps[1]
+                                need_coords = False
+                        if need_time:
+                            gps_t = _find_first_gps_time(log)
+                            if gps_t:
+                                result["gps_time"] = gps_t - seg["number"] * 60
+                                need_time = False
+                        if not need_coords and not need_time:
+                            break
 
-                # Only enrich the 1 newest route per cycle — remaining routes
-                # are enriched on-demand when the user selects them
-                uncached = uncached[:1]
-                logger.info("Enrichment cycle: processing newest of %d pending routes",
-                            total_pending)
-
-                local_id, info = uncached[0]
-                try:
-                    rlog_meta = await loop.run_in_executor(
-                        self._executor, self._enrich_one, local_id, info["segments"])
-                    if rlog_meta:
-                        entry = self._rlog_to_metadata_entry(local_id, rlog_meta)
-                        self._metadata[local_id] = entry
-                        self._rebuild_routes()
-                        self._save_metadata()
-                        logger.info("Enriched newest route %s (%d still pending)",
-                                    local_id, total_pending - 1)
-                except Exception as e:
-                    logger.debug("enrich error for %s: %s", local_id, e)
-
-            except asyncio.CancelledError:
-                logger.info("Enrichment loop cancelled")
-                return
+                entry = self._rlog_to_metadata_entry(local_id, result)
+                entry["enriched"] = False  # Still needs geocoding
+                self._metadata[local_id] = entry
+                enriched += 1
             except Exception as e:
-                logger.warning("Enrichment cycle error: %s", e)
+                logger.debug("Quick-enrich error for %s: %s", local_id, e)
 
-            await asyncio.sleep(90)
+        if enriched:
+            self._save_metadata()
+            logger.info("Quick-enriched %d/%d new routes", enriched, len(new_routes))
 
     def scan(self, force: bool = False) -> dict:
-        """Fast directory scan — no rlog parsing. Returns immediately."""
+        """Directory scan with inline enrichment for new routes."""
         if not force and (time.time() - self._last_scan) < CACHE_TTL:
             return self._routes
 
@@ -677,6 +696,7 @@ class RouteStore:
             info["segments"].sort(key=lambda s: s["number"])
 
         self._raw = dict(raw)
+        self._quick_enrich_new()
         self._rebuild_routes()
         self._last_scan = time.time()
 

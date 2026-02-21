@@ -152,9 +152,9 @@ def _device_dict(store) -> dict:
 
 
 async def handle_devices(request: web.Request) -> web.Response:
-    """GET /v1/me/devices/ — list devices"""
+    """GET /v1/me/devices/ — list devices (force rescan on page load/refresh)"""
     store = request.app["store"]
-    store.scan()
+    store.scan(force=True)
     return web.json_response([_device_dict(store)])
 
 
