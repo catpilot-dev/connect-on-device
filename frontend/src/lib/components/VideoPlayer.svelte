@@ -38,6 +38,7 @@
   let hudHls = null
   let manifestUrl = null
   let isPlaying = $state(false)
+  let userWantsPause = false  // Guard against HLS spurious play events after seek
 
   // Track which video is active for control methods
   const showingHud = $derived(!!hudLiveUrl)
@@ -157,6 +158,9 @@
   function handleHlsPlay() {
     if (showingHud) return
     if (frozen) { videoEl?.pause(); return }
+    // HLS.js fires spurious play events after seeking across segments.
+    // If user explicitly paused, suppress the auto-play.
+    if (userWantsPause) { videoEl?.pause(); return }
     isPlaying = true
     onPlay?.()
   }
@@ -267,22 +271,31 @@
       return
     }
     if (videoEl) {
+      userWantsPause = false  // Seeking implies user wants playback
       videoEl.currentTime = time
     }
   }
 
   export function play() {
+    userWantsPause = false
     activeVideo?.play().catch(() => {})
   }
 
   export function pause() {
+    userWantsPause = true
     activeVideo?.pause()
   }
 
   export function toggle() {
     const v = activeVideo
     if (!v) return
-    v.paused ? v.play().catch(() => {}) : v.pause()
+    if (v.paused) {
+      userWantsPause = false
+      v.play().catch(() => {})
+    } else {
+      userWantsPause = true
+      v.pause()
+    }
   }
 
   export function setPlaybackRate(rate) {

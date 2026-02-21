@@ -454,8 +454,13 @@
                 {@const totalSec = Math.floor(bm / 1000)}
                 {@const mm = Math.floor(totalSec / 60)}
                 {@const ss = (totalSec % 60).toString().padStart(2, '0')}
+                {@const isActive = currentTime >= bm / 1000 - 2 && (i + 1 >= bookmarks.length || currentTime < bookmarks[i + 1] / 1000 - 2)}
                 <button
-                  class="px-2 py-1 text-xs font-mono rounded bg-surface-700 hover:bg-surface-600 text-surface-200"
+                  class="px-2 py-1 text-xs font-mono rounded text-surface-200"
+                  class:bg-engage-green={isActive}
+                  class:text-black={isActive}
+                  class:bg-surface-700={!isActive}
+                  class:hover:bg-surface-600={!isActive}
                   onclick={() => handleSeek(Math.max(0, bm / 1000 - 2))}
                 >
                   {mm}:{ss}
