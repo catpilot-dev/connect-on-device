@@ -3,8 +3,10 @@
   import { Select } from 'bits-ui'
   import { fetchParams, setParam, fetchModels, swapModel, checkModelUpdates, downloadModel,
     fetchSoftware, softwareCheck, softwareDownload, softwareInstall, softwareBranch, softwareUninstall,
-    fetchLateralDelay } from '../api.js'
+    fetchLateralDelay, fetchDeviceInfo, deviceReboot, devicePoweroff, deviceSetLanguage,
+    fetchToggles, setToggle, fetchStorage } from '../api.js'
   import { getTileSource, setTileSource, TILE_SOURCES } from '../tileSource.js'
+  import { formatBytes, storageLevel } from '../format.js'
 
   let params = $state({})
   let loading = $state(true)
@@ -31,6 +33,17 @@
   let swPollTimer = $state(null)
   let swExpanded = $state(false)
 
+  // Device state
+  let dev = $state(null)
+  let devExpanded = $state(false)
+  let storage = $state(null)
+
+  // Toggles state
+  let toggles = $state(null)
+  let togglesExpanded = $state(false)
+  let devTogglesExpanded = $state(false)
+  let toggling = $state(null) // key currently being toggled
+
   const SECTIONS = [
     {
       title: 'Driving',
@@ -44,6 +57,7 @@
       items: [
         { key: 'MapdSpeedLimitControlEnabled', label: 'Map Speed Limit Control', desc: 'Automatically limit speed based on OSM map data', type: 'bool' },
         { key: 'MapdSpeedLimitOffsetPercent', label: 'Speed Limit Offset', desc: 'Percentage above the posted speed limit', type: 'int', options: [0, 5, 10, 15] },
+        { key: 'MapdCurveTargetLatAccel', label: 'Curve Comfort', desc: 'Target lateral acceleration in curves (m/s²). Lower = gentler, higher = sportier.', type: 'choice', options: ['1.5', '2.0', '2.5', '3.0'] },
       ],
     },
   ]
@@ -51,6 +65,8 @@
   // Derived: find the active model object from the list
   let activeDriving = $derived(models?.driving?.find(m => m.id === models?.active_driving))
   let activeDm = $derived(models?.dm?.find(m => m.id === models?.active_dm))
+  let storagePct = $derived(storage ? Math.round(100 - storage.percent_free) : 0)
+  let storageColor = $derived(storage ? storageLevel(storage.percent_free) : 'ok')
 
   onMount(async () => {
     try {
@@ -63,6 +79,9 @@
     }
     loadModels()
     loadSoftware()
+    fetchDeviceInfo().then(d => { dev = d }).catch(() => {})
+    fetchToggles().then(t => { toggles = t }).catch(() => {})
+    fetchStorage().then(s => { storage = s }).catch(() => {})
   })
 
   async function loadModels() {
@@ -160,6 +179,104 @@
     } catch (e) {
       swError = e.message
     }
+  }
+
+  const TOGGLE_DEFS = [
+    { key: 'OpenpilotEnabledToggle', label: 'Enable openpilot' },
+    { key: 'ExperimentalMode', label: 'Experimental Mode' },
+    { key: 'DisengageOnAccelerator', label: 'Disengage on Accelerator Pedal' },
+    { key: 'IsLdwEnabled', label: 'Lane Departure Warnings' },
+    { key: 'AlwaysOnDM', label: 'Always-On Driver Monitoring' },
+    { key: 'RecordFront', label: 'Record Driver Camera' },
+    { key: 'RecordAudio', label: 'Record Audio' },
+    { key: 'IsMetric', label: 'Use Metric System' },
+  ]
+
+  const DEV_DEFS = [
+    { key: 'AdbEnabled', label: 'Enable ADB' },
+    { key: 'SshEnabled', label: 'Enable SSH' },
+    { key: 'JoystickDebugMode', label: 'Joystick Debug Mode' },
+    { key: 'LongitudinalManeuverMode', label: 'Longitudinal Maneuver Mode' },
+    { key: 'AlphaLongitudinalEnabled', label: 'openpilot Longitudinal Control (Alpha)' },
+  ]
+
+  // Mutual exclusion: toggling one on turns the other off
+  const TOGGLE_MUTEX = {
+    JoystickDebugMode: 'LongitudinalManeuverMode',
+    LongitudinalManeuverMode: 'JoystickDebugMode',
+  }
+
+  const PERSONALITIES = [
+    { value: 0, label: 'Aggressive' },
+    { value: 1, label: 'Standard' },
+    { value: 2, label: 'Relaxed' },
+  ]
+
+  async function handleToggle(key) {
+    if (toggling) return
+    const prev = toggles[key]
+    const newVal = !prev
+    toggles[key] = newVal
+    // Mutual exclusion: turning one on turns the other off
+    const mutex = TOGGLE_MUTEX[key]
+    if (newVal && mutex) toggles[mutex] = false
+    toggling = key
+    try {
+      await setToggle(key, newVal)
+    } catch (e) {
+      toggles[key] = prev
+      if (mutex) toggles[mutex] = !prev ? false : toggles[mutex]
+      error = e.message
+    } finally {
+      toggling = null
+    }
+  }
+
+  async function handlePersonality(value) {
+    if (value === toggles?.LongitudinalPersonality) return
+    const prev = toggles.LongitudinalPersonality
+    toggles.LongitudinalPersonality = value
+    try {
+      await setToggle('LongitudinalPersonality', value)
+    } catch (e) {
+      toggles.LongitudinalPersonality = prev
+      error = e.message
+    }
+  }
+
+  const LANGUAGES = [
+    { value: 'main_en', label: 'English' },
+    { value: 'main_zh-CHS', label: '简体中文' },
+    { value: 'main_zh-CHT', label: '繁體中文' },
+    { value: 'main_ja', label: '日本語' },
+    { value: 'main_ko', label: '한국어' },
+    { value: 'main_de', label: 'Deutsch' },
+    { value: 'main_fr', label: 'Français' },
+    { value: 'main_es', label: 'Español' },
+    { value: 'main_pt-BR', label: 'Português' },
+    { value: 'main_ar', label: 'العربية' },
+    { value: 'main_tr', label: 'Türkçe' },
+    { value: 'main_nl', label: 'Nederlands' },
+    { value: 'main_pl', label: 'Polski' },
+    { value: 'main_th', label: 'ภาษาไทย' },
+  ]
+
+  async function handleReboot() {
+    if (!confirm('Reboot device?')) return
+    try { await deviceReboot() } catch (e) { error = e.message }
+  }
+
+  async function handlePoweroff() {
+    if (!confirm('Power off device?')) return
+    try { await devicePoweroff() } catch (e) { error = e.message }
+  }
+
+  async function handleLanguage(lang) {
+    if (!lang || lang === dev?.LanguageSetting) return
+    try {
+      await deviceSetLanguage(lang)
+      dev = { ...dev, LanguageSetting: lang }
+    } catch (e) { error = e.message }
   }
 
   function lastCheckedAgo(lastTime) {
@@ -292,7 +409,7 @@
   }
 </script>
 
-<div class="max-w-lg mx-auto px-4 py-6 space-y-6">
+<div class="max-w-lg mx-auto px-4 py-6 space-y-6 overflow-hidden">
   {#if loading}
     <div class="space-y-4">
       {#each [1, 2] as _}
@@ -308,6 +425,197 @@
       <div class="card p-4 border-engage-red/50">
         <p class="text-engage-red text-sm">{error}</p>
         <button class="btn-ghost text-xs mt-2" onclick={() => { error = null }}>Dismiss</button>
+      </div>
+    {/if}
+
+    <!-- Device Section (collapsed by default) -->
+    {#if dev}
+      <div class="card p-4">
+        <button
+          class="w-full flex items-center justify-between"
+          onclick={() => { devExpanded = !devExpanded }}
+        >
+          <h3 class="text-surface-400 text-xs font-semibold uppercase tracking-wider">Device</h3>
+          <div class="flex items-center gap-3">
+            <span class="text-xs text-surface-500 font-mono">{dev.DongleId || '--'}</span>
+            <svg class="w-4 h-4 text-surface-500 transition-transform {devExpanded ? 'rotate-180' : ''}" viewBox="0 0 20 20" fill="currentColor">
+              <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd" />
+            </svg>
+          </div>
+        </button>
+
+        {#if devExpanded}
+          <div class="mt-4 space-y-3">
+            <!-- Dongle ID -->
+            <div class="flex items-center justify-between">
+              <span class="text-sm text-surface-400">Dongle ID</span>
+              <span class="text-sm text-surface-100 font-mono">{dev.DongleId || '--'}</span>
+            </div>
+
+            <!-- Serial -->
+            <div class="flex items-center justify-between">
+              <span class="text-sm text-surface-400">Serial</span>
+              <span class="text-sm text-surface-100 font-mono">{dev.HardwareSerial || '--'}</span>
+            </div>
+
+            <!-- Storage -->
+            {#if storage}
+              <div class="flex items-center justify-between gap-3">
+                <span class="text-sm text-surface-400">Storage</span>
+                <div class="flex items-center gap-2">
+                  <div class="w-24 h-1.5 rounded-full bg-surface-700 overflow-hidden">
+                    <div
+                      class="h-full rounded-full transition-all duration-500"
+                      class:bg-engage-green={storageColor === 'ok'}
+                      class:bg-engage-orange={storageColor === 'warning'}
+                      class:bg-engage-red={storageColor === 'critical'}
+                      style="width: {storagePct}%"
+                    ></div>
+                  </div>
+                  <span class="text-xs text-surface-400 whitespace-nowrap">
+                    {formatBytes(storage.used)} / {formatBytes(storage.total)}
+                  </span>
+                </div>
+              </div>
+            {/if}
+
+            <!-- Language -->
+            <div class="flex items-center justify-between">
+              <span class="text-sm text-surface-400">Language</span>
+              <Select.Root
+                type="single"
+                value={dev.LanguageSetting || 'main_en'}
+                onValueChange={handleLanguage}
+                items={LANGUAGES}
+              >
+                <Select.Trigger
+                  class="flex items-center gap-2 rounded-lg px-3 py-1.5 bg-surface-700 border border-surface-600 hover:border-surface-500 transition-colors"
+                >
+                  <span class="text-sm text-surface-100">{LANGUAGES.find(l => l.value === (dev.LanguageSetting || 'main_en'))?.label || dev.LanguageSetting}</span>
+                  <svg class="w-3.5 h-3.5 text-surface-400" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd" />
+                  </svg>
+                </Select.Trigger>
+                <Select.Content
+                  class="z-50 rounded-lg bg-surface-700 border border-surface-600 shadow-xl py-1 max-h-64 overflow-y-auto max-w-[calc(100vw-2rem)]"
+                  sideOffset={4}
+                >
+                  {#each LANGUAGES as lang}
+                    <Select.Item
+                      value={lang.value}
+                      label={lang.label}
+                      class="px-3 py-2 text-sm cursor-pointer transition-colors
+                        data-[highlighted]:bg-surface-600 data-[selected]:text-engage-blue"
+                    >
+                      {lang.label}
+                    </Select.Item>
+                  {/each}
+                </Select.Content>
+              </Select.Root>
+            </div>
+
+            <!-- Reboot / Power Off -->
+            <div class="pt-3 border-t border-surface-700 grid grid-cols-2 gap-2">
+              <button
+                class="text-sm py-2 rounded-lg bg-surface-700 text-surface-200 hover:bg-surface-600 transition-colors"
+                onclick={handleReboot}
+              >
+                Reboot
+              </button>
+              <button
+                class="text-sm py-2 rounded-lg bg-engage-red/15 text-engage-red hover:bg-engage-red/25 transition-colors"
+                onclick={handlePoweroff}
+              >
+                Power Off
+              </button>
+            </div>
+          </div>
+        {/if}
+      </div>
+    {/if}
+
+    <!-- Toggles Section (collapsed by default) -->
+    {#if toggles}
+      <div class="card p-4">
+        <button
+          class="w-full flex items-center justify-between"
+          onclick={() => { togglesExpanded = !togglesExpanded }}
+        >
+          <h3 class="text-surface-400 text-xs font-semibold uppercase tracking-wider">Toggles</h3>
+          <svg class="w-4 h-4 text-surface-500 transition-transform {togglesExpanded ? 'rotate-180' : ''}" viewBox="0 0 20 20" fill="currentColor">
+            <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd" />
+          </svg>
+        </button>
+
+        {#if togglesExpanded}
+          <div class="mt-4 space-y-4">
+            {#each TOGGLE_DEFS as t}
+              <div class="flex items-center justify-between gap-3">
+                <div class="text-sm text-surface-100">{t.label}</div>
+                <button
+                  class="shrink-0 w-11 h-6 rounded-full transition-colors relative {toggles[t.key] ? 'bg-engage-blue' : 'bg-surface-600'}"
+                  onclick={() => handleToggle(t.key)}
+                  disabled={toggling === t.key}
+                  aria-label={t.label}
+                >
+                  <div
+                    class="absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform {toggles[t.key] ? 'translate-x-[22px]' : 'translate-x-0.5'}"
+                  ></div>
+                </button>
+              </div>
+            {/each}
+
+            <!-- Driving Personality (button group) -->
+            <div class="pt-3 border-t border-surface-700">
+              <div class="text-sm text-surface-100 mb-2">Driving Personality</div>
+              <div class="grid grid-cols-3 gap-1 rounded-lg bg-surface-700 p-1">
+                {#each PERSONALITIES as p}
+                  <button
+                    class="text-xs py-1.5 rounded-md transition-colors {toggles.LongitudinalPersonality === p.value ? 'bg-engage-blue text-white' : 'text-surface-300 hover:text-surface-100'}"
+                    onclick={() => handlePersonality(p.value)}
+                  >
+                    {p.label}
+                  </button>
+                {/each}
+              </div>
+            </div>
+          </div>
+        {/if}
+      </div>
+    {/if}
+
+    <!-- Developer Section (collapsed by default) -->
+    {#if toggles}
+      <div class="card p-4">
+        <button
+          class="w-full flex items-center justify-between"
+          onclick={() => { devTogglesExpanded = !devTogglesExpanded }}
+        >
+          <h3 class="text-surface-400 text-xs font-semibold uppercase tracking-wider">Developer</h3>
+          <svg class="w-4 h-4 text-surface-500 transition-transform {devTogglesExpanded ? 'rotate-180' : ''}" viewBox="0 0 20 20" fill="currentColor">
+            <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd" />
+          </svg>
+        </button>
+
+        {#if devTogglesExpanded}
+          <div class="mt-4 space-y-4">
+            {#each DEV_DEFS as t}
+              <div class="flex items-center justify-between gap-3">
+                <div class="text-sm text-surface-100">{t.label}</div>
+                <button
+                  class="shrink-0 w-11 h-6 rounded-full transition-colors relative {toggles[t.key] ? 'bg-engage-blue' : 'bg-surface-600'}"
+                  onclick={() => handleToggle(t.key)}
+                  disabled={toggling === t.key}
+                  aria-label={t.label}
+                >
+                  <div
+                    class="absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform {toggles[t.key] ? 'translate-x-[22px]' : 'translate-x-0.5'}"
+                  ></div>
+                </button>
+              </div>
+            {/each}
+          </div>
+        {/if}
       </div>
     {/if}
 
@@ -346,6 +654,22 @@
                       disabled={saving === item.key}
                     >
                       {opt}%
+                    </button>
+                  {/each}
+                </div>
+              </div>
+            {:else if item.type === 'choice'}
+              <div>
+                <div class="text-sm text-surface-100">{item.label}</div>
+                <div class="text-xs text-surface-500 mt-0.5 mb-2">{item.desc}</div>
+                <div class="flex gap-2">
+                  {#each item.options as opt, i}
+                    <button
+                      class="px-3 py-1.5 text-sm rounded-lg transition-colors {params[item.key] === i ? 'bg-engage-blue text-white' : 'bg-surface-700 text-surface-300 hover:bg-surface-600'}"
+                      onclick={() => setOffset(item.key, i)}
+                      disabled={saving === item.key}
+                    >
+                      {opt}
                     </button>
                   {/each}
                 </div>
@@ -481,7 +805,7 @@
                     </svg>
                   </Select.Trigger>
                   <Select.Content
-                    class="z-50 rounded-lg bg-surface-700 border border-surface-600 shadow-xl py-1 max-h-64 overflow-y-auto"
+                    class="z-50 rounded-lg bg-surface-700 border border-surface-600 shadow-xl py-1 max-h-64 overflow-y-auto max-w-[calc(100vw-2rem)]"
                     sideOffset={4}
                   >
                     {#each sw.UpdaterAvailableBranches as branch}
@@ -628,7 +952,7 @@
                   </svg>
                 </Select.Trigger>
                 <Select.Content
-                  class="z-50 rounded-lg bg-surface-700 border border-surface-600 shadow-xl py-1 max-h-64 overflow-y-auto"
+                  class="z-50 rounded-lg bg-surface-700 border border-surface-600 shadow-xl py-1 max-h-64 overflow-y-auto max-w-[calc(100vw-2rem)]"
                   sideOffset={4}
                 >
                   {#each models.dm as model}

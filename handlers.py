@@ -1655,12 +1655,166 @@ async def handle_lateral_delay(request: web.Request) -> web.Response:
         return web.json_response({"error": str(e)}, status=500)
 
 
+# ── Device panel ──────────────────────────────────────────────
+
+DEVICE_PARAMS = ["DongleId", "HardwareSerial", "LanguageSetting"]
+
+async def handle_device_info(request: web.Request) -> web.Response:
+    """GET /v1/device — read device identity and language setting."""
+    result = {}
+    for key in DEVICE_PARAMS:
+        path = f"{PARAMS_DIR}/{key}"
+        try:
+            result[key] = open(path).read().strip()
+        except FileNotFoundError:
+            result[key] = None
+    return web.json_response(result)
+
+
+async def handle_device_reboot(request: web.Request) -> web.Response:
+    """POST /v1/device/reboot — trigger device reboot."""
+    try:
+        with open(f"{PARAMS_DIR}/DoReboot", "w") as f:
+            f.write("1")
+    except Exception as e:
+        logger.error("Failed to set DoReboot: %s", e)
+        return web.json_response({"error": str(e)}, status=500)
+    return web.json_response({"status": "rebooting"})
+
+
+async def handle_device_poweroff(request: web.Request) -> web.Response:
+    """POST /v1/device/poweroff — trigger device shutdown."""
+    try:
+        with open(f"{PARAMS_DIR}/DoShutdown", "w") as f:
+            f.write("1")
+    except Exception as e:
+        logger.error("Failed to set DoShutdown: %s", e)
+        return web.json_response({"error": str(e)}, status=500)
+    return web.json_response({"status": "shutting_down"})
+
+
+async def handle_device_language(request: web.Request) -> web.Response:
+    """POST /v1/device/language — set LanguageSetting param."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise web.HTTPBadRequest(text=json.dumps({"error": "Invalid JSON body"}))
+    lang = body.get("language", "").strip()
+    if not lang:
+        raise web.HTTPBadRequest(text=json.dumps({"error": "Missing language"}))
+    try:
+        with open(f"{PARAMS_DIR}/LanguageSetting", "w") as f:
+            f.write(lang)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+    return web.json_response({"status": "ok", "language": lang})
+
+
+# ── Toggles panel ─────────────────────────────────────────────
+
+TOGGLE_PARAMS = [
+    "OpenpilotEnabledToggle", "ExperimentalMode",
+    "DisengageOnAccelerator", "IsLdwEnabled", "AlwaysOnDM",
+    "RecordFront", "RecordAudio", "IsMetric", "LongitudinalPersonality",
+    # Developer toggles
+    "AdbEnabled", "SshEnabled",
+    "JoystickDebugMode", "LongitudinalManeuverMode",
+    "AlphaLongitudinalEnabled",
+]
+
+# Mutual exclusion pairs — toggling one ON turns the other OFF
+_TOGGLE_MUTEX = {
+    "JoystickDebugMode": "LongitudinalManeuverMode",
+    "LongitudinalManeuverMode": "JoystickDebugMode",
+}
+
+async def handle_toggles_get(request: web.Request) -> web.Response:
+    """GET /v1/toggles — read all toggle params."""
+    result = {}
+    for key in TOGGLE_PARAMS:
+        path = f"{PARAMS_DIR}/{key}"
+        try:
+            raw = open(path).read().strip()
+            if key == "LongitudinalPersonality":
+                result[key] = int(raw) if raw else 2  # default: Relaxed
+            else:
+                result[key] = raw == "1"
+        except FileNotFoundError:
+            result[key] = False if key != "LongitudinalPersonality" else 2
+    return web.json_response(result)
+
+
+async def handle_toggles_set(request: web.Request) -> web.Response:
+    """POST /v1/toggles — set a toggle param."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise web.HTTPBadRequest(text=json.dumps({"error": "Invalid JSON body"}))
+    key = body.get("key", "")
+    value = body.get("value")
+    if key not in TOGGLE_PARAMS:
+        raise web.HTTPBadRequest(text=json.dumps({"error": f"Unknown toggle: {key}"}))
+    try:
+        with open(f"{PARAMS_DIR}/{key}", "w") as f:
+            if key == "LongitudinalPersonality":
+                f.write(str(int(value)))
+            else:
+                f.write("1" if value else "0")
+        # Mutual exclusion: if turning one on, turn the other off
+        if value and key in _TOGGLE_MUTEX:
+            other = _TOGGLE_MUTEX[key]
+            with open(f"{PARAMS_DIR}/{other}", "w") as f:
+                f.write("0")
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+    return web.json_response({"status": "ok", "key": key, "value": value})
+
+
 BMW_PARAMS = {
     "DccCalibrationMode": {"type": "bool", "label": "DCC Calibration Mode"},
     "LaneCenteringCorrection": {"type": "bool", "label": "Lane Centering Correction"},
     "MapdSpeedLimitControlEnabled": {"type": "bool", "label": "Map Speed Limit Control"},
     "MapdSpeedLimitOffsetPercent": {"type": "int", "label": "Speed Limit Offset %"},
+    "MapdCurveTargetLatAccel": {"type": "int", "label": "Curve Target Lat Accel"},
 }
+
+MAPD_PARAM_KEYS = {"MapdSpeedLimitControlEnabled", "MapdSpeedLimitOffsetPercent", "MapdCurveTargetLatAccel"}
+
+
+def update_mapd_settings():
+    """Regenerate MapdSettings JSON from individual params (snake_case keys for mapd Go daemon)."""
+    # Master toggle
+    try:
+        enabled = open(f"{PARAMS_DIR}/MapdSpeedLimitControlEnabled").read().strip() == "1"
+    except FileNotFoundError:
+        enabled = False
+
+    # Offset: raw percentage value (0, 5, 10, 15) -> decimal
+    try:
+        offset_pct = int(open(f"{PARAMS_DIR}/MapdSpeedLimitOffsetPercent").read().strip())
+    except (FileNotFoundError, ValueError):
+        offset_pct = 10  # default +10%
+    offset = offset_pct / 100.0
+
+    # Curve comfort: button index -> lat accel value
+    try:
+        lat_idx = int(open(f"{PARAMS_DIR}/MapdCurveTargetLatAccel").read().strip())
+    except (FileNotFoundError, ValueError):
+        lat_idx = 1  # default 2.0
+    lat_vals = [1.5, 2.0, 2.5, 3.0]
+    lat_accel = lat_vals[lat_idx] if 0 <= lat_idx < 4 else 2.0
+
+    settings = {
+        "speed_limit_control_enabled": enabled,
+        "map_curve_speed_control_enabled": enabled,
+        "vision_curve_speed_control_enabled": enabled,
+        "speed_limit_offset": offset,
+        "map_curve_target_lat_a": lat_accel,
+        "vision_curve_target_lat_a": lat_accel,
+    }
+
+    with open(f"{PARAMS_DIR}/MapdSettings", "w") as f:
+        f.write(json.dumps(settings))
 
 
 async def handle_params_get(request: web.Request) -> web.Response:
@@ -1696,6 +1850,8 @@ async def handle_params_set(request: web.Request) -> web.Response:
         raw = str(int(value))
     with open(f"{PARAMS_DIR}/{key}", "w") as f:
         f.write(raw)
+    if key in MAPD_PARAM_KEYS:
+        update_mapd_settings()
     return web.json_response({"status": "ok", "key": key, "value": value})
 
 
@@ -1807,6 +1963,10 @@ def _list_installed_models(model_type: str) -> list[dict]:
         onnx_files = list(d.glob("*.onnx"))
         pkl_files = list(d.glob("*.pkl"))
 
+        # Truncate long names to prevent UI overflow
+        if len(name) > 30:
+            name = name[:28] + "..."
+
         models.append({
             "id": d.name,
             "name": name,
@@ -1817,6 +1977,8 @@ def _list_installed_models(model_type: str) -> list[dict]:
             "pkl_count": len(pkl_files),
         })
 
+    # Newest first — sort by date descending (empty dates last)
+    models.sort(key=lambda m: m["date"] or "", reverse=True)
     return models
 
 
@@ -1935,6 +2097,15 @@ async def handle_models_check_updates(request: web.Request) -> web.Response:
         updates = json.loads(result.stdout)
     except json.JSONDecodeError:
         updates = {"driving": [], "dm": [], "total": 0}
+
+    # Newest first, truncate long names
+    for key in ("driving", "dm"):
+        if key in updates and isinstance(updates[key], list):
+            for m in updates[key]:
+                name = m.get("name", "")
+                if len(name) > 30:
+                    m["name"] = name[:28] + "..."
+            updates[key].sort(key=lambda m: m.get("date", ""), reverse=True)
 
     return web.json_response(updates)
 
