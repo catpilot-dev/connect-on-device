@@ -4,12 +4,14 @@
   import { fetchParams, setParam, fetchModels, swapModel, checkModelUpdates, downloadModel,
     fetchSoftware, softwareCheck, softwareDownload, softwareInstall, softwareBranch, softwareUninstall,
     fetchLateralDelay } from '../api.js'
+  import { getTileSource, setTileSource, TILE_SOURCES } from '../tileSource.js'
 
   let params = $state({})
   let loading = $state(true)
   let error = $state(null)
   let saving = $state(null) // key currently being saved
   let latDelay = $state(null)
+  let tileSource = $state(getTileSource())
 
   // Model state
   let models = $state(null)
@@ -375,6 +377,23 @@
         </div>
       </div>
     {/each}
+
+    <!-- Map Tiles Source -->
+    <div class="card p-4">
+      <h3 class="text-surface-400 text-xs font-semibold uppercase tracking-wider mb-4">Map Tiles</h3>
+      <div class="flex gap-2">
+        {#each Object.entries(TILE_SOURCES) as [key, src]}
+          <button
+            class="flex-1 rounded-lg px-3 py-2 text-left transition-colors {tileSource === key ? 'bg-engage-blue/15 border border-engage-blue/40' : 'bg-surface-700 border border-surface-600 hover:border-surface-500'}"
+            onclick={() => { tileSource = key; setTileSource(key) }}
+          >
+            <div class="text-sm {tileSource === key ? 'text-engage-blue' : 'text-surface-100'}">{src.label}</div>
+            <div class="text-xs text-surface-500 mt-0.5">{src.desc}</div>
+          </button>
+        {/each}
+      </div>
+      <div class="text-xs text-surface-500 mt-2">Reload route page to apply</div>
+    </div>
 
     <!-- Software Section -->
     <div class="card p-4">

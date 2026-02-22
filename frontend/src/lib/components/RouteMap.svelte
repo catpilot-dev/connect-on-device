@@ -1,15 +1,18 @@
 <script>
   import { onMount, onDestroy } from 'svelte'
+  import { wgs84ToGcj02 } from '../gcj02.js'
+  import { getTileSource, TILE_SOURCES } from '../tileSource.js'
 
   /**
    * Leaflet GPS track map with:
    * - Polyline colored by engagement state (green/blue/grey)
    * - CircleMarker synced to video currentTime
    * - Auto-fit bounds on load
+   * - Configurable tile source (AMap for China, CartoDB for overseas)
    */
 
-  /** @type {{ coords: Array, events?: Array, currentTime?: number, durationMs?: number, selectionStart?: number, selectionEnd?: number }} */
-  let { coords = [], events = [], currentTime = 0, durationMs = 0, selectionStart = 0, selectionEnd = 0 } = $props()
+  /** @type {{ coords: Array, events?: Array, currentTime?: number, durationMs?: number, selectionStart?: number, selectionEnd?: number, visible?: boolean }} */
+  let { coords = [], events = [], currentTime = 0, durationMs = 0, selectionStart = 0, selectionEnd = 0, visible = true } = $props()
 
   let mapContainer = $state(null)
   let map = null
@@ -18,17 +21,20 @@
 
   // Dynamically import Leaflet (it accesses `window` on import)
   let L = null
+  let tileConfig = TILE_SOURCES[getTileSource()] || TILE_SOURCES.amap
+
+  /** Convert coord to map projection — GCJ-02 for AMap, passthrough for WGS-84 tiles */
+  function toMapCoord(lat, lng) {
+    return tileConfig.gcj02 ? wgs84ToGcj02(lat, lng) : [lat, lng]
+  }
 
   onMount(async () => {
     // Dynamic import avoids SSR issues and reduces initial bundle
     const leaflet = await import('leaflet')
     L = leaflet.default || leaflet
 
-    // Import Leaflet CSS
-    const link = document.createElement('link')
-    link.rel = 'stylesheet'
-    link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'
-    document.head.appendChild(link)
+    // Import Leaflet CSS from npm package (bundled by Vite, no CDN dependency)
+    await import('leaflet/dist/leaflet.css')
 
     if (!mapContainer) return
 
@@ -37,16 +43,11 @@
       attributionControl: false,
     })
 
-    // Dark Matter tile layer — dark theme with readable labels
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      maxZoom: 19,
-      subdomains: 'abcd',
-    }).addTo(map)
-    // Voyager labels on top for readable road names
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}{r}.png', {
-      maxZoom: 19,
-      subdomains: 'abcd',
-      pane: 'overlayPane',
+    // Tile layer from user preference (AMap for China, CartoDB for overseas)
+    L.tileLayer(tileConfig.url, {
+      maxZoom: tileConfig.maxZoom,
+      subdomains: tileConfig.subdomains,
+      className: tileConfig.className || undefined,
     }).addTo(map)
 
     // Position marker
@@ -106,7 +107,7 @@
       }
       currentColor = color
       currentInSel = inSel
-      segment.push([pt.lat, pt.lng])
+      segment.push(toMapCoord(pt.lat, pt.lng))
     }
     // Final segment
     if (segment.length > 1) {
@@ -123,12 +124,12 @@
     if (hasSelection) {
       const selPoints = coords
         .filter(c => c.t >= selectionStart && c.t <= selectionEnd)
-        .map(c => [c.lat, c.lng])
+        .map(c => toMapCoord(c.lat, c.lng))
       if (selPoints.length > 1) {
         map.fitBounds(L.latLngBounds(selPoints), { padding: [20, 20] })
       }
     } else {
-      const allPoints = coords.map(c => [c.lat, c.lng])
+      const allPoints = coords.map(c => toMapCoord(c.lat, c.lng))
       if (allPoints.length > 0) {
         map.fitBounds(L.latLngBounds(allPoints), { padding: [20, 20] })
       }
@@ -150,7 +151,7 @@
 
     const pt = coords[lo]
     if (pt) {
-      positionMarker.setLatLng([pt.lat, pt.lng])
+      positionMarker.setLatLng(toMapCoord(pt.lat, pt.lng))
     }
   })
 
@@ -161,6 +162,14 @@
     if (coords.length > 0 && L) drawPath()
   })
 
+  // Fix Leaflet tile loading when tab becomes visible
+  $effect(() => {
+    if (visible && map) {
+      // Delay to let the DOM layout settle after tab switch
+      setTimeout(() => map?.invalidateSize(), 50)
+    }
+  })
+
   onDestroy(() => {
     if (map) {
       map.remove()
@@ -168,6 +177,12 @@
     }
   })
 </script>
+
+<style>
+  :global(.amap-dark) {
+    filter: invert(1) hue-rotate(180deg) brightness(0.95) contrast(1.1);
+  }
+</style>
 
 <div class="card overflow-hidden">
   {#if coords.length === 0}
