@@ -255,6 +255,56 @@ export async function fetchAllEventsWithProgress(route, onProgress) {
   return results.flat()
 }
 
+// ── Software update management ──────────────────────────────
+
+export async function fetchSoftware() {
+  const res = await fetch('/v1/software')
+  if (!res.ok) throw new Error(`fetchSoftware: ${res.status}`)
+  return res.json()
+}
+
+export async function softwareCheck() {
+  const res = await fetch('/v1/software/check', { method: 'POST' })
+  if (!res.ok) throw new Error(`softwareCheck: ${res.status}`)
+  return res.json()
+}
+
+export async function softwareDownload() {
+  const res = await fetch('/v1/software/download', { method: 'POST' })
+  if (!res.ok) throw new Error(`softwareDownload: ${res.status}`)
+  return res.json()
+}
+
+export async function softwareInstall() {
+  const res = await fetch('/v1/software/install', { method: 'POST' })
+  if (!res.ok) throw new Error(`softwareInstall: ${res.status}`)
+  return res.json()
+}
+
+export async function softwareBranch(branch) {
+  const res = await fetch('/v1/software/branch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ branch }),
+  })
+  if (!res.ok) throw new Error(`softwareBranch: ${res.status}`)
+  return res.json()
+}
+
+export async function softwareUninstall() {
+  const res = await fetch('/v1/software/uninstall', { method: 'POST' })
+  if (!res.ok) throw new Error(`softwareUninstall: ${res.status}`)
+  return res.json()
+}
+
+// ── Lateral delay ───────────────────────────────────────────
+
+export async function fetchLateralDelay() {
+  const res = await fetch('/v1/lateral-delay')
+  if (!res.ok) throw new Error(`fetchLateralDelay: ${res.status}`)
+  return res.json()
+}
+
 // ── BMW params ─────────────────────────────────────────────
 
 export async function fetchParams() {

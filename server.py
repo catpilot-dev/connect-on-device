@@ -41,6 +41,13 @@ from handlers import (
     handle_models_swap,
     handle_params_get,
     handle_params_set,
+    handle_lateral_delay,
+    handle_software_get,
+    handle_software_check,
+    handle_software_download,
+    handle_software_install,
+    handle_software_branch,
+    handle_software_uninstall,
     handle_preserved_routes,
     handle_route_delete,
     handle_route_download,
@@ -167,6 +174,15 @@ def create_app(data_dir: str, static_dir: str) -> web.Application:
     # BMW params
     app.router.add_get("/v1/params", handle_params_get)
     app.router.add_post("/v1/params", handle_params_set)
+    app.router.add_get("/v1/lateral-delay", handle_lateral_delay)
+
+    # Software update management
+    app.router.add_get("/v1/software", handle_software_get)
+    app.router.add_post("/v1/software/check", handle_software_check)
+    app.router.add_post("/v1/software/download", handle_software_download)
+    app.router.add_post("/v1/software/install", handle_software_install)
+    app.router.add_post("/v1/software/branch", handle_software_branch)
+    app.router.add_post("/v1/software/uninstall", handle_software_uninstall)
 
     # Model management
     app.router.add_get("/v1/models", handle_models_list)

@@ -1513,6 +1513,148 @@ _tile_download_thread = None
 
 PARAMS_DIR = "/data/params/d"
 
+# ─── Software update management ──────────────────────────────────────
+
+SOFTWARE_PARAMS = [
+    "GitBranch", "GitCommit", "GitCommitDate",
+    "UpdaterState", "UpdaterTargetBranch",
+    "UpdaterCurrentDescription", "UpdaterNewDescription",
+    "UpdaterCurrentReleaseNotes", "UpdaterNewReleaseNotes",
+    "UpdaterAvailableBranches",
+    "UpdateAvailable", "UpdaterFetchAvailable",
+    "LastUpdateTime", "UpdateFailedCount",
+    "IsTestedBranch",
+]
+
+_SOFTWARE_BOOL_PARAMS = {"UpdateAvailable", "UpdaterFetchAvailable", "IsTestedBranch"}
+_SOFTWARE_INT_PARAMS = {"UpdateFailedCount"}
+
+
+async def handle_software_get(request: web.Request) -> web.Response:
+    """GET /v1/software — read all software-related params."""
+    result = {}
+    for key in SOFTWARE_PARAMS:
+        path = f"{PARAMS_DIR}/{key}"
+        try:
+            with open(path, "r") as f:
+                raw = f.read().strip()
+        except FileNotFoundError:
+            raw = ""
+
+        if key in _SOFTWARE_BOOL_PARAMS:
+            result[key] = raw == "1"
+        elif key in _SOFTWARE_INT_PARAMS:
+            try:
+                result[key] = int(raw) if raw else 0
+            except ValueError:
+                result[key] = 0
+        elif key == "UpdaterAvailableBranches":
+            result[key] = [b for b in raw.split(",") if b] if raw else []
+        elif key == "GitCommitDate":
+            # Raw: "'1770870385 2026-02-12 12:26:25 +0800'" → "2026-02-12 12:26:25"
+            import re
+            m = re.search(r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})', raw)
+            result[key] = m.group(1) if m else raw.strip("'\" ")
+        else:
+            result[key] = raw
+    return web.json_response(result)
+
+
+async def handle_software_check(request: web.Request) -> web.Response:
+    """POST /v1/software/check — send SIGUSR1 to updater to trigger check."""
+    try:
+        subprocess.run(["pkill", "-SIGUSR1", "-f", "system.updated.updated"],
+                       capture_output=True, timeout=5)
+    except Exception as e:
+        logger.warning("Failed to signal updater for check: %s", e)
+    return web.json_response({"status": "checking"})
+
+
+async def handle_software_download(request: web.Request) -> web.Response:
+    """POST /v1/software/download — send SIGHUP to updater to trigger download."""
+    try:
+        subprocess.run(["pkill", "-SIGHUP", "-f", "system.updated.updated"],
+                       capture_output=True, timeout=5)
+    except Exception as e:
+        logger.warning("Failed to signal updater for download: %s", e)
+    return web.json_response({"status": "downloading"})
+
+
+async def handle_software_install(request: web.Request) -> web.Response:
+    """POST /v1/software/install — write DoReboot param to trigger reboot."""
+    try:
+        with open(f"{PARAMS_DIR}/DoReboot", "w") as f:
+            f.write("1")
+    except Exception as e:
+        logger.error("Failed to set DoReboot: %s", e)
+        return web.json_response({"error": str(e)}, status=500)
+    return web.json_response({"status": "rebooting"})
+
+
+async def handle_software_branch(request: web.Request) -> web.Response:
+    """POST /v1/software/branch — set UpdaterTargetBranch and trigger check."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise web.HTTPBadRequest(text=json.dumps({"error": "Invalid JSON body"}))
+
+    branch = body.get("branch", "").strip()
+    if not branch:
+        raise web.HTTPBadRequest(text=json.dumps({"error": "Missing branch name"}))
+
+    try:
+        with open(f"{PARAMS_DIR}/UpdaterTargetBranch", "w") as f:
+            f.write(branch)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+    # Trigger a check for the new branch
+    try:
+        subprocess.run(["pkill", "-SIGUSR1", "-f", "system.updated.updated"],
+                       capture_output=True, timeout=5)
+    except Exception:
+        pass
+
+    return web.json_response({"status": "ok", "branch": branch})
+
+
+async def handle_software_uninstall(request: web.Request) -> web.Response:
+    """POST /v1/software/uninstall — write DoUninstall param."""
+    try:
+        with open(f"{PARAMS_DIR}/DoUninstall", "w") as f:
+            f.write("1")
+    except Exception as e:
+        logger.error("Failed to set DoUninstall: %s", e)
+        return web.json_response({"error": str(e)}, status=500)
+    return web.json_response({"status": "uninstalling"})
+
+
+async def handle_lateral_delay(request: web.Request) -> web.Response:
+    """GET /v1/lateral-delay — read LiveDelay capnp param."""
+    path = f"{PARAMS_DIR}/LiveDelay"
+    try:
+        raw = open(path, "rb").read()
+    except FileNotFoundError:
+        return web.json_response({"status": "no data"})
+
+    try:
+        sys.path.insert(0, "/data/openpilot") if "/data/openpilot" not in sys.path else None
+        from cereal import log
+        with log.Event.from_bytes(raw) as msg:
+            ld = msg.liveDelay
+            return web.json_response({
+                "lateralDelay": round(ld.lateralDelay, 4),
+                "lateralDelayEstimate": round(ld.lateralDelayEstimate, 4),
+                "lateralDelayEstimateStd": round(ld.lateralDelayEstimateStd, 6),
+                "validBlocks": ld.validBlocks,
+                "status": str(ld.status),
+                "calPerc": ld.calPerc,
+            })
+    except Exception as e:
+        logger.warning("Failed to decode LiveDelay: %s", e)
+        return web.json_response({"error": str(e)}, status=500)
+
+
 BMW_PARAMS = {
     "DccCalibrationMode": {"type": "bool", "label": "DCC Calibration Mode"},
     "LaneCenteringCorrection": {"type": "bool", "label": "Lane Centering Correction"},

@@ -1,12 +1,15 @@
 <script>
   import { onMount } from 'svelte'
   import { Select } from 'bits-ui'
-  import { fetchParams, setParam, fetchModels, swapModel, checkModelUpdates, downloadModel } from '../api.js'
+  import { fetchParams, setParam, fetchModels, swapModel, checkModelUpdates, downloadModel,
+    fetchSoftware, softwareCheck, softwareDownload, softwareInstall, softwareBranch, softwareUninstall,
+    fetchLateralDelay } from '../api.js'
 
   let params = $state({})
   let loading = $state(true)
   let error = $state(null)
   let saving = $state(null) // key currently being saved
+  let latDelay = $state(null)
 
   // Model state
   let models = $state(null)
@@ -18,6 +21,13 @@
   let checking = $state(false)
   let downloading = $state(null) // model_id being downloaded
   let downloadPollTimer = $state(null)
+
+  // Software update state
+  let sw = $state(null)
+  let swLoading = $state(true)
+  let swError = $state(null)
+  let swPollTimer = $state(null)
+  let swExpanded = $state(false)
 
   const SECTIONS = [
     {
@@ -43,12 +53,14 @@
   onMount(async () => {
     try {
       params = await fetchParams()
+      fetchLateralDelay().then(d => { latDelay = d }).catch(() => {})
     } catch (e) {
       error = e.message
     } finally {
       loading = false
     }
     loadModels()
+    loadSoftware()
   })
 
   async function loadModels() {
@@ -65,6 +77,99 @@
     } finally {
       modelsLoading = false
     }
+  }
+
+  async function loadSoftware() {
+    swLoading = true
+    swError = null
+    try {
+      sw = await fetchSoftware()
+      if (sw.UpdaterState && sw.UpdaterState !== 'idle') {
+        startSwPoll()
+      }
+    } catch (e) {
+      swError = e.message
+    } finally {
+      swLoading = false
+    }
+  }
+
+  function startSwPoll() {
+    if (swPollTimer) return
+    swPollTimer = setInterval(async () => {
+      try {
+        sw = await fetchSoftware()
+        if (!sw.UpdaterState || sw.UpdaterState === 'idle') {
+          clearInterval(swPollTimer)
+          swPollTimer = null
+        }
+      } catch { /* ignore */ }
+    }, 2000)
+  }
+
+  async function handleSwCheck() {
+    swError = null
+    try {
+      await softwareCheck()
+      startSwPoll()
+    } catch (e) {
+      swError = e.message
+    }
+  }
+
+  async function handleSwDownload() {
+    swError = null
+    try {
+      await softwareDownload()
+      startSwPoll()
+    } catch (e) {
+      swError = e.message
+    }
+  }
+
+  async function handleSwInstall() {
+    if (!confirm('Install update and reboot?')) return
+    swError = null
+    try {
+      await softwareInstall()
+    } catch (e) {
+      swError = e.message
+    }
+  }
+
+  async function handleSwBranch(branch) {
+    if (!branch || branch === sw?.UpdaterTargetBranch) return
+    swError = null
+    try {
+      await softwareBranch(branch)
+      sw = { ...sw, UpdaterTargetBranch: branch }
+      startSwPoll()
+    } catch (e) {
+      swError = e.message
+    }
+  }
+
+  async function handleSwUninstall() {
+    if (!confirm('This will remove openpilot. Are you sure?')) return
+    if (!confirm('Really uninstall? This cannot be undone.')) return
+    swError = null
+    try {
+      await softwareUninstall()
+    } catch (e) {
+      swError = e.message
+    }
+  }
+
+  function lastCheckedAgo(lastTime) {
+    if (!lastTime) return ''
+    // Handle both ISO date strings and unix timestamps
+    const ms = typeof lastTime === 'number' ? lastTime * 1000 : Date.parse(lastTime)
+    if (isNaN(ms)) return ''
+    const secs = Math.floor((Date.now() - ms) / 1000)
+    if (secs < 60) return 'just now'
+    if (secs < 3600) return `${Math.floor(secs / 60)}m ago`
+    if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`
+    return `${Math.floor(secs / 86400)}d ago`
   }
 
   async function toggle(key) {
@@ -245,9 +350,159 @@
               </div>
             {/if}
           {/each}
+
+          <!-- Lateral Delay (Driving section only) -->
+          {#if section.title === 'Driving' && latDelay && !latDelay.error}
+            <div class="pt-3 border-t border-surface-700">
+              <div class="flex items-center justify-between">
+                <div>
+                  <div class="text-sm text-surface-100">Lateral Delay</div>
+                  <div class="text-xs text-surface-500 mt-0.5">Steering lag calibration</div>
+                </div>
+                <div class="text-right">
+                  {#if latDelay.status === 'estimated'}
+                    <div class="text-sm text-engage-green">{latDelay.lateralDelay.toFixed(3)}s</div>
+                  {:else if latDelay.status === 'no data'}
+                    <div class="text-sm text-surface-500">--</div>
+                  {:else}
+                    <div class="text-sm text-surface-300">{latDelay.lateralDelayEstimate.toFixed(3)}s</div>
+                  {/if}
+                  <div class="text-xs text-surface-500">{latDelay.calPerc ?? 0}%</div>
+                </div>
+              </div>
+            </div>
+          {/if}
         </div>
       </div>
     {/each}
+
+    <!-- Software Section -->
+    <div class="card p-4">
+      <h3 class="text-surface-400 text-xs font-semibold uppercase tracking-wider mb-4">Software</h3>
+
+      {#if swLoading}
+        <div class="space-y-3 animate-pulse">
+          <div class="h-4 bg-surface-700 rounded w-48"></div>
+          <div class="h-4 bg-surface-700 rounded w-32"></div>
+        </div>
+      {:else if swError}
+        <div class="text-engage-red text-sm mb-2">{swError}</div>
+        <button class="btn-ghost text-xs" onclick={() => { swError = null; loadSoftware() }}>Retry</button>
+      {:else if sw}
+        <!-- Summary (always visible) -->
+        <div class="text-sm text-surface-100">
+          {sw.UpdaterCurrentDescription || `${sw.GitBranch} / ${sw.GitCommit?.slice(0, 7) || '???'}`}
+        </div>
+
+        <!-- Updater status -->
+        {#if sw.UpdaterState && sw.UpdaterState !== 'idle'}
+          <div class="flex items-center gap-2 text-sm text-surface-300 mt-2">
+            <svg class="w-4 h-4 animate-spin text-engage-blue shrink-0" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-dasharray="32 32" />
+            </svg>
+            {sw.UpdaterState}...
+          </div>
+        {:else if sw.UpdateFailedCount > 0}
+          <div class="text-sm text-engage-red mt-2">Failed to check for update</div>
+        {:else if sw.UpdaterFetchAvailable}
+          <div class="mt-2">
+            <button class="btn-primary text-sm px-4 py-1.5" onclick={handleSwDownload}>Download</button>
+            <span class="text-xs text-surface-400 ml-2">update available</span>
+          </div>
+        {:else if sw.LastUpdateTime}
+          <div class="text-xs text-surface-500 mt-1">up to date, checked {lastCheckedAgo(sw.LastUpdateTime)}</div>
+        {/if}
+
+        <!-- Install Update card -->
+        {#if sw.UpdateAvailable}
+          <div class="rounded-lg border border-engage-blue/30 bg-engage-blue/5 p-3 mt-3">
+            <div class="text-xs text-surface-400 uppercase font-medium mb-1">Install Update</div>
+            <div class="text-sm text-surface-200 mb-2">
+              {sw.UpdaterNewDescription || 'New version ready'}
+            </div>
+            <button class="btn-primary text-sm px-4 py-1.5" onclick={handleSwInstall}>Install</button>
+          </div>
+        {/if}
+
+        <!-- Expand/collapse details -->
+        <button
+          class="text-xs text-surface-500 hover:text-surface-300 transition-colors mt-3"
+          onclick={() => { swExpanded = !swExpanded }}
+        >
+          {swExpanded ? 'Hide details' : 'Show details'}
+        </button>
+
+        {#if swExpanded}
+          <div class="mt-3 space-y-3">
+            <!-- Version details -->
+            <div class="text-xs text-surface-500 space-y-1">
+              <div>Branch: <span class="text-surface-300">{sw.GitBranch}</span></div>
+              <div>Commit: <span class="text-surface-300">{sw.GitCommit?.slice(0, 7) || '???'}</span></div>
+              {#if sw.GitCommitDate}
+                <div>Date: <span class="text-surface-300">{sw.GitCommitDate}</span></div>
+              {/if}
+            </div>
+
+            <!-- Branch selector (hidden if IsTestedBranch) -->
+            {#if !sw.IsTestedBranch && sw.UpdaterAvailableBranches?.length > 0}
+              <div>
+                <div class="text-xs text-surface-500 uppercase font-medium mb-2">Target Branch</div>
+                <Select.Root
+                  type="single"
+                  value={sw.UpdaterTargetBranch || sw.GitBranch}
+                  onValueChange={handleSwBranch}
+                  items={sw.UpdaterAvailableBranches.map(b => ({ value: b, label: b }))}
+                >
+                  <Select.Trigger
+                    class="w-full flex items-center justify-between rounded-lg px-3 py-2.5 bg-surface-700 border border-surface-600 hover:border-surface-500 transition-colors text-left"
+                  >
+                    <span class="text-sm text-surface-100 truncate">{sw.UpdaterTargetBranch || sw.GitBranch}</span>
+                    <svg class="w-4 h-4 text-surface-400 shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                      <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd" />
+                    </svg>
+                  </Select.Trigger>
+                  <Select.Content
+                    class="z-50 rounded-lg bg-surface-700 border border-surface-600 shadow-xl py-1 max-h-64 overflow-y-auto"
+                    sideOffset={4}
+                  >
+                    {#each sw.UpdaterAvailableBranches as branch}
+                      {@const isCurrent = branch === (sw.UpdaterTargetBranch || sw.GitBranch)}
+                      <Select.Item
+                        value={branch}
+                        label={branch}
+                        class="flex items-center gap-2 px-3 py-2 text-sm cursor-pointer transition-colors
+                          data-[highlighted]:bg-surface-600 data-[selected]:text-engage-blue"
+                      >
+                        {#if isCurrent}
+                          <div class="w-1.5 h-1.5 rounded-full bg-engage-blue shrink-0"></div>
+                        {/if}
+                        <span class="truncate">{branch}</span>
+                      </Select.Item>
+                    {/each}
+                  </Select.Content>
+                </Select.Root>
+              </div>
+            {/if}
+
+            <!-- Action buttons (2 columns) -->
+            <div class="pt-3 border-t border-surface-700 grid grid-cols-2 gap-2">
+              <button
+                class="btn-ghost text-sm justify-center py-2"
+                onclick={handleSwCheck}
+              >
+                Update
+              </button>
+              <button
+                class="text-sm py-2 rounded-lg text-engage-red/80 hover:text-engage-red hover:bg-engage-red/5 transition-colors"
+                onclick={handleSwUninstall}
+              >
+                Uninstall
+              </button>
+            </div>
+          </div>
+        {/if}
+      {/if}
+    </div>
 
     <!-- Models Section -->
     <div class="card p-4">
