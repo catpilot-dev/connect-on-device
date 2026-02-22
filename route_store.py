@@ -36,11 +36,12 @@ _NOMINATIM_HEADERS = {"User-Agent": "connect-on-device/1.0"}
 _last_geocode_time = 0.0
 
 
-def _reverse_geocode(lat: float, lng: float) -> str | None:
+def _reverse_geocode(lat: float, lng: float) -> tuple[str | None, bool]:
     """Reverse geocode lat/lng to a short road/place name via Nominatim.
 
-    Returns a string like "Zhongshan Rd" or "Huaihai Middle Rd".
-    Respects Nominatim rate limit (1 req/sec). Returns None on failure.
+    Returns (name, is_road) where is_road is True if the result is a
+    road/neighbourhood-level name (not just a city).
+    Respects Nominatim rate limit (1 req/sec).
     """
     global _last_geocode_time
     # Rate limit: 1 request per second
@@ -55,16 +56,22 @@ def _reverse_geocode(lat: float, lng: float) -> str | None:
             _last_geocode_time = time.time()
             data = json.loads(resp.read())
             addr = data.get("address", {})
-            # Prefer road name, fall back to neighbourhood/suburb/town
-            return (addr.get("road")
+            # Road-level names (specific enough for a route address)
+            road = (addr.get("road")
                     or addr.get("neighbourhood")
-                    or addr.get("suburb")
-                    or addr.get("town")
-                    or addr.get("city"))
+                    or addr.get("suburb"))
+            if road:
+                return road, True
+            # Vague fallbacks (town/city level — only used as last resort)
+            vague = (addr.get("town")
+                     or addr.get("city")
+                     or addr.get("locality")
+                     or addr.get("village"))
+            return vague, False
     except Exception as e:
         _last_geocode_time = time.time()
         logger.debug("Reverse geocode failed for %.5f,%.5f: %s", lat, lng, e)
-        return None
+        return None, False
 
 
 def _route_counter(local_id: str) -> int:
@@ -538,10 +545,69 @@ class RouteStore:
 
         return entry
 
+    @staticmethod
+    def _load_coords(seg_path: str) -> list:
+        """Load cached coords.json for a segment, or empty list."""
+        coords_path = Path(seg_path) / "coords.json"
+        if coords_path.exists():
+            try:
+                with open(coords_path) as f:
+                    data = json.load(f)
+                if data and len(data) > 0:
+                    return data
+            except Exception:
+                pass
+        return []
+
+    def _geocode_start(self, info: dict) -> str | None:
+        """Find the first road-level address for a route.
+
+        Scans early segments' coords.json for GPS positions that resolve
+        to an actual road name in Nominatim. Skips vague city-level results.
+        """
+        sorted_segs = sorted(info["segments"], key=lambda s: s["number"])
+        for seg in sorted_segs[:5]:
+            coords = self._load_coords(seg["path"])
+            if not coords:
+                continue
+            # Try first coord, then a point ~10s in (more likely on a road)
+            candidates = [coords[0]]
+            if len(coords) > 100:
+                candidates.append(coords[100])  # ~10s at 10Hz
+            for c in candidates:
+                name, is_road = _reverse_geocode(c["lat"], c["lng"])
+                if name and is_road:
+                    return name
+            # First segment with coords but no road — keep trying next segment
+        return None
+
+    def _geocode_end(self, info: dict) -> str | None:
+        """Find the last road-level address for a route.
+
+        Scans late segments' coords.json backwards for GPS positions that
+        resolve to an actual road name. Skips vague results from parking areas.
+        """
+        sorted_segs = sorted(info["segments"], key=lambda s: s["number"], reverse=True)
+        for seg in sorted_segs[:5]:
+            coords = self._load_coords(seg["path"])
+            if not coords:
+                continue
+            # Try last coord, then a point ~10s before end
+            candidates = [coords[-1]]
+            if len(coords) > 100:
+                candidates.append(coords[-100])  # ~10s before end
+            for c in candidates:
+                name, is_road = _reverse_geocode(c["lat"], c["lng"])
+                if name and is_road:
+                    return name
+            # This segment's GPS doesn't resolve to a road — try earlier segment
+        return None
+
     def geocode_route(self, local_id: str) -> bool:
         """Reverse-geocode start and end locations for a route.
 
-        Gets end GPS from last segment's rlog (last fixed GPS position).
+        Scans coords.json for GPS positions that resolve to actual road names,
+        skipping vague city-level results from parking lots or unmapped areas.
         Returns True if metadata was updated.
         """
         meta = self._metadata.get(local_id)
@@ -553,29 +619,21 @@ class RouteStore:
             return False
 
         updated = False
-        if meta.get("start_address") is None:
-            gps = meta.get("gps_coordinates")
-            if gps and len(gps) == 2 and gps[0] and gps[1]:
-                addr = _reverse_geocode(gps[0], gps[1])
-                if addr:
-                    meta["start_address"] = addr
-                    updated = True
-
-        # Find end GPS from last segment's rlog
         info = self._raw.get(local_id)
-        if info and meta.get("end_address") is None:
-            sorted_segs = sorted(info["segments"], key=lambda s: s["number"], reverse=True)
-            for seg in sorted_segs[:3]:
-                rlog = self._find_rlog(seg["path"])
-                if not rlog:
-                    continue
-                end_gps = _find_last_gps(rlog)
-                if end_gps:
-                    addr = _reverse_geocode(end_gps[0], end_gps[1])
-                    if addr:
-                        meta["end_address"] = addr
-                        updated = True
-                    break
+        if not info:
+            return False
+
+        if meta.get("start_address") is None:
+            addr = self._geocode_start(info)
+            if addr:
+                meta["start_address"] = addr
+                updated = True
+
+        if meta.get("end_address") is None:
+            addr = self._geocode_end(info)
+            if addr:
+                meta["end_address"] = addr
+                updated = True
 
         if updated:
             self._rebuild_routes()
@@ -728,11 +786,25 @@ class RouteStore:
 
     def get_route(self, fullname: str) -> dict | None:
         self.scan()
-        return self._routes.get(fullname)
+        route = self._routes.get(fullname)
+        if not route:
+            # Fallback: try lookup by local_id (e.g. 0000011d--258ef95d84)
+            fn = self._local_id_map.get(fullname)
+            if fn:
+                route = self._routes.get(fn)
+        return route
 
     def get_local_id(self, fullname: str) -> str | None:
         self.scan()
-        return self._fullname_map.get(fullname)
+        lid = self._fullname_map.get(fullname)
+        if not lid and fullname in self._local_id_map:
+            lid = fullname  # Already a local_id
+        return lid
+
+    def get_route_by_local_id(self, local_id: str) -> dict | None:
+        self.scan()
+        fullname = self._local_id_map.get(local_id)
+        return self._routes.get(fullname) if fullname else None
 
     def hide_route(self, local_id: str):
         """Mark a route as hidden (soft-delete). Hidden from listings, deleted on low space."""
