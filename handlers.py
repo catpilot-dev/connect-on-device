@@ -26,6 +26,7 @@ from rlog_parser import _generate_coords_json, _generate_events_json, extract_hu
 from route_helpers import _base_url, _clean_route, _resolve_local_id, _route_bookmarks, _route_engagement, _set_route_url
 from route_store import _route_counter
 from storage_management import DOWNLOAD_FILES, build_download_tar, get_storage_info
+import tile_manager
 
 logger = logging.getLogger("connect")
 
@@ -325,7 +326,6 @@ async def handle_route_get(request: web.Request) -> web.Response:
     route_name = request.match_info["routeName"].replace("|", "/")
     store = request.app["store"]
     route = store.get_route(route_name)
-
     if not route:
         raise web.HTTPNotFound(text=json.dumps({"error": f"Route {route_name} not found"}))
 
@@ -443,6 +443,45 @@ async def handle_route_files(request: web.Request) -> web.Response:
         "qcameras": qcameras,
         "qlogs": qlogs,
     })
+
+
+async def handle_route_manifest(request: web.Request) -> web.Response:
+    """GET /v1/route/{routeName}/manifest.m3u8 — HLS manifest for qcamera segments"""
+    route_name = request.match_info["routeName"].replace("|", "/")
+    store = request.app["store"]
+    route = store.get_route(route_name)
+
+    if not route:
+        raise web.HTTPNotFound(text=json.dumps({"error": f"Route {route_name} not found"}))
+
+    dongle_id = route["dongle_id"]
+    route_date = route["fullname"].split("/")[-1]
+    max_seg = route["maxqlog"]
+    seg_set = {s["number"]: s for s in route["_segments"]}
+
+    lines = [
+        "#EXTM3U",
+        "#EXT-X-VERSION:3",
+        "#EXT-X-TARGETDURATION:61",
+        "#EXT-X-MEDIA-SEQUENCE:0",
+        "#EXT-X-PLAYLIST-TYPE:VOD",
+    ]
+    for i in range(max_seg + 1):
+        seg = seg_set.get(i)
+        if i > 0:
+            # Each segment has independent PTS timestamps
+            lines.append("#EXT-X-DISCONTINUITY")
+        if seg and "qcamera.ts" in seg["files"]:
+            lines.append("#EXTINF:60.0,")
+            lines.append(f"/connectdata/{dongle_id}/{route_date}/{i}/qcamera.ts")
+        else:
+            lines.extend(["#EXT-X-GAP", "#EXTINF:60.0,", "gap"])
+    lines.append("#EXT-X-ENDLIST")
+
+    return web.Response(
+        text="\n".join(lines),
+        content_type="application/vnd.apple.mpegurl",
+    )
 
 
 async def handle_share_signature(request: web.Request) -> web.Response:
@@ -1465,7 +1504,339 @@ async def handle_hud_ws(request: web.Request) -> web.StreamResponse:
     return ws
 
 
+# ─── OSM tile management ──────────────────────────────────────────────
+
+_tile_download_thread = None
+
+
+# ─── BMW params ──────────────────────────────────────────────────────
+
+PARAMS_DIR = "/data/params/d"
+
+BMW_PARAMS = {
+    "DccCalibrationMode": {"type": "bool", "label": "DCC Calibration Mode"},
+    "LaneCenteringCorrection": {"type": "bool", "label": "Lane Centering Correction"},
+    "MapdSpeedLimitControlEnabled": {"type": "bool", "label": "Map Speed Limit Control"},
+    "MapdSpeedLimitOffsetPercent": {"type": "int", "label": "Speed Limit Offset %"},
+}
+
+
+async def handle_params_get(request: web.Request) -> web.Response:
+    """GET /v1/params — read all BMW params from /data/params/d/"""
+    result = {}
+    for key, meta in BMW_PARAMS.items():
+        path = f"{PARAMS_DIR}/{key}"
+        try:
+            with open(path, "r") as f:
+                raw = f.read().strip()
+            if meta["type"] == "bool":
+                result[key] = raw == "1"
+            elif meta["type"] == "int":
+                result[key] = int(raw) if raw else 0
+            else:
+                result[key] = raw
+        except FileNotFoundError:
+            result[key] = False if meta["type"] == "bool" else 0
+    return web.json_response(result)
+
+
+async def handle_params_set(request: web.Request) -> web.Response:
+    """POST /v1/params — set a single param {key, value}"""
+    body = await request.json()
+    key = body.get("key")
+    value = body.get("value")
+    if key not in BMW_PARAMS:
+        raise web.HTTPBadRequest(text=json.dumps({"error": f"Unknown param: {key}"}))
+    meta = BMW_PARAMS[key]
+    if meta["type"] == "bool":
+        raw = "1" if value else "0"
+    else:
+        raw = str(int(value))
+    with open(f"{PARAMS_DIR}/{key}", "w") as f:
+        f.write(raw)
+    return web.json_response({"status": "ok", "key": key, "value": value})
+
+
+async def handle_tile_list(request: web.Request) -> web.Response:
+    """GET /v1/mapd/tiles — list downloaded tiles with storage info."""
+    loop = asyncio.get_event_loop()
+    tiles = await loop.run_in_executor(None, tile_manager.get_downloaded_tiles)
+    storage = await loop.run_in_executor(None, tile_manager.get_storage_info)
+    return web.json_response({"tiles": tiles, "storage": storage})
+
+
+async def handle_tile_download(request: web.Request) -> web.Response:
+    """POST /v1/mapd/tiles/download — start downloading tiles in background."""
+    global _tile_download_thread
+
+    progress = tile_manager.get_progress()
+    if progress["active"]:
+        return web.json_response({"error": "Download already in progress"}, status=409)
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise web.HTTPBadRequest(text=json.dumps({"error": "Invalid JSON body"}))
+
+    tiles = body.get("tiles", [])
+    if not tiles:
+        raise web.HTTPBadRequest(text=json.dumps({"error": "No tiles specified"}))
+
+    # Validate tile coordinates
+    for t in tiles:
+        if "lat" not in t or "lon" not in t:
+            raise web.HTTPBadRequest(text=json.dumps({"error": "Each tile must have lat and lon"}))
+
+    import threading
+    _tile_download_thread = threading.Thread(
+        target=tile_manager.download_tiles,
+        args=(tiles,),
+        daemon=True,
+    )
+    _tile_download_thread.start()
+
+    return web.json_response({"status": "started", "total": len(tiles)})
+
+
+async def handle_tile_progress(request: web.Request) -> web.Response:
+    """GET /v1/mapd/tiles/progress — poll download progress."""
+    return web.json_response(tile_manager.get_progress())
+
+
+async def handle_tile_cancel(request: web.Request) -> web.Response:
+    """POST /v1/mapd/tiles/cancel — cancel active download."""
+    tile_manager.cancel_download()
+    return web.json_response({"status": "cancelling"})
+
+
+async def handle_tile_delete(request: web.Request) -> web.Response:
+    """DELETE /v1/mapd/tiles/{lat}/{lon} — delete a downloaded tile."""
+    try:
+        lat = int(request.match_info["lat"])
+        lon = int(request.match_info["lon"])
+    except (ValueError, KeyError):
+        raise web.HTTPBadRequest(text=json.dumps({"error": "Invalid lat/lon"}))
+
+    loop = asyncio.get_event_loop()
+    deleted = await loop.run_in_executor(None, tile_manager.delete_tile, lat, lon)
+    if not deleted:
+        raise web.HTTPNotFound(text=json.dumps({"error": f"Tile {lat},{lon} not found"}))
+
+    return web.json_response({"status": "deleted", "lat": lat, "lon": lon})
+
+
 # ─── SPA serving ──────────────────────────────────────────────────────
+
+# ─── Model management ─────────────────────────────────────────────────
+
+MODELS_BASE = Path("/data/models")
+SWAPPER_SCRIPT = Path(__file__).parent / "model_swapper.py"
+DOWNLOAD_SCRIPT = Path(__file__).parent / "download_openpilot_models.py"
+
+_model_download_task = None  # track background download {proc, model_id, type, status}
+
+
+def _read_model_info(model_dir: Path) -> dict | None:
+    """Read model_info.json from a model directory."""
+    info_file = model_dir / "model_info.json"
+    if info_file.exists():
+        try:
+            return json.loads(info_file.read_text())
+        except Exception:
+            return None
+    return None
+
+
+def _list_installed_models(model_type: str) -> list[dict]:
+    """List installed models of given type by reading filesystem directly."""
+    type_dir = MODELS_BASE / model_type
+    if not type_dir.is_dir():
+        return []
+
+    models = []
+    for d in sorted(type_dir.iterdir()):
+        if not d.is_dir():
+            continue
+        info = _read_model_info(d)
+        name = info.get("name", d.name) if info else d.name
+        date = info.get("date", "") if info else ""
+
+        # Check for ONNX and PKL files
+        onnx_files = list(d.glob("*.onnx"))
+        pkl_files = list(d.glob("*.pkl"))
+
+        models.append({
+            "id": d.name,
+            "name": name,
+            "date": date,
+            "has_onnx": len(onnx_files) > 0,
+            "has_pkl": len(pkl_files) > 0,
+            "onnx_count": len(onnx_files),
+            "pkl_count": len(pkl_files),
+        })
+
+    return models
+
+
+async def handle_models_list(request: web.Request) -> web.Response:
+    """GET /v1/models — list installed models and active model IDs."""
+    loop = asyncio.get_event_loop()
+    driving = await loop.run_in_executor(None, _list_installed_models, "driving")
+    dm = await loop.run_in_executor(None, _list_installed_models, "dm")
+
+    # Read active model IDs
+    active_driving = ""
+    active_dm = ""
+    try:
+        active_driving = (MODELS_BASE / "active_driving_model").read_text().strip()
+    except Exception:
+        pass
+    try:
+        active_dm = (MODELS_BASE / "active_dm_model").read_text().strip()
+    except Exception:
+        pass
+
+    # Include download task status if active
+    download_status = None
+    global _model_download_task
+    if _model_download_task:
+        proc = _model_download_task.get("proc")
+        if proc and proc.poll() is None:
+            download_status = {
+                "model_id": _model_download_task["model_id"],
+                "type": _model_download_task["type"],
+                "status": "downloading",
+            }
+        elif proc:
+            download_status = {
+                "model_id": _model_download_task["model_id"],
+                "type": _model_download_task["type"],
+                "status": "complete" if proc.returncode == 0 else "error",
+            }
+
+    return web.json_response({
+        "driving": driving,
+        "dm": dm,
+        "active_driving": active_driving,
+        "active_dm": active_dm,
+        "download": download_status,
+    })
+
+
+async def handle_models_swap(request: web.Request) -> web.Response:
+    """POST /v1/models/swap — swap active model via model_swapper.py."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise web.HTTPBadRequest(text=json.dumps({"error": "Invalid JSON"}))
+
+    model_type = body.get("type")
+    model_id = body.get("model_id")
+    if model_type not in ("driving", "dm") or not model_id:
+        raise web.HTTPBadRequest(text=json.dumps({"error": "Need type (driving|dm) and model_id"}))
+
+    if not SWAPPER_SCRIPT.exists():
+        raise web.HTTPServiceUnavailable(text=json.dumps({"error": "model_swapper.py not found"}))
+
+    loop = asyncio.get_event_loop()
+    try:
+        result = await loop.run_in_executor(None, lambda: subprocess.run(
+            [PYTHON_BIN, str(SWAPPER_SCRIPT), "--type", model_type, "swap", model_id],
+            capture_output=True, text=True, timeout=60,
+        ))
+    except subprocess.TimeoutExpired:
+        raise web.HTTPGatewayTimeout(text=json.dumps({"error": "Swap timed out"}))
+
+    if result.returncode != 0:
+        error_msg = result.stderr.strip() or result.stdout.strip() or "Swap failed"
+        return web.json_response({"error": error_msg}, status=500)
+
+    # Parse JSON output from swap command
+    try:
+        swap_result = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        swap_result = {"output": result.stdout.strip(), "status": "ok"}
+
+    return web.json_response(swap_result)
+
+
+async def handle_models_check_updates(request: web.Request) -> web.Response:
+    """POST /v1/models/check-updates — update registry then check for new models."""
+    if not DOWNLOAD_SCRIPT.exists():
+        raise web.HTTPServiceUnavailable(
+            text=json.dumps({"error": "download_openpilot_models.py not found"}))
+
+    loop = asyncio.get_event_loop()
+
+    # Step 1: update registry from GitHub
+    try:
+        await loop.run_in_executor(None, lambda: subprocess.run(
+            [PYTHON_BIN, str(DOWNLOAD_SCRIPT), "update-registry"],
+            capture_output=True, text=True, timeout=120,
+        ))
+    except subprocess.TimeoutExpired:
+        logger.warning("Registry update timed out, continuing with existing registry")
+
+    # Step 2: check for available (not installed) models
+    try:
+        result = await loop.run_in_executor(None, lambda: subprocess.run(
+            [PYTHON_BIN, str(DOWNLOAD_SCRIPT), "check-updates"],
+            capture_output=True, text=True, timeout=30,
+        ))
+    except subprocess.TimeoutExpired:
+        raise web.HTTPGatewayTimeout(text=json.dumps({"error": "Check updates timed out"}))
+
+    if result.returncode != 0:
+        return web.json_response({"error": result.stderr.strip() or "Check failed"}, status=500)
+
+    try:
+        updates = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        updates = {"driving": [], "dm": [], "total": 0}
+
+    return web.json_response(updates)
+
+
+async def handle_models_download(request: web.Request) -> web.Response:
+    """POST /v1/models/download — start downloading a model in background."""
+    global _model_download_task
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise web.HTTPBadRequest(text=json.dumps({"error": "Invalid JSON"}))
+
+    model_type = body.get("type")
+    model_id = body.get("model_id")
+    if model_type not in ("driving", "dm") or not model_id:
+        raise web.HTTPBadRequest(text=json.dumps({"error": "Need type (driving|dm) and model_id"}))
+
+    if not DOWNLOAD_SCRIPT.exists():
+        raise web.HTTPServiceUnavailable(
+            text=json.dumps({"error": "download_openpilot_models.py not found"}))
+
+    # Check if already downloading
+    if _model_download_task:
+        proc = _model_download_task.get("proc")
+        if proc and proc.poll() is None:
+            return web.json_response({
+                "error": f"Already downloading {_model_download_task['model_id']}",
+            }, status=409)
+
+    # Launch download as background subprocess
+    proc = subprocess.Popen(
+        [PYTHON_BIN, str(DOWNLOAD_SCRIPT), "download", "--type", model_type, model_id],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+
+    _model_download_task = {
+        "proc": proc,
+        "model_id": model_id,
+        "type": model_type,
+    }
+
+    return web.json_response({"status": "downloading", "model_id": model_id, "type": model_type})
+
 
 async def handle_spa(request: web.Request) -> web.Response:
     """Serve static files if they exist, otherwise the React SPA index.html."""

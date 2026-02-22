@@ -254,3 +254,91 @@ export async function fetchAllEventsWithProgress(route, onProgress) {
   )
   return results.flat()
 }
+
+// ── BMW params ─────────────────────────────────────────────
+
+export async function fetchParams() {
+  const res = await fetch('/v1/params')
+  if (!res.ok) throw new Error(`fetchParams: ${res.status}`)
+  return res.json()
+}
+
+export async function setParam(key, value) {
+  const res = await fetch('/v1/params', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key, value }),
+  })
+  if (!res.ok) throw new Error(`setParam: ${res.status}`)
+  return res.json()
+}
+
+// ── Model management ──────────────────────────────────────
+
+export async function fetchModels() {
+  const res = await fetch('/v1/models')
+  if (!res.ok) throw new Error(`fetchModels: ${res.status}`)
+  return res.json()
+}
+
+export async function swapModel(type, modelId) {
+  const res = await fetch('/v1/models/swap', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type, model_id: modelId }),
+  })
+  if (!res.ok) throw new Error(`swapModel: ${res.status}`)
+  return res.json()
+}
+
+export async function checkModelUpdates() {
+  const res = await fetch('/v1/models/check-updates', { method: 'POST' })
+  if (!res.ok) throw new Error(`checkModelUpdates: ${res.status}`)
+  return res.json()
+}
+
+export async function downloadModel(type, modelId) {
+  const res = await fetch('/v1/models/download', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type, model_id: modelId }),
+  })
+  if (!res.ok) throw new Error(`downloadModel: ${res.status}`)
+  return res.json()
+}
+
+// ── OSM tile management ────────────────────────────────────
+
+export async function fetchTileList() {
+  const res = await fetch('/v1/mapd/tiles')
+  if (!res.ok) throw new Error(`fetchTileList: ${res.status}`)
+  return res.json()
+}
+
+export async function startTileDownload(tiles) {
+  const res = await fetch('/v1/mapd/tiles/download', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tiles }),
+  })
+  if (!res.ok) throw new Error(`startTileDownload: ${res.status}`)
+  return res.json()
+}
+
+export async function fetchTileProgress() {
+  const res = await fetch('/v1/mapd/tiles/progress')
+  if (!res.ok) throw new Error(`fetchTileProgress: ${res.status}`)
+  return res.json()
+}
+
+export async function cancelTileDownload() {
+  const res = await fetch('/v1/mapd/tiles/cancel', { method: 'POST' })
+  if (!res.ok) throw new Error(`cancelTileDownload: ${res.status}`)
+  return res.json()
+}
+
+export async function deleteTile(lat, lon) {
+  const res = await fetch(`/v1/mapd/tiles/${lat}/${lon}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`deleteTile: ${res.status}`)
+  return res.json()
+}

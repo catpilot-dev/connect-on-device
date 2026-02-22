@@ -35,12 +35,19 @@ from handlers import (
     handle_hud_video,
     handle_hud_ws,
     handle_me,
+    handle_models_check_updates,
+    handle_models_download,
+    handle_models_list,
+    handle_models_swap,
+    handle_params_get,
+    handle_params_set,
     handle_preserved_routes,
     handle_route_delete,
     handle_route_download,
     handle_route_enrich,
     handle_route_files,
     handle_route_get,
+    handle_route_manifest,
     handle_route_note,
     handle_route_preserve,
     handle_route_unpreserve,
@@ -53,6 +60,11 @@ from handlers import (
     handle_storage,
     handle_stub_empty_array,
     handle_stub_error,
+    handle_tile_cancel,
+    handle_tile_delete,
+    handle_tile_download,
+    handle_tile_list,
+    handle_tile_progress,
     handle_webrtc,
 )
 from hud_stream import HudStreamManager, is_available as hud_stream_available
@@ -117,6 +129,7 @@ def create_app(data_dir: str, static_dir: str) -> web.Application:
     app.router.add_get("/v1/route/{routeName}/", handle_route_get)
     app.router.add_delete("/v1/route/{routeName}/", handle_route_delete)
     app.router.add_get("/v1/route/{routeName}/files", handle_route_files)
+    app.router.add_get("/v1/route/{routeName}/manifest.m3u8", handle_route_manifest)
     app.router.add_get("/v1/route/{routeName}/share_signature", handle_share_signature)
     app.router.add_post("/v1/route/{routeName}/note", handle_route_note)
     app.router.add_post("/v1/route/{routeName}/preserve", handle_route_preserve)
@@ -150,6 +163,23 @@ def create_app(data_dir: str, static_dir: str) -> web.Application:
     app.router.add_get("/v1/prime/subscribe_info", handle_stub_error)
     app.router.add_get("/v1/storage", handle_storage)
     app.router.add_get("/health", lambda r: web.json_response({"status": "ok"}))
+
+    # BMW params
+    app.router.add_get("/v1/params", handle_params_get)
+    app.router.add_post("/v1/params", handle_params_set)
+
+    # Model management
+    app.router.add_get("/v1/models", handle_models_list)
+    app.router.add_post("/v1/models/swap", handle_models_swap)
+    app.router.add_post("/v1/models/check-updates", handle_models_check_updates)
+    app.router.add_post("/v1/models/download", handle_models_download)
+
+    # OSM tile management (mapd offline data)
+    app.router.add_get("/v1/mapd/tiles", handle_tile_list)
+    app.router.add_post("/v1/mapd/tiles/download", handle_tile_download)
+    app.router.add_get("/v1/mapd/tiles/progress", handle_tile_progress)
+    app.router.add_post("/v1/mapd/tiles/cancel", handle_tile_cancel)
+    app.router.add_delete("/v1/mapd/tiles/{lat}/{lon}", handle_tile_delete)
 
     # WebRTC signaling proxy (to local webrtcd on port 5001)
     app.router.add_post("/api/webrtc", handle_webrtc)
