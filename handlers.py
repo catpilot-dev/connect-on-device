@@ -1776,6 +1776,7 @@ BMW_PARAMS = {
     "MapdSpeedLimitControlEnabled": {"type": "bool", "label": "Map Speed Limit Control"},
     "MapdSpeedLimitOffsetPercent": {"type": "int", "label": "Speed Limit Offset %"},
     "MapdCurveTargetLatAccel": {"type": "int", "label": "Curve Target Lat Accel"},
+    "MapdVersion": {"type": "str", "label": "Mapd Version"},
 }
 
 MAPD_PARAM_KEYS = {"MapdSpeedLimitControlEnabled", "MapdSpeedLimitOffsetPercent", "MapdCurveTargetLatAccel"}
@@ -1921,6 +1922,82 @@ async def handle_tile_delete(request: web.Request) -> web.Response:
         raise web.HTTPNotFound(text=json.dumps({"error": f"Tile {lat},{lon} not found"}))
 
     return web.json_response({"status": "deleted", "lat": lat, "lon": lon})
+
+
+# ─── Mapd binary update ──────────────────────────────────────────────
+
+MAPD_MANAGER = OPENPILOT_DIR / "selfdrive" / "mapd" / "mapd_manager.py"
+
+
+async def handle_mapd_check_update(request: web.Request) -> web.Response:
+    """POST /v1/mapd/check-update — check for mapd binary updates via mapd_manager.py."""
+    loop = asyncio.get_event_loop()
+    try:
+        proc = await asyncio.wait_for(
+            asyncio.create_subprocess_exec(
+                PYTHON_BIN, str(MAPD_MANAGER), "check",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            ),
+            timeout=30,
+        )
+        stdout, stderr = await proc.communicate()
+        output = stdout.decode().strip()
+
+        if "UP_TO_DATE:" in output:
+            # "UP_TO_DATE: v2.0.6"
+            version = output.split("UP_TO_DATE:")[-1].strip()
+            return web.json_response({
+                "current": version, "latest": version, "update_available": False,
+            })
+        elif "UPDATE_AVAILABLE:" in output:
+            # "UPDATE_AVAILABLE: v2.0.6 -> v2.1.0"
+            parts = output.split("UPDATE_AVAILABLE:")[-1].strip()
+            current, latest = [p.strip() for p in parts.split("->")]
+            return web.json_response({
+                "current": current, "latest": latest, "update_available": True,
+            })
+        else:
+            return web.json_response(
+                {"error": stderr.decode().strip() or output or "Unknown check output"},
+                status=500,
+            )
+    except asyncio.TimeoutError:
+        return web.json_response({"error": "Check timed out"}, status=504)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_mapd_update(request: web.Request) -> web.Response:
+    """POST /v1/mapd/update — download and install mapd binary update."""
+    try:
+        proc = await asyncio.wait_for(
+            asyncio.create_subprocess_exec(
+                PYTHON_BIN, str(MAPD_MANAGER), "update",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            ),
+            timeout=120,
+        )
+        stdout, stderr = await proc.communicate()
+        output = stdout.decode().strip()
+
+        if proc.returncode == 0:
+            # Read updated version from param
+            try:
+                version = open(f"{PARAMS_DIR}/MapdVersion").read().strip()
+            except FileNotFoundError:
+                version = None
+            return web.json_response({"status": "ok", "version": version})
+        else:
+            return web.json_response(
+                {"error": stderr.decode().strip() or output or "Update failed"},
+                status=500,
+            )
+    except asyncio.TimeoutError:
+        return web.json_response({"error": "Update timed out (120s)"}, status=504)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
 
 
 # ─── SPA serving ──────────────────────────────────────────────────────

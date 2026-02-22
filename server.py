@@ -42,6 +42,12 @@ from handlers import (
     handle_params_get,
     handle_params_set,
     handle_lateral_delay,
+    handle_device_info,
+    handle_device_reboot,
+    handle_device_poweroff,
+    handle_device_language,
+    handle_toggles_get,
+    handle_toggles_set,
     handle_software_get,
     handle_software_check,
     handle_software_download,
@@ -72,6 +78,8 @@ from handlers import (
     handle_tile_download,
     handle_tile_list,
     handle_tile_progress,
+    handle_mapd_check_update,
+    handle_mapd_update,
     handle_webrtc,
 )
 from hud_stream import HudStreamManager, is_available as hud_stream_available
@@ -176,6 +184,16 @@ def create_app(data_dir: str, static_dir: str) -> web.Application:
     app.router.add_post("/v1/params", handle_params_set)
     app.router.add_get("/v1/lateral-delay", handle_lateral_delay)
 
+    # Device panel
+    app.router.add_get("/v1/device", handle_device_info)
+    app.router.add_post("/v1/device/reboot", handle_device_reboot)
+    app.router.add_post("/v1/device/poweroff", handle_device_poweroff)
+    app.router.add_post("/v1/device/language", handle_device_language)
+
+    # Toggles panel
+    app.router.add_get("/v1/toggles", handle_toggles_get)
+    app.router.add_post("/v1/toggles", handle_toggles_set)
+
     # Software update management
     app.router.add_get("/v1/software", handle_software_get)
     app.router.add_post("/v1/software/check", handle_software_check)
@@ -196,6 +214,10 @@ def create_app(data_dir: str, static_dir: str) -> web.Application:
     app.router.add_get("/v1/mapd/tiles/progress", handle_tile_progress)
     app.router.add_post("/v1/mapd/tiles/cancel", handle_tile_cancel)
     app.router.add_delete("/v1/mapd/tiles/{lat}/{lon}", handle_tile_delete)
+
+    # Mapd binary update
+    app.router.add_post("/v1/mapd/check-update", handle_mapd_check_update)
+    app.router.add_post("/v1/mapd/update", handle_mapd_update)
 
     # WebRTC signaling proxy (to local webrtcd on port 5001)
     app.router.add_post("/api/webrtc", handle_webrtc)

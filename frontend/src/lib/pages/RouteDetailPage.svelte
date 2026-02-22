@@ -2,13 +2,15 @@
   import { onMount, onDestroy } from 'svelte'
   import { selectedRoute, dongleId } from '../stores.js'
   import { fetchRoute, fetchRouteFiles, fetchAllCoords, fetchAllEventsWithProgress, enrichRoute, startHudStream, stopHudStream, hudStreamStatus, hudStreamUrl, prerenderHud, hudProgress, hudVideoUrl, cancelHudRender, saveNote, takeScreenshot } from '../api.js'
-  import { formatDate, formatTime, formatDistance, formatDuration, getRouteDurationMs } from '../format.js'
+  import { formatDate, formatDistance, formatDuration, getRouteDurationMs, formatAbsoluteTimeHM } from '../format.js'
   import { buildTimelineEvents } from '../derived.js'
   import snarkdown from 'snarkdown'
   import VideoPlayer from '../components/VideoPlayer.svelte'
+  import VideoTimeline from '../components/VideoTimeline.svelte'
   import VideoControls from '../components/VideoControls.svelte'
   import RouteMap from '../components/RouteMap.svelte'
   import RouteActions from '../components/RouteActions.svelte'
+  import { Tabs } from 'bits-ui'
 
   let route = $state(null)
   let files = $state(null)
@@ -62,12 +64,38 @@
   const dlEstimatedRenderSec = $derived(Math.round(dlDurationSec / DL_RECORD_SPEED + 30))
 
   let screenshotBusy = $state(false)
+  let isMuted = $state(true)
 
   let noteText = $state('')
   let editingNote = $state(false)
 
-  let selectionStart = $state(0)
-  let selectionEnd = $state(0)
+  // Restore selection from URL path: /{dongleId}/{localId}/{start}/{end}
+  const _urlParts = location.pathname.split('/').filter(Boolean)
+  let selectionStart = $state(parseInt(_urlParts[2]) || 0)
+  let selectionEnd = $state(parseInt(_urlParts[3]) || 0)
+  const selectionTimeRange = $derived.by(() => {
+    const st = route?.start_time
+    if (!st) return ''
+    const effEnd = selectionEnd > 0 ? selectionEnd : duration || ((route?.maxqlog ?? 0) + 1) * 60
+    const s = formatAbsoluteTimeHM(st, selectionStart || 0)
+    const e = formatAbsoluteTimeHM(st, effEnd)
+    if (!s) return ''
+    return e ? `@ ${s} - ${e}` : `@ ${s}`
+  })
+  // Sync selection to URL path: /{dongleId}/{localId}/{start}/{end}
+  $effect(() => {
+    const d = route?.dongle_id
+    const lid = route?.local_id || $selectedRoute
+    if (!d || !lid) return
+    let path = `/${d}/${lid}`
+    if (selectionStart > 0 || selectionEnd > 0) {
+      path += `/${Math.round(selectionStart)}/${Math.round(selectionEnd)}`
+    }
+    if (location.pathname !== path) {
+      history.replaceState(null, '', path)
+    }
+  })
+
   let enrichDone = $state(0)
   let enrichTotal = $state(0)
   const enriching = $derived(enrichTotal > 0 && enrichDone < enrichTotal)
@@ -79,17 +107,24 @@
   const bookmarks = $derived(timelineEvents.filter(e => e.type === 'user_flag').map(e => e.route_offset_millis))
 
   onMount(async () => {
-    const name = $selectedRoute
-    if (!name) return
+    const localId = $selectedRoute
+    if (!localId) return
 
     try {
       const [r, f] = await Promise.all([
-        fetchRoute(name),
-        fetchRouteFiles(name),
+        fetchRoute(localId),
+        fetchRouteFiles(localId),
       ])
       route = r
       files = f
       noteText = r.notes || ''
+
+      // Seek to selection start from URL (after video player mounts)
+      if (selectionStart > 0) {
+        currentTime = selectionStart
+        await new Promise(r => setTimeout(r, 100))
+        videoPlayer?.seek(selectionStart)
+      }
 
       // Fetch coords and events in background (non-blocking)
       fetchAllCoords(r).then(c => coords = c).catch(() => {})
@@ -158,11 +193,15 @@
     isPlaying = false
   }
 
+  function handleMuteToggle() {
+    isMuted = videoPlayer?.toggleMute() ?? !isMuted
+  }
+
   async function handleScreenshot() {
     if (!route || screenshotBusy) return
     screenshotBusy = true
     try {
-      const res = await takeScreenshot(route.fullname, currentTime)
+      const res = await takeScreenshot(route.local_id, currentTime)
       const blob = await res.blob()
       // Extract filename from Content-Disposition header, or build fallback
       const cd = res.headers.get('Content-Disposition') || ''
@@ -226,7 +265,7 @@
     hudStreaming = false
     hudError = null
     try {
-      await startHudStream(route.fullname, currentTime)
+      await startHudStream(route.local_id, currentTime)
       // Poll for streaming status
       hudPollTimer = setInterval(async () => {
         try {
@@ -269,7 +308,7 @@
     try {
       const start = selectionStart || 0
       const end = selectionEnd > 0 ? selectionEnd : duration || ((route.maxqlog + 1) * 60)
-      const res = await prerenderHud(route.fullname, start, end, {
+      const res = await prerenderHud(route.local_id, start, end, {
         scale: dlScale,
         fps: DL_FPS,
       })
@@ -288,7 +327,7 @@
       // Poll for progress — seek video preview to follow render position
       dlPollTimer = setInterval(async () => {
         try {
-          const p = await hudProgress(route.fullname)
+          const p = await hudProgress(route.local_id)
           dlElapsed = p.elapsed_sec || 0
           dlTotal = p.total_sec || dlTotal
           dlPhase = p.phase || ''
@@ -332,19 +371,16 @@
     dlError = null
     restoreVideoDefaults()
     try {
-      if (route) await cancelHudRender(route.fullname)
+      if (route) await cancelHudRender(route.local_id)
     } catch { /* ignore */ }
   }
 
   async function saveNoteHandler() {
     editingNote = false
-    if (route) await saveNote(route.fullname, noteText)
+    if (route) await saveNote(route.local_id, noteText)
   }
 
-  let showMap = $state(false)
-  let showHudOverlay = $state(false)
-  let showRouteInfo = $state(false)
-  let showDeviceInfo = $state(false)
+  let activeTab = $state('route')
 
   let reEnriching = $state(false)
 
@@ -353,7 +389,7 @@
     reEnriching = true
     try {
       // Clear cached derived files on server
-      await enrichRoute(route.fullname)
+      await enrichRoute(route.local_id)
       // Re-fetch events (regenerates events.json from rlogs)
       enrichDone = 0
       enrichTotal = (route.maxqlog ?? 0) + 1
@@ -374,8 +410,8 @@
   function openDownload() {
     if (!route) return
     const a = document.createElement('a')
-    a.href = hudVideoUrl(route.fullname)
-    a.download = `${route.fullname.replace('/', '_')}_hud.mp4`
+    a.href = hudVideoUrl(route.local_id)
+    a.download = `${route.fullname.split('/').pop()}_hud.mp4`
     a.click()
   }
 </script>
@@ -390,8 +426,7 @@
       Back
     </button>
     {#if route}
-      <span class="text-sm text-surface-100 font-medium">{formatDate(route.create_time)}</span>
-      <span class="text-xs text-surface-400">{formatTime(route.start_time)}</span>
+      <span class="text-sm text-surface-100 font-medium">{formatDate(route.create_time)} {selectionTimeRange}</span>
     {/if}
   </div>
 
@@ -407,24 +442,7 @@
   {:else if route}
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
       <!-- Video player + controls -->
-      <div class="space-y-3" data-video-container>
-        <div class="rounded-lg overflow-hidden" class:recording-border={dlRendering}>
-        <VideoPlayer
-          bind:this={videoPlayer}
-          {route}
-          {files}
-          {hudLiveUrl}
-          frozen={dlRendering}
-          {selectionStart}
-          {selectionEnd}
-          bind:currentTime
-          bind:duration
-          onTimeUpdate={handleTimeUpdate}
-          onPlay={handlePlay}
-          onPause={handlePause}
-        />
-        </div>
-
+      <div class="space-y-2" data-video-container>
         {#if enriching}
           <div class="space-y-1">
             <div class="h-2 bg-surface-700 rounded-full overflow-hidden">
@@ -436,95 +454,70 @@
             <p class="text-xs text-surface-400 text-center">Enriching segments {enrichDone}/{enrichTotal}</p>
           </div>
         {:else}
-          <VideoControls
+          <VideoTimeline
             {route}
             {currentTime}
             {duration}
             events={timelineEvents}
             {durationMs}
+            onSeek={handleSeek}
+            bind:selectionStart
+            bind:selectionEnd
+          />
+        {/if}
+
+        <div class="rounded-xl overflow-hidden" class:recording-border={dlRendering}>
+          <VideoPlayer
+            bind:this={videoPlayer}
+            {route}
+            {files}
+            {hudLiveUrl}
+            frozen={dlRendering}
+            {selectionStart}
+            {selectionEnd}
+            bind:currentTime
+            bind:duration
+            onTimeUpdate={handleTimeUpdate}
+            onPlay={handlePlay}
+            onPause={handlePause}
+          />
+        </div>
+
+        {#if !enriching}
+          <VideoControls
+            {route}
+            {currentTime}
+            {duration}
             startTime={route.start_time}
             onSeek={handleSeek}
             onToggle={handleToggle}
             onRate={handleRate}
             onScreenshot={handleScreenshot}
             onStepFrame={handleStepFrame}
+            onMuteToggle={handleMuteToggle}
             {isPlaying}
+            {isMuted}
             {screenshotBusy}
-            bind:selectionStart
-            bind:selectionEnd
           />
-        {/if}
-
-        <!-- Note -->
-        <div class="card p-4 space-y-2">
-          <h3 class="text-sm font-medium text-surface-200">Note</h3>
-          {#if editingNote}
-            <!-- svelte-ignore a11y_autofocus -->
-            <textarea
-              class="w-full bg-surface-700 text-surface-100 rounded p-2 text-sm resize-y min-h-[80px] outline-none focus:ring-1 focus:ring-surface-500"
-              bind:value={noteText}
-              onblur={saveNoteHandler}
-              onkeydown={(e) => { if (e.ctrlKey && e.key === 'Enter') saveNoteHandler() }}
-              autofocus
-            ></textarea>
-          {:else if noteText}
-            <button
-              type="button"
-              class="w-full text-left text-sm cursor-pointer text-surface-200 note-rendered"
-              onclick={() => { editingNote = true }}
-            >
-              {@html snarkdown(noteText)}
-            </button>
-          {:else}
-            <button
-              type="button"
-              class="w-full text-left text-sm cursor-pointer text-surface-500"
-              onclick={() => { editingNote = true }}
-            >
-              Click to add a note...
-            </button>
-          {/if}
-        </div>
-
-        <!-- Bookmarks -->
-        {#if bookmarks.length}
-          <div class="card p-4 space-y-2">
-            <h3 class="text-sm font-medium text-surface-200">Bookmarks</h3>
-            <div class="flex flex-wrap gap-2">
-              {#each bookmarks as bm, i}
-                {@const totalSec = Math.floor(bm / 1000)}
-                {@const mm = Math.floor(totalSec / 60)}
-                {@const ss = (totalSec % 60).toString().padStart(2, '0')}
-                {@const isActive = currentTime >= bm / 1000 - 2 && (i + 1 >= bookmarks.length || currentTime < bookmarks[i + 1] / 1000 - 2)}
-                <button
-                  class="px-2 py-1 text-xs font-mono rounded text-surface-200"
-                  class:bg-engage-green={isActive}
-                  class:text-black={isActive}
-                  class:bg-surface-700={!isActive}
-                  class:hover:bg-surface-600={!isActive}
-                  onclick={() => handleSeek(Math.max(0, bm / 1000 - 2))}
-                >
-                  {mm}:{ss}
-                </button>
-              {/each}
-            </div>
-          </div>
         {/if}
       </div>
 
-      <!-- Map + info -->
-      <div class="space-y-4">
-        {#if !enriching}
-          <!-- Map -->
-          <div class="card">
-            <button class="w-full flex items-center justify-between p-4" onclick={() => showMap = !showMap}>
-              <h3 class="text-sm font-semibold text-surface-200">Map</h3>
-              <svg class="w-4 h-4 text-surface-400 transition-transform" class:rotate-180={showMap} fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                <path d="M19 9l-7 7-7-7"/>
-              </svg>
-            </button>
-            {#if showMap}
-              <div class="px-4 pb-4">
+      <!-- Tabbed info panel -->
+      <div class="card">
+        <Tabs.Root bind:value={activeTab}>
+          <Tabs.List class="flex border-b border-surface-700/50">
+            {#each [['route','Route'],['events','Events'],['note','Note'],['device','Device'],['overlay','UI Overlay']] as [id, label]}
+              <Tabs.Trigger value={id}
+                class="flex-1 px-2 py-3 text-xs font-medium text-center transition-colors
+                  {activeTab === id ? 'text-surface-100 border-b-2 border-engage-blue' : 'text-surface-500 hover:text-surface-300'}"
+              >{label}</Tabs.Trigger>
+            {/each}
+          </Tabs.List>
+
+          <!-- Route tab -->
+          <Tabs.Content value="route">
+            <div class="pb-4 space-y-3 pt-3">
+              <div class="px-4">
                 <RouteMap
                   {coords}
                   events={timelineEvents}
@@ -532,21 +525,165 @@
                   {durationMs}
                   {selectionStart}
                   {selectionEnd}
+                  visible={activeTab === 'route'}
+                  startLat={route.start_lat}
+                  startLng={route.start_lng}
                 />
               </div>
-            {/if}
-          </div>
+              <div class="px-4 grid grid-cols-2 gap-2 text-sm">
+                {#if route.platform}
+                  <div>
+                    <p class="text-xs text-surface-500">Car</p>
+                    <p class="text-surface-200">{route.platform}</p>
+                  </div>
+                {/if}
+                {#if route.local_id}
+                  <div>
+                    <p class="text-xs text-surface-500">Route ID</p>
+                    <p class="text-surface-200 font-mono truncate">{route.local_id}</p>
+                  </div>
+                {/if}
+                {#if route.start_address}
+                  <div>
+                    <p class="text-xs text-surface-500">Start</p>
+                    <p class="text-surface-200 truncate">{route.start_address}</p>
+                  </div>
+                  {#if route.end_address && route.end_address !== route.start_address}
+                    <div>
+                      <p class="text-xs text-surface-500">End</p>
+                      <p class="text-surface-200 truncate">{route.end_address}</p>
+                    </div>
+                  {/if}
+                {/if}
+                <div>
+                  <p class="text-xs text-surface-500">Duration</p>
+                  <p class="text-surface-200">{durationMin != null ? formatDuration(durationMin) : '--'}</p>
+                </div>
+                <div>
+                  <p class="text-xs text-surface-500">Distance</p>
+                  <p class="text-surface-200">{formatDistance(route.distance)}</p>
+                </div>
+              </div>
+              <div class="px-4 border-t border-surface-700/50 pt-3">
+                <RouteActions {route} onEnrich={reEnrich} enrichBusy={reEnriching || enriching} />
+              </div>
+            </div>
+          </Tabs.Content>
 
-          <!-- Openpilot UI Overlay (HUD stream + download) -->
-          <div class="card">
-            <button class="w-full flex items-center justify-between p-4" onclick={() => showHudOverlay = !showHudOverlay}>
-              <h3 class="text-sm font-semibold text-surface-200">Openpilot UI Overlay</h3>
-              <svg class="w-4 h-4 text-surface-400 transition-transform" class:rotate-180={showHudOverlay} fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                <path d="M19 9l-7 7-7-7"/>
-              </svg>
-            </button>
-            {#if showHudOverlay}
-              <div class="px-4 pb-4 space-y-4">
+          <!-- Events tab -->
+          <Tabs.Content value="events">
+            <div class="p-4">
+              {#if bookmarks.length}
+                <div class="flex flex-wrap gap-2">
+                  {#each bookmarks as bm, i}
+                    {@const totalSec = Math.floor(bm / 1000)}
+                    {@const mm = Math.floor(totalSec / 60)}
+                    {@const ss = (totalSec % 60).toString().padStart(2, '0')}
+                    {@const isActive = currentTime >= bm / 1000 - 2 && (i + 1 >= bookmarks.length || currentTime < bookmarks[i + 1] / 1000 - 2)}
+                    <button
+                      class="px-2 py-1 text-xs font-mono rounded text-surface-200"
+                      class:bg-engage-green={isActive}
+                      class:text-black={isActive}
+                      class:bg-surface-700={!isActive}
+                      class:hover:bg-surface-600={!isActive}
+                      onclick={() => handleSeek(Math.max(0, bm / 1000 - 2))}
+                    >
+                      {mm}:{ss}
+                    </button>
+                  {/each}
+                </div>
+              {:else}
+                <p class="text-sm text-surface-500">No events</p>
+              {/if}
+            </div>
+          </Tabs.Content>
+
+          <!-- Note tab -->
+          <Tabs.Content value="note">
+            <div class="p-4 space-y-2">
+              {#if editingNote}
+                <!-- svelte-ignore a11y_autofocus -->
+                <textarea
+                  class="w-full bg-surface-700 text-surface-100 rounded p-2 text-sm resize-y min-h-[80px] outline-none focus:ring-1 focus:ring-surface-500"
+                  bind:value={noteText}
+                  onblur={saveNoteHandler}
+                  onkeydown={(e) => { if (e.ctrlKey && e.key === 'Enter') saveNoteHandler() }}
+                  autofocus
+                ></textarea>
+              {:else if noteText}
+                <button
+                  type="button"
+                  class="w-full text-left text-sm cursor-pointer text-surface-200 note-rendered"
+                  onclick={() => { editingNote = true }}
+                >
+                  {@html snarkdown(noteText)}
+                </button>
+              {:else}
+                <button
+                  type="button"
+                  class="w-full text-left text-sm cursor-pointer text-surface-500"
+                  onclick={() => { editingNote = true }}
+                >
+                  Click to add a note...
+                </button>
+              {/if}
+            </div>
+          </Tabs.Content>
+
+          <!-- Device tab -->
+          <Tabs.Content value="device">
+            <div class="p-4">
+              <div class="grid grid-cols-2 gap-2 text-sm">
+                <div>
+                  <p class="text-xs text-surface-500">Device</p>
+                  <p class="text-surface-200">{route.device_type === 'tici' ? 'Comma 3' : route.device_type === 'tizi' ? 'Comma 3X' : route.device_type === 'mici' ? 'Comma 4' : route.device_type ?? '--'}</p>
+                </div>
+                <div>
+                  <p class="text-xs text-surface-500">Dongle ID</p>
+                  <p class="text-surface-200 font-mono truncate">{route.dongle_id ?? '--'}</p>
+                </div>
+                {#if route.agnos_version}
+                  <div>
+                    <p class="text-xs text-surface-500">AGNOS</p>
+                    <p class="text-surface-200">{route.agnos_version}</p>
+                  </div>
+                {/if}
+                {#if route.version}
+                  <div>
+                    <p class="text-xs text-surface-500">Openpilot</p>
+                    <p class="text-surface-200">{route.version}</p>
+                  </div>
+                {/if}
+                {#if route.git_branch}
+                  <div>
+                    <p class="text-xs text-surface-500">Branch</p>
+                    <p class="text-surface-200 truncate">{route.git_branch}</p>
+                  </div>
+                {/if}
+                {#if route.git_commit}
+                  <div>
+                    <p class="text-xs text-surface-500">Commit</p>
+                    {#if route.git_remote}
+                      {@const repoUrl = route.git_remote.replace(/\.git$/, '')}
+                      <a
+                        href="{repoUrl}/commit/{route.git_commit}"
+                        target="_blank"
+                        rel="noopener"
+                        class="text-engage-blue font-mono truncate block hover:underline"
+                      >{route.git_commit.slice(0, 12)}</a>
+                    {:else}
+                      <p class="text-surface-200 font-mono truncate">{route.git_commit.slice(0, 12)}</p>
+                    {/if}
+                  </div>
+                {/if}
+              </div>
+            </div>
+          </Tabs.Content>
+
+          <!-- UI Overlay tab -->
+          <Tabs.Content value="overlay">
+            {#if !enriching}
+              <div class="p-4 space-y-4">
                 <!-- HUD Live Stream -->
                 <div class="space-y-2" class:opacity-50={dlRendering}>
                   <label class="flex items-center gap-2 text-sm text-surface-200" class:cursor-pointer={!dlRendering} class:cursor-not-allowed={dlRendering}>
@@ -634,128 +771,13 @@
                   {/if}
                 </div>
               </div>
+            {:else}
+              <div class="p-4">
+                <p class="text-sm text-surface-500">Available after enrichment completes</p>
+              </div>
             {/if}
-          </div>
-        {/if}
-
-        <!-- Metadata -->
-        <div class="card">
-          <button class="w-full flex items-center justify-between p-4" onclick={() => showRouteInfo = !showRouteInfo}>
-            <h3 class="text-sm font-semibold text-surface-200">Route Info</h3>
-            <svg class="w-4 h-4 text-surface-400 transition-transform" class:rotate-180={showRouteInfo} fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-              <path d="M19 9l-7 7-7-7"/>
-            </svg>
-          </button>
-          {#if showRouteInfo}
-            <div class="px-4 pb-4 space-y-3">
-              <div class="grid grid-cols-2 gap-2 text-sm">
-                {#if route.local_id}
-                  <div class="col-span-2">
-                    <p class="text-xs text-surface-500">Disk ID</p>
-                    <p class="text-surface-200 font-mono truncate">{route.local_id}</p>
-                  </div>
-                {/if}
-                {#if route.start_address}
-                  <div>
-                    <p class="text-xs text-surface-500">Start</p>
-                    <p class="text-surface-200 truncate">{route.start_address}</p>
-                  </div>
-                  {#if route.end_address && route.end_address !== route.start_address}
-                    <div>
-                      <p class="text-xs text-surface-500">End</p>
-                      <p class="text-surface-200 truncate">{route.end_address}</p>
-                    </div>
-                  {/if}
-                {/if}
-                <div>
-                  <p class="text-xs text-surface-500">Duration</p>
-                  <p class="text-surface-200">{durationMin != null ? formatDuration(durationMin) : '--'}</p>
-                </div>
-                <div>
-                  <p class="text-xs text-surface-500">Distance</p>
-                  <p class="text-surface-200">{formatDistance(route.distance)}</p>
-                </div>
-                {#if route.platform}
-                  <div>
-                    <p class="text-xs text-surface-500">Car</p>
-                    <p class="text-surface-200">{route.platform}</p>
-                  </div>
-                {/if}
-                <div>
-                  <p class="text-xs text-surface-500">Segments</p>
-                  <p class="text-surface-200">{(route.maxqlog ?? 0) + 1}</p>
-                </div>
-              </div>
-              <button
-                class="btn btn-sm bg-surface-700 hover:bg-surface-600 text-surface-200 px-3 py-1 rounded text-xs disabled:opacity-50"
-                onclick={reEnrich}
-                disabled={reEnriching || enriching}
-              >
-                {reEnriching ? 'Re-enriching...' : 'Re-enrich'}
-              </button>
-
-              <div class="border-t border-surface-700/50 pt-3">
-                <RouteActions {route} />
-              </div>
-            </div>
-          {/if}
-        </div>
-
-        <!-- Device Info -->
-        <div class="card">
-          <button class="w-full flex items-center justify-between p-4" onclick={() => showDeviceInfo = !showDeviceInfo}>
-            <h3 class="text-sm font-semibold text-surface-200">Device Info</h3>
-            <svg class="w-4 h-4 text-surface-400 transition-transform" class:rotate-180={showDeviceInfo} fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-              <path d="M19 9l-7 7-7-7"/>
-            </svg>
-          </button>
-          {#if showDeviceInfo}
-            <div class="px-4 pb-4 space-y-3">
-              <div class="grid grid-cols-2 gap-2 text-sm">
-                <div>
-                  <p class="text-xs text-surface-500">Device</p>
-                  <p class="text-surface-200">{route.device_type === 'tici' ? 'Comma 3' : route.device_type === 'tizi' ? 'Comma 3X' : route.device_type === 'mici' ? 'Comma 4' : route.device_type ?? '--'}</p>
-                </div>
-                {#if route.agnos_version}
-                  <div>
-                    <p class="text-xs text-surface-500">AGNOS</p>
-                    <p class="text-surface-200">{route.agnos_version}</p>
-                  </div>
-                {/if}
-                {#if route.version}
-                  <div>
-                    <p class="text-xs text-surface-500">Openpilot</p>
-                    <p class="text-surface-200">{route.version}</p>
-                  </div>
-                {/if}
-                {#if route.git_branch}
-                  <div>
-                    <p class="text-xs text-surface-500">Branch</p>
-                    <p class="text-surface-200 truncate">{route.git_branch}</p>
-                  </div>
-                {/if}
-              </div>
-
-              {#if route.git_commit && route.git_remote}
-                {@const repoUrl = route.git_remote.replace(/\.git$/, '')}
-                <div class="pt-2 border-t border-surface-700/50">
-                  <p class="text-xs text-surface-500 mb-1">Commit</p>
-                  <a
-                    href="{repoUrl}/commit/{route.git_commit}"
-                    target="_blank"
-                    rel="noopener"
-                    class="text-xs text-engage-blue font-mono hover:underline truncate block"
-                  >{route.git_commit.slice(0, 12)}</a>
-                </div>
-              {:else if route.git_commit}
-                <div class="pt-2 border-t border-surface-700/50">
-                  <p class="text-xs text-surface-500 mb-1">Commit</p>
-                  <p class="text-xs text-surface-300 font-mono truncate">{route.git_commit.slice(0, 12)}</p>
-                </div>
-              {/if}
-            </div>
-          {/if}
-        </div>
+          </Tabs.Content>
+        </Tabs.Root>
       </div>
     </div>
   {/if}

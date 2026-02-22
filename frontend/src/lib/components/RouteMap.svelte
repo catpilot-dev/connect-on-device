@@ -11,8 +11,8 @@
    * - Configurable tile source (AMap for China, CartoDB for overseas)
    */
 
-  /** @type {{ coords: Array, events?: Array, currentTime?: number, durationMs?: number, selectionStart?: number, selectionEnd?: number, visible?: boolean }} */
-  let { coords = [], events = [], currentTime = 0, durationMs = 0, selectionStart = 0, selectionEnd = 0, visible = true } = $props()
+  /** @type {{ coords: Array, events?: Array, currentTime?: number, durationMs?: number, selectionStart?: number, selectionEnd?: number, visible?: boolean, startLat?: number, startLng?: number }} */
+  let { coords = [], events = [], currentTime = 0, durationMs = 0, selectionStart = 0, selectionEnd = 0, visible = true, startLat = null, startLng = null } = $props()
 
   let mapContainer = $state(null)
   let map = null
@@ -38,9 +38,13 @@
 
     if (!mapContainer) return
 
+    // Use route start position if available, fall back to Shanghai
+    const initCenter = (startLat && startLng) ? toMapCoord(startLat, startLng) : [31.23, 121.47]
     map = L.map(mapContainer, {
       zoomControl: true,
       attributionControl: false,
+      center: initCenter,
+      zoom: 13,
     })
 
     // Tile layer from user preference (AMap for China, CartoDB for overseas)
@@ -79,9 +83,9 @@
       .map(e => [e.route_offset_millis, e.end_route_offset_millis])
 
     function getColor(timeMs) {
-      for (const [s, e] of engagedRanges) if (timeMs >= s && timeMs <= e) return '#178644'
-      for (const [s, e] of overrideRanges) if (timeMs >= s && timeMs <= e) return '#919B95'
-      return '#173349'
+      for (const [s, e] of engagedRanges) if (timeMs >= s && timeMs <= e) return '#ffffff'
+      for (const [s, e] of overrideRanges) if (timeMs >= s && timeMs <= e) return '#999999'
+      return '#555555'
     }
 
     const hasSelection = selectionStart > 0 || (selectionEnd > 0 && selectionEnd < (durationMs / 1000) - 0.5)
@@ -180,20 +184,14 @@
 
 <style>
   :global(.amap-dark) {
-    filter: invert(1) hue-rotate(180deg) brightness(0.95) contrast(1.1);
+    filter: invert(1) hue-rotate(180deg) brightness(0.95) contrast(1.1) saturate(0.15);
   }
 </style>
 
-<div class="card overflow-hidden">
-  {#if coords.length === 0}
-    <div class="aspect-video bg-surface-800 flex items-center justify-center">
-      <p class="text-surface-500 text-sm">No GPS data</p>
-    </div>
-  {:else}
-    <div
-      bind:this={mapContainer}
-      class="aspect-video w-full"
-      style="min-height: 200px"
-    ></div>
-  {/if}
+<div class="card overflow-hidden relative">
+  <div
+    bind:this={mapContainer}
+    class="aspect-video w-full"
+    style="min-height: 200px"
+  ></div>
 </div>

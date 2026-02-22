@@ -4,7 +4,7 @@
   import { fetchParams, setParam, fetchModels, swapModel, checkModelUpdates, downloadModel,
     fetchSoftware, softwareCheck, softwareDownload, softwareInstall, softwareBranch, softwareUninstall,
     fetchLateralDelay, fetchDeviceInfo, deviceReboot, devicePoweroff, deviceSetLanguage,
-    fetchToggles, setToggle, fetchStorage } from '../api.js'
+    fetchToggles, setToggle, fetchStorage, mapdCheckUpdate, mapdUpdate } from '../api.js'
   import { getTileSource, setTileSource, TILE_SOURCES } from '../tileSource.js'
   import { formatBytes, storageLevel } from '../format.js'
 
@@ -43,6 +43,13 @@
   let togglesExpanded = $state(false)
   let devTogglesExpanded = $state(false)
   let toggling = $state(null) // key currently being toggled
+
+  // Mapd update state
+  let mapdVersion = $state(null)
+  let mapdLatest = $state(null)
+  let mapdChecking = $state(false)
+  let mapdUpdating = $state(false)
+  let mapdError = $state(null)
 
   const SECTIONS = [
     {

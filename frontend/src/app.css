@@ -53,7 +53,7 @@
     @apply btn bg-engage-red/10 text-engage-red hover:bg-engage-red/20;
   }
   .card {
-    @apply rounded-xl bg-surface-800 border border-surface-700/50;
+    @apply rounded-xl bg-surface-800 border border-surface-700/50 overflow-hidden;
   }
   .badge {
     @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium;

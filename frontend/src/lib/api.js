@@ -305,6 +305,54 @@ export async function fetchLateralDelay() {
   return res.json()
 }
 
+// ── Device panel ────────────────────────────────────────────
+
+export async function fetchDeviceInfo() {
+  const res = await fetch('/v1/device')
+  if (!res.ok) throw new Error(`fetchDeviceInfo: ${res.status}`)
+  return res.json()
+}
+
+export async function deviceReboot() {
+  const res = await fetch('/v1/device/reboot', { method: 'POST' })
+  if (!res.ok) throw new Error(`deviceReboot: ${res.status}`)
+  return res.json()
+}
+
+export async function devicePoweroff() {
+  const res = await fetch('/v1/device/poweroff', { method: 'POST' })
+  if (!res.ok) throw new Error(`devicePoweroff: ${res.status}`)
+  return res.json()
+}
+
+export async function deviceSetLanguage(language) {
+  const res = await fetch('/v1/device/language', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ language }),
+  })
+  if (!res.ok) throw new Error(`deviceSetLanguage: ${res.status}`)
+  return res.json()
+}
+
+// ── Toggles panel ───────────────────────────────────────────
+
+export async function fetchToggles() {
+  const res = await fetch('/v1/toggles')
+  if (!res.ok) throw new Error(`fetchToggles: ${res.status}`)
+  return res.json()
+}
+
+export async function setToggle(key, value) {
+  const res = await fetch('/v1/toggles', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key, value }),
+  })
+  if (!res.ok) throw new Error(`setToggle: ${res.status}`)
+  return res.json()
+}
+
 // ── BMW params ─────────────────────────────────────────────
 
 export async function fetchParams() {
@@ -390,5 +438,19 @@ export async function cancelTileDownload() {
 export async function deleteTile(lat, lon) {
   const res = await fetch(`/v1/mapd/tiles/${lat}/${lon}`, { method: 'DELETE' })
   if (!res.ok) throw new Error(`deleteTile: ${res.status}`)
+  return res.json()
+}
+
+// ── Mapd binary update ──────────────────────────────────
+
+export async function mapdCheckUpdate() {
+  const res = await fetch('/v1/mapd/check-update', { method: 'POST' })
+  if (!res.ok) throw new Error(`mapdCheckUpdate: ${res.status}`)
+  return res.json()
+}
+
+export async function mapdUpdate() {
+  const res = await fetch('/v1/mapd/update', { method: 'POST' })
+  if (!res.ok) throw new Error(`mapdUpdate: ${res.status}`)
   return res.json()
 }
