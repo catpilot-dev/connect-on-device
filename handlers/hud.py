@@ -26,9 +26,11 @@ _hud_prerender_tasks: dict = {}
 
 HUD_CACHE_DIR = Path("/data/connect_on_device/hud_cache")
 RENDER_SCRIPT = Path(__file__).parent.parent / "render_clip.py"
+RENDER_SCRIPT_DRM = Path(__file__).parent.parent / "render_clip_drm.py"
 PYTHON_BIN = "/usr/local/venv/bin/python"
 OPENPILOT_DIR = Path("/data/openpilot")
 REPLAY_BIN = OPENPILOT_DIR / "tools/replay/replay"
+DRM_RAYLIB_PATH = Path("/data/pip_packages/raylib")
 
 
 async def _ensure_replay_binary():
@@ -56,7 +58,7 @@ async def _ensure_replay_binary():
         logger.error("Failed to rebuild replay binary: %s", stdout.decode()[-500:] if stdout else "no output")
         return False
 
-# Quality presets for HUD video rendering
+# Quality presets for HUD video rendering (Weston/screenshooter mode)
 # speed: replay -x flag (lower = more unique frames per second of route time)
 # scale: ffmpeg scale filter (None = native 2160x1080)
 # fps: output video framerate
@@ -66,6 +68,31 @@ QUALITY_PRESETS = {
     "medium": {"speed": 0.2, "scale": "1080:540", "fps": 20, "bitrate_mbps": 1.5},
     "low":    {"speed": 0.5, "scale": "1080:540", "fps": 10, "bitrate_mbps": 0.8},
 }
+
+# Quality presets for DRM mode — 0.2x replay, 2fps capture → 10 unique frames/route-sec
+# Post-processed: 5x speedup + frame-dup to target fps. wall_duration ≈ 5x duration
+QUALITY_PRESETS_DRM = {
+    "high":   {"fps": 20, "bitrate_mbps": 3.0},
+    "medium": {"fps": 20, "bitrate_mbps": 1.5},
+    "low":    {"fps": 10, "bitrate_mbps": 0.8},
+}
+
+
+def _is_drm_available() -> bool:
+    """Check if DRM backend is available for recording.
+
+    DRM mode requires:
+    1. DRM raylib package installed (/data/pip_packages/raylib)
+    2. The render_clip_drm.py script exists
+    3. The raylib UI script exists (selfdrive/ui/ui.py)
+    """
+    if not DRM_RAYLIB_PATH.is_dir():
+        return False
+    if not RENDER_SCRIPT_DRM.exists():
+        return False
+    if not (OPENPILOT_DIR / "selfdrive/ui/ui.py").is_file():
+        return False
+    return True
 
 
 def _find_closest_snapshot(snapshots: list, t_ms: int):
@@ -200,31 +227,50 @@ async def handle_hud_prerender(request: web.Request) -> web.Response:
     if duration <= 0:
         raise web.HTTPBadRequest(text=json.dumps({"error": "Invalid time range"}))
 
+    # Detect DRM mode availability
+    use_drm = _is_drm_available()
+
     # Accept explicit speed/scale/fps, or fall back to quality preset
     quality = body.get("quality")
-    if quality and quality in QUALITY_PRESETS:
+
+    if use_drm:
+        # DRM mode: 0.2x replay, 2fps capture, 10 unique frames/route-sec, no scale/speed params
+        if quality and quality in QUALITY_PRESETS_DRM:
+            preset = QUALITY_PRESETS_DRM[quality]
+        else:
+            preset = QUALITY_PRESETS_DRM["high"]
+        render_fps = preset["fps"]
+        render_bitrate = preset["bitrate_mbps"]
+        render_speed = 0.2  # DRM renders at 0.2x, sped up in post
+        render_scale = None
+    elif quality and quality in QUALITY_PRESETS:
         preset = QUALITY_PRESETS[quality]
         render_speed = preset["speed"]
         render_scale = preset["scale"]
         render_fps = preset["fps"]
         render_bitrate = preset["bitrate_mbps"]
     else:
-        # Two-pass render: speed is fixed at 0.2 (set in render_clip.py)
+        # Weston fallback: speed is fixed at 0.2 (set in render_clip.py)
         render_speed = 0.2
         render_scale = body.get("scale")  # None or "1080:540"
         render_fps = int(body.get("fps", 20))
-        # At 0.2x speed, 5fps capture = 25fps unique route content → ~3 Mbps full res
         base_bitrate = 3.0
         render_bitrate = base_bitrate * (0.5 if render_scale else 1.0)
 
     estimated_mb = round(duration * render_bitrate / 8)
-    # Single-pass render at 0.2x speed + setup overhead
-    wall_duration = round(duration / render_speed + 30)
+    # DRM: 0.2x replay (5x wall-time) + 15s setup; Weston: 0.2x speed + 30s setup
+    if use_drm:
+        wall_duration = round(duration / 0.2 + 15)
+    else:
+        wall_duration = round(duration / render_speed + 30)
 
     # Build a cache key from the actual render params
-    cache_tag = f"s{render_speed:.2f}_f{render_fps}"
-    if render_scale:
-        cache_tag += f"_{render_scale.replace(':', 'x')}"
+    if use_drm:
+        cache_tag = f"drm_f{render_fps}"
+    else:
+        cache_tag = f"s{render_speed:.2f}_f{render_fps}"
+        if render_scale:
+            cache_tag += f"_{render_scale.replace(':', 'x')}"
 
     # Check cache — already rendered?
     cache_mp4 = _hud_cache_path(fullname, start_sec, end_sec, cache_tag)
@@ -271,26 +317,57 @@ async def handle_hud_prerender(request: web.Request) -> web.Response:
 
     # Determine python and script paths
     python_bin = PYTHON_BIN if os.path.isfile(PYTHON_BIN) else sys.executable
-    script = str(RENDER_SCRIPT)
 
-    # Launch render_clip.py as subprocess (speed is fixed at 0.2 in render_clip.py)
-    cmd = [
-        python_bin, script,
-        "--route-name", fullname.replace("/", "|"),
-        "--local-id", local_id,
-        "--dongle-id", dongle_id,
-        "--data-dir", str(store.data_dir),
-        "--start", str(start_sec),
-        "--end", str(end_sec),
-        "--output-fps", str(render_fps),
-        "--output", output,
-        "--status-file", status_file,
-    ]
-    if render_scale:
-        cmd.extend(["--scale", render_scale])
+    if use_drm:
+        # DRM mode: use render_clip_drm.py with simpler args
+        script = str(RENDER_SCRIPT_DRM)
+        # Extract route metadata for MP4 embedding
+        route_date = ""
+        parts = fullname.split("/")
+        if len(parts) == 2:
+            route_date = parts[1]  # e.g. "2026-02-23--12-38-40"
+        op_version = route.get("version", "")
+        op_branch = route.get("git_branch", "")
+        op_commit = route.get("git_commit", "")
 
-    logger.info("Launching HUD render: %s (%.0fs-%.0fs, speed=%.2f, fps=%d, scale=%s)",
-                fullname, start_sec, end_sec, render_speed, render_fps, render_scale)
+        cmd = [
+            python_bin, script,
+            "--route-name", fullname.replace("/", "|"),
+            "--local-id", local_id,
+            "--dongle-id", dongle_id,
+            "--data-dir", str(store.data_dir),
+            "--start", str(start_sec),
+            "--end", str(end_sec),
+            "--fps", str(render_fps),
+            "--route-date", route_date,
+            "--op-version", op_version,
+            "--op-branch", op_branch,
+            "--op-commit", op_commit,
+            "--output", output,
+            "--status-file", status_file,
+        ]
+        logger.info("Launching HUD render (DRM): %s (%.0fs-%.0fs, fps=%d)",
+                    fullname, start_sec, end_sec, render_fps)
+    else:
+        # Weston mode: use render_clip.py with speed/scale params
+        script = str(RENDER_SCRIPT)
+        cmd = [
+            python_bin, script,
+            "--route-name", fullname.replace("/", "|"),
+            "--local-id", local_id,
+            "--dongle-id", dongle_id,
+            "--data-dir", str(store.data_dir),
+            "--start", str(start_sec),
+            "--end", str(end_sec),
+            "--output-fps", str(render_fps),
+            "--output", output,
+            "--status-file", status_file,
+        ]
+        if render_scale:
+            cmd.extend(["--scale", render_scale])
+        logger.info("Launching HUD render (Weston): %s (%.0fs-%.0fs, speed=%.2f, fps=%d, scale=%s)",
+                    fullname, start_sec, end_sec, render_speed, render_fps, render_scale)
+
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.DEVNULL,
@@ -303,6 +380,7 @@ async def handle_hud_prerender(request: web.Request) -> web.Response:
         "output": output,
         "start": start_sec,
         "end": end_sec,
+        "mode": "drm" if use_drm else "weston",
     }
 
     return web.json_response({
@@ -311,6 +389,7 @@ async def handle_hud_prerender(request: web.Request) -> web.Response:
         "total_sec": duration,
         "estimated_mb": estimated_mb,
         "wall_duration": wall_duration,
+        "mode": "drm" if use_drm else "weston",
     })
 
 
@@ -319,9 +398,10 @@ async def handle_hud_progress(request: web.Request) -> web.Response:
     route_name = resolve_route_name(request)
     store = request.app["store"]
 
-    # First check if cache exists (completed previously)
+    # Resolve to fullname (tasks are keyed by fullname)
     route = store.get_route(route_name)
-    task = _hud_prerender_tasks.get(route_name)
+    fullname = route["fullname"] if route else route_name
+    task = _hud_prerender_tasks.get(fullname)
 
     if not task:
         return web.json_response({"status": "idle", "elapsed_sec": 0, "total_sec": 0})
@@ -351,7 +431,10 @@ async def handle_hud_progress(request: web.Request) -> web.Response:
 async def handle_hud_cancel(request: web.Request) -> web.Response:
     """POST /v1/route/{routeName}/hud/cancel — abort a running HUD video render."""
     route_name = resolve_route_name(request)
-    task = _hud_prerender_tasks.get(route_name)
+    store = request.app["store"]
+    route = store.get_route(route_name)
+    fullname = route["fullname"] if route else route_name
+    task = _hud_prerender_tasks.get(fullname)
     if not task:
         return web.json_response({"status": "idle"})
 
@@ -361,7 +444,7 @@ async def handle_hud_cancel(request: web.Request) -> web.Response:
             proc.terminate()
         except Exception:
             pass
-        logger.info("HUD render cancelled for %s", route_name)
+        logger.info("HUD render cancelled for %s", fullname)
 
     # Clean up status file and cached output
     try:
@@ -374,7 +457,7 @@ async def handle_hud_cancel(request: web.Request) -> web.Response:
     except Exception:
         pass
 
-    del _hud_prerender_tasks[route_name]
+    del _hud_prerender_tasks[fullname]
     return web.json_response({"status": "cancelled"})
 
 
@@ -382,8 +465,10 @@ async def handle_hud_video(request: web.Request) -> web.Response:
     """GET /v1/route/{routeName}/hud/video — serve the rendered HUD MP4."""
     route_name = resolve_route_name(request)
     store = request.app["store"]
+    route = store.get_route(route_name)
+    fullname = route["fullname"] if route else route_name
 
-    task = _hud_prerender_tasks.get(route_name)
+    task = _hud_prerender_tasks.get(fullname)
     if not task:
         raise web.HTTPNotFound(text=json.dumps({"error": "No HUD render for this route"}))
 
