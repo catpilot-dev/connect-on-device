@@ -354,6 +354,101 @@ def _generate_events_json(rlog_path: str, segment_num: int) -> list:
     return events
 
 
+def extract_dashboard_telemetry(seg_log_pairs: list) -> list:
+    """Extract dashboard telemetry from rlog/qlog files at ~5Hz.
+
+    Args:
+        seg_log_pairs: list of (seg_num, log_path) tuples. seg_num is the
+            actual segment number used for route-relative time offsets.
+
+    Single-pass read of each log, tracking latest state from carState,
+    carControl, selfdriveState, and peripheralState. For rlog (~20Hz carState),
+    emits every 4th sample (~5Hz). For qlog (~2Hz carState), keeps every sample.
+
+    Returns list of dicts with all dashboard fields.
+    """
+    samples = []
+    cs_count = 0
+
+    # Latest state accumulators
+    steer_cmd = 0.0
+    accel_cmd = 0.0
+    sd_state = ""
+    sd_enabled = False
+    voltage = 0.0
+
+    for seg_num, log_path in seg_log_pairs:
+        base_mono = None
+        # qlog is already sparse (~2Hz) — keep every carState
+        # rlog is dense (~20Hz) — downsample to ~5Hz
+        is_qlog = "qlog" in log_path.rsplit("/", 1)[-1]
+        downsample = 1 if is_qlog else 4
+        # Track which accumulator types we've seen this segment.
+        # Don't emit samples until all are populated — prevents zeros
+        # at segment boundaries when loaded via per-segment API calls.
+        seen = set()
+        try:
+            for ev in _iter_rlog(log_path):
+                if base_mono is None and ev.which() != "initData":
+                    base_mono = ev.logMonoTime
+
+                w = ev.which()
+
+                if w == "carControl":
+                    cc = ev.carControl
+                    act = cc.actuators
+                    steer_cmd = float(getattr(act, "torque", getattr(act, "steer", 0)))
+                    accel_cmd = float(act.accel)
+                    seen.add("cc")
+
+                elif w == "selfdriveState":
+                    sd = ev.selfdriveState
+                    sd_state = str(sd.state)
+                    sd_enabled = bool(sd.enabled)
+                    seen.add("sd")
+
+                elif w == "peripheralState":
+                    ps = ev.peripheralState
+                    voltage = float(ps.voltage) / 1000.0  # millivolts → volts
+                    seen.add("ps")
+
+                elif w == "carState":
+                    cs_count += 1
+                    if cs_count % downsample != 0:
+                        continue
+                    if base_mono is None:
+                        continue
+                    # Skip until accumulators are populated (avoids zero-jumps)
+                    if len(seen) < 3:
+                        continue
+
+                    cs = ev.carState
+                    t = seg_num * 60.0 + (ev.logMonoTime - base_mono) / 1e9
+                    cruise = cs.cruiseState
+
+                    samples.append({
+                        "t": round(t, 3),
+                        "coolantTemp": round(float(getattr(cs, "coolantTemp", 0)), 1),
+                        "oilTemp": round(float(getattr(cs, "oilTemp", 0)), 1),
+                        "vEgo": round(float(cs.vEgo), 3),
+                        "steeringAngleDeg": round(float(cs.steeringAngleDeg), 2),
+                        "gasPressed": bool(cs.gasPressed),
+                        "brakePressed": bool(cs.brakePressed),
+                        "cruiseSpeed": round(float(cruise.speed), 2),
+                        "cruiseEnabled": bool(cruise.enabled),
+                        "steerCmd": round(steer_cmd, 4),
+                        "accelCmd": round(accel_cmd, 4),
+                        "sdState": sd_state,
+                        "sdEnabled": sd_enabled,
+                        "voltage": round(voltage, 2),
+                    })
+        except Exception as e:
+            logger.warning("Dashboard telemetry extraction error for %s: %s", log_path, e)
+
+    logger.info("Extracted %d dashboard telemetry samples from %d segments", len(samples), len(seg_log_pairs))
+    return samples
+
+
 def _extract_xyz(obj):
     """Extract x/y/z lists from a cereal XYZ object into plain lists."""
     return {"x": list(obj.x), "y": list(obj.y), "z": list(obj.z)}

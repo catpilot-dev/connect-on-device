@@ -1,7 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte'
   import { selectedRoute, dongleId } from '../stores.js'
-  import { fetchRoute, fetchRouteFiles, fetchAllCoords, fetchAllEventsWithProgress, enrichRoute, startHudStream, stopHudStream, hudStreamStatus, hudStreamUrl, prerenderHud, hudProgress, hudVideoUrl, cancelHudRender, saveNote, takeScreenshot } from '../api.js'
+  import { fetchRoute, fetchRouteFiles, fetchAllCoords, fetchAllEventsWithProgress, enrichRoute, startHudStream, stopHudStream, hudStreamStatus, hudStreamUrl, prerenderHud, hudProgress, hudVideoUrl, cancelHudRender, saveNote, takeScreenshot, fetchDashboardTelemetry } from '../api.js'
   import { formatDate, formatDistance, formatDuration, getRouteDurationMs, formatAbsoluteTimeHM } from '../format.js'
   import { buildTimelineEvents } from '../derived.js'
   import snarkdown from 'snarkdown'
@@ -11,6 +11,14 @@
   import RouteMap from '../components/RouteMap.svelte'
   import RouteActions from '../components/RouteActions.svelte'
   import { Tabs } from 'bits-ui'
+  import WidgetCard from '../components/dashboard/WidgetCard.svelte'
+  import GaugeWidget from '../components/dashboard/GaugeWidget.svelte'
+  import SteeringWidget from '../components/dashboard/SteeringWidget.svelte'
+  import GasBrakeWidget from '../components/dashboard/GasBrakeWidget.svelte'
+  import EngagementWidget from '../components/dashboard/EngagementWidget.svelte'
+  import SparklineWidget from '../components/dashboard/SparklineWidget.svelte'
+  import SparklineMultiWidget from '../components/dashboard/SparklineMultiWidget.svelte'
+  import { WIDGET_REGISTRY, loadLayout } from '../components/dashboard/registry.js'
 
   let route = $state(null)
   let files = $state(null)
@@ -382,6 +390,139 @@
 
   let activeTab = $state('route')
 
+  // ── Dashboard replay state (progressive per-segment loading) ──
+  let dashSegData = $state({})       // { segNum: [...samples] }
+  let dashLoadedSegs = $state(new Set())
+  let dashLoadingCount = $state(0)   // number of in-flight requests
+  let dashTotalSegs = $state(0)
+  let dashStarted = $state(false)    // has progressive loading been kicked off?
+  let dashError = $state(null)
+  const dashLayout = $derived(loadLayout())
+
+  // Flattened sorted samples from all loaded segments
+  const dashSamples = $derived.by(() => {
+    const segs = Object.keys(dashSegData).map(Number).sort((a, b) => a - b)
+    const flat = segs.flatMap(s => dashSegData[s])
+    return flat.length > 0 ? flat : (dashStarted ? [] : null)
+  })
+
+  // Load telemetry when dashboard tab first selected
+  $effect(() => {
+    if (activeTab === 'dashboard' && !dashStarted && route) {
+      loadDashProgressive()
+    }
+  })
+
+  // Memoize current segment so seek-ahead only fires on segment change, not every frame
+  const dashCurrentSeg = $derived(
+    dashTotalSegs > 0 ? Math.min(Math.floor(currentTime / 60), dashTotalSegs - 1) : -1
+  )
+
+  // Seek-ahead: when user seeks to an unloaded segment, prioritize it
+  $effect(() => {
+    if (activeTab !== 'dashboard' || dashCurrentSeg < 0) return
+    if (!dashLoadedSegs.has(dashCurrentSeg)) {
+      loadDashSegment(dashCurrentSeg)
+    }
+  })
+
+  async function loadDashSegment(seg) {
+    if (dashLoadedSegs.has(seg)) return
+    dashLoadedSegs = new Set([...dashLoadedSegs, seg])
+    dashLoadingCount++
+    try {
+      const samples = await fetchDashboardTelemetry(route.local_id, String(seg))
+      dashSegData = { ...dashSegData, [seg]: samples }
+    } catch (e) {
+      // Remove from loaded set so it can retry
+      const s = new Set(dashLoadedSegs); s.delete(seg)
+      dashLoadedSegs = s
+    } finally {
+      dashLoadingCount--
+    }
+  }
+
+  async function loadDashProgressive() {
+    if (!route) return
+    dashStarted = true
+    dashError = null
+    const maxSeg = route.maxqlog ?? 0
+    dashTotalSegs = maxSeg + 1
+    const startSeg = Math.min(Math.floor(currentTime / 60), maxSeg)
+
+    try {
+      // Load current segment first (instant widget feedback)
+      await loadDashSegment(startSeg)
+
+      // Then expand outward, 2 concurrent requests at a time
+      for (let offset = 1; offset <= maxSeg; offset++) {
+        const promises = []
+        if (startSeg + offset <= maxSeg) promises.push(loadDashSegment(startSeg + offset))
+        if (startSeg - offset >= 0) promises.push(loadDashSegment(startSeg - offset))
+        if (promises.length) await Promise.all(promises)
+      }
+    } catch (e) {
+      dashError = e.message
+    }
+  }
+
+  // Binary search: find the sample closest to currentTime
+  function dashSampleAt(t) {
+    const s = dashSamples
+    if (!s || !s.length) return null
+    let lo = 0, hi = s.length - 1
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (s[mid].t < t) lo = mid + 1
+      else hi = mid
+    }
+    // Pick whichever of lo-1 or lo is closer
+    if (lo > 0 && Math.abs(s[lo - 1].t - t) < Math.abs(s[lo].t - t)) lo--
+    return s[lo]
+  }
+
+  // Current telemetry sample synced to video playhead
+  const dashTelemetry = $derived.by(() => {
+    if (!dashSamples || !dashSamples.length) return {
+      t: 0, coolantTemp: 0, oilTemp: 0, voltage: 0,
+      vEgo: 0, steeringAngleDeg: 0,
+      gasPressed: false, brakePressed: false,
+      steerCmd: 0, accelCmd: 0,
+      sdState: '', sdEnabled: false, cruiseSpeed: 0,
+    }
+    return dashSampleAt(currentTime) ?? dashSamples[0]
+  })
+
+  // History window: last 300 samples up to currentTime for sparklines
+  const DASH_HISTORY_SIZE = 300
+  const dashHistory = $derived.by(() => {
+    const s = dashSamples
+    if (!s || !s.length) return []
+    // Find end index (sample at or just before currentTime)
+    let end = s.length - 1
+    let lo = 0, hi = s.length - 1
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1
+      if (s[mid].t <= currentTime) lo = mid
+      else hi = mid - 1
+    }
+    end = lo
+    const start = Math.max(0, end - DASH_HISTORY_SIZE + 1)
+    return s.slice(start, end + 1)
+  })
+
+  function dashFieldHistory(field) {
+    return dashHistory.map(h => ({ t: h.t, v: h[field] ?? 0 }))
+  }
+
+  function dashMultiFieldHistories(fields) {
+    return fields.map(f => dashFieldHistory(f))
+  }
+
+  function getWidgetDef(id) {
+    return WIDGET_REGISTRY.find(w => w.id === id)
+  }
+
   let reEnriching = $state(false)
 
   async function reEnrich() {
@@ -506,7 +647,7 @@
       <div class="card">
         <Tabs.Root bind:value={activeTab}>
           <Tabs.List class="flex border-b border-surface-700/50">
-            {#each [['route','Route'],['events','Events'],['note','Note'],['device','Device'],['overlay','UI Overlay']] as [id, label]}
+            {#each [['route','Route'],['dashboard','Dashboard'],['note','Note'],['device','Device'],['overlay','UI Overlay']] as [id, label]}
               <Tabs.Trigger value={id}
                 class="flex-1 px-2 py-3 text-xs font-medium text-center transition-colors
                   {activeTab === id ? 'text-surface-100 border-b-2 border-engage-blue' : 'text-surface-500 hover:text-surface-300'}"
@@ -570,37 +711,82 @@
             </div>
           </Tabs.Content>
 
-          <!-- Events tab -->
-          <Tabs.Content value="events">
-            <div class="p-4">
-              {#if bookmarks.length}
-                <div class="flex flex-wrap gap-2">
-                  {#each bookmarks as bm, i}
-                    {@const totalSec = Math.floor(bm / 1000)}
-                    {@const mm = Math.floor(totalSec / 60)}
-                    {@const ss = (totalSec % 60).toString().padStart(2, '0')}
-                    {@const isActive = currentTime >= bm / 1000 - 2 && (i + 1 >= bookmarks.length || currentTime < bookmarks[i + 1] / 1000 - 2)}
-                    <button
-                      class="px-2 py-1 text-xs font-mono rounded text-surface-200"
-                      class:bg-engage-green={isActive}
-                      class:text-black={isActive}
-                      class:bg-surface-700={!isActive}
-                      class:hover:bg-surface-600={!isActive}
-                      onclick={() => handleSeek(Math.max(0, bm / 1000 - 2))}
-                    >
-                      {mm}:{ss}
-                    </button>
+          <!-- Dashboard tab (replay telemetry) -->
+          <Tabs.Content value="dashboard">
+            <div class="p-3 overflow-hidden">
+              {#if dashSamples === null && dashStarted}
+                <div class="flex items-center gap-2 justify-center py-8">
+                  <div class="w-4 h-4 border-2 border-engage-green border-t-transparent rounded-full animate-spin"></div>
+                  <span class="text-sm text-surface-400">Loading telemetry...</span>
+                </div>
+              {:else if dashError}
+                <p class="text-sm text-red-400 text-center py-4">{dashError}</p>
+              {:else if dashSamples && dashSamples.length > 0}
+                <div class="grid grid-cols-2 gap-2 [&>*]:min-w-0">
+                  {#each dashLayout as widgetId (widgetId)}
+                    {@const def = getWidgetDef(widgetId)}
+                    {#if def}
+                      <WidgetCard label={def.label}>
+                        {#if def.type === 'gauge'}
+                          <GaugeWidget
+                            value={dashTelemetry[def.fields[0]] ?? 0}
+                            unit={def.unit}
+                            range={def.range}
+                            zones={def.zones ?? []}
+                            scale={def.scale ?? 1}
+                            color={def.color ?? '#3b82f6'}
+                            history={dashFieldHistory(def.fields[0]).map(h => h.v)}
+                          />
+                        {:else if def.type === 'steering_wheel'}
+                          <SteeringWidget
+                            angle={dashTelemetry.steeringAngleDeg}
+                            steerCmd={dashTelemetry.steerCmd}
+                          />
+                        {:else if def.type === 'gas_brake_bar'}
+                          <GasBrakeWidget
+                            gasPressed={dashTelemetry.gasPressed}
+                            brakePressed={dashTelemetry.brakePressed}
+                            accelCmd={dashTelemetry.accelCmd}
+                          />
+                        {:else if def.type === 'engagement_badge'}
+                          <EngagementWidget
+                            sdState={dashTelemetry.sdState}
+                            sdEnabled={dashTelemetry.sdEnabled}
+                            cruiseSpeed={dashTelemetry.cruiseSpeed}
+                          />
+                        {:else if def.type === 'sparkline'}
+                          <SparklineWidget
+                            history={dashFieldHistory(def.fields[0])}
+                            scale={def.scale ?? 1}
+                            color={def.color ?? '#3b82f6'}
+                            cursorTime={currentTime}
+                          />
+                        {:else if def.type === 'sparkline_multi'}
+                          <SparklineMultiWidget
+                            histories={dashMultiFieldHistories(def.fields)}
+                            colors={def.colors ?? []}
+                            labels={def.labels ?? []}
+                            cursorTime={currentTime}
+                          />
+                        {/if}
+                      </WidgetCard>
+                    {/if}
                   {/each}
                 </div>
-              {:else}
-                <p class="text-sm text-surface-500">No events</p>
+                {#if dashLoadingCount > 0 && dashTotalSegs > 1}
+                  <p class="text-xs text-surface-400 text-center mt-2">
+                    Loading {dashLoadedSegs.size}/{dashTotalSegs} segments...
+                  </p>
+                {/if}
+              {:else if dashSamples}
+                <p class="text-sm text-surface-500 text-center py-4">No telemetry data available</p>
               {/if}
             </div>
           </Tabs.Content>
 
-          <!-- Note tab -->
+          <!-- Note tab (note + bookmarks) -->
           <Tabs.Content value="note">
-            <div class="p-4 space-y-2">
+            <div class="p-4 space-y-3">
               {#if editingNote}
                 <!-- svelte-ignore a11y_autofocus -->
                 <textarea
@@ -626,6 +812,30 @@
                 >
                   Click to add a note...
                 </button>
+              {/if}
+
+              {#if bookmarks.length}
+                <div class="border-t border-surface-700/50 pt-3">
+                  <p class="text-xs text-surface-500 mb-2">Bookmarks</p>
+                  <div class="flex flex-wrap gap-2">
+                    {#each bookmarks as bm, i}
+                      {@const totalSec = Math.floor(bm / 1000)}
+                      {@const mm = Math.floor(totalSec / 60)}
+                      {@const ss = (totalSec % 60).toString().padStart(2, '0')}
+                      {@const isActive = currentTime >= bm / 1000 - 2 && (i + 1 >= bookmarks.length || currentTime < bookmarks[i + 1] / 1000 - 2)}
+                      <button
+                        class="px-2 py-1 text-xs font-mono rounded text-surface-200"
+                        class:bg-engage-green={isActive}
+                        class:text-black={isActive}
+                        class:bg-surface-700={!isActive}
+                        class:hover:bg-surface-600={!isActive}
+                        onclick={() => handleSeek(Math.max(0, bm / 1000 - 2))}
+                      >
+                        {mm}:{ss}
+                      </button>
+                    {/each}
+                  </div>
+                </div>
               {/if}
             </div>
           </Tabs.Content>

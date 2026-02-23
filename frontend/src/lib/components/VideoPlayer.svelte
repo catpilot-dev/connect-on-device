@@ -276,8 +276,12 @@
       return
     }
     if (videoEl) {
+      const wasPlaying = !videoEl.paused
       userWantsPause = false  // Seeking implies user wants playback
       videoEl.currentTime = time
+      // HLS.js may pause when seeking across segment discontinuities —
+      // explicitly resume if video was playing (fixes loop-back stall)
+      if (wasPlaying) videoEl.play().catch(() => {})
     }
   }
 
