@@ -25,6 +25,7 @@
   let checking = $state(false)
   let downloading = $state(null) // model_id being downloaded
   let downloadPollTimer = $state(null)
+  let modelsExpanded = $state(false)
 
   // Software update state
   let sw = $state(null)
@@ -1044,8 +1045,23 @@
 
     <!-- Models Section -->
     <div class="card p-4">
-      <h3 class="text-surface-400 text-xs font-semibold uppercase tracking-wider mb-4">Models</h3>
+      <button
+        class="w-full flex items-center justify-between"
+        onclick={() => { modelsExpanded = !modelsExpanded }}
+      >
+        <h3 class="text-surface-400 text-xs font-semibold uppercase tracking-wider">Models</h3>
+        <div class="flex items-center gap-3">
+          {#if activeDriving}
+            <span class="text-xs text-surface-500 font-mono">{activeDriving.name}</span>
+          {/if}
+          <svg class="w-4 h-4 text-surface-500 transition-transform {modelsExpanded ? 'rotate-180' : ''}" viewBox="0 0 20 20" fill="currentColor">
+            <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd" />
+          </svg>
+        </div>
+      </button>
 
+      {#if modelsExpanded}
+      <div class="mt-4">
       {#if modelsLoading}
         <div class="space-y-3 animate-pulse">
           <div class="h-10 bg-surface-700 rounded-lg"></div>
@@ -1258,6 +1274,8 @@
             {/if}
           {/if}
         </div>
+      {/if}
+      </div>
       {/if}
     </div>
   {/if}
