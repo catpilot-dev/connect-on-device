@@ -47,9 +47,11 @@
   // Mapd update state
   let mapdVersion = $state(null)
   let mapdLatest = $state(null)
+  let mapdReleaseDate = $state(null)
   let mapdChecking = $state(false)
   let mapdUpdating = $state(false)
   let mapdError = $state(null)
+  let mapdExpanded = $state(false)
 
   const SECTIONS = [
     {
@@ -78,6 +80,7 @@
   onMount(async () => {
     try {
       params = await fetchParams()
+      if (params.MapdVersion) mapdVersion = params.MapdVersion
       fetchLateralDelay().then(d => { latDelay = d }).catch(() => {})
     } catch (e) {
       error = e.message
@@ -414,6 +417,44 @@
       downloading = null
     }
   }
+
+  async function handleMapdCheck() {
+    mapdChecking = true
+    mapdError = null
+    try {
+      const res = await mapdCheckUpdate()
+      if (res.error) {
+        mapdError = res.error
+      } else {
+        mapdVersion = res.current
+        mapdLatest = res.latest
+        if (res.release_date) mapdReleaseDate = res.release_date
+      }
+    } catch (e) {
+      mapdError = e.message
+    } finally {
+      mapdChecking = false
+    }
+  }
+
+  async function handleMapdUpdate() {
+    if (!confirm(`Update mapd from ${mapdVersion} to ${mapdLatest}?`)) return
+    mapdUpdating = true
+    mapdError = null
+    try {
+      const res = await mapdUpdate()
+      if (res.error) {
+        mapdError = res.error
+      } else {
+        mapdVersion = res.version || mapdLatest
+        mapdLatest = mapdVersion
+      }
+    } catch (e) {
+      mapdError = e.message
+    } finally {
+      mapdUpdating = false
+    }
+  }
 </script>
 
 <div class="max-w-lg mx-auto px-4 py-6 space-y-6 overflow-hidden">
@@ -705,25 +746,113 @@
               </div>
             </div>
           {/if}
+
         </div>
       </div>
     {/each}
 
-    <!-- Map Tiles Source -->
+    <!-- Mapd & Maps -->
     <div class="card p-4">
-      <h3 class="text-surface-400 text-xs font-semibold uppercase tracking-wider mb-4">Map Tiles</h3>
-      <div class="flex gap-2">
-        {#each Object.entries(TILE_SOURCES) as [key, src]}
-          <button
-            class="flex-1 rounded-lg px-3 py-2 text-left transition-colors {tileSource === key ? 'bg-engage-blue/15 border border-engage-blue/40' : 'bg-surface-700 border border-surface-600 hover:border-surface-500'}"
-            onclick={() => { tileSource = key; setTileSource(key) }}
+      <button
+        class="w-full flex items-center justify-between"
+        onclick={() => { mapdExpanded = !mapdExpanded; if (mapdExpanded && !mapdLatest && !mapdChecking) handleMapdCheck() }}
+      >
+        <h3 class="text-surface-400 text-xs font-semibold uppercase tracking-wider">Mapd & Maps</h3>
+        <svg class="w-4 h-4 text-surface-500 transition-transform {mapdExpanded ? 'rotate-180' : ''}" viewBox="0 0 20 20" fill="currentColor">
+          <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd" />
+        </svg>
+      </button>
+
+      {#if mapdExpanded}
+      <div class="mt-4 space-y-4">
+
+        <!-- Mapd version & update -->
+        <div class="flex items-center justify-between gap-3">
+          <div class="min-w-0">
+            <div class="text-sm text-surface-100">
+              mapd {mapdVersion || '...'}
+              {#if mapdReleaseDate}
+                <span class="text-surface-500 text-xs">({mapdReleaseDate})</span>
+              {/if}
+              {#if mapdLatest && mapdLatest !== mapdVersion}
+                <span class="text-surface-500">&rarr;</span>
+                <span class="text-engage-green">{mapdLatest}</span>
+              {/if}
+            </div>
+            {#if mapdError}
+              <div class="text-xs text-engage-red mt-0.5">{mapdError}</div>
+            {/if}
+          </div>
+          <div class="shrink-0">
+            {#if mapdUpdating}
+              <div class="flex items-center gap-2 text-xs text-surface-400">
+                <svg class="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10" stroke-opacity="0.25" />
+                  <path d="M12 2a10 10 0 019.95 9" />
+                </svg>
+                Installing...
+              </div>
+            {:else if mapdChecking}
+              <div class="flex items-center gap-2 text-xs text-surface-400">
+                <svg class="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10" stroke-opacity="0.25" />
+                  <path d="M12 2a10 10 0 019.95 9" />
+                </svg>
+                Checking
+              </div>
+            {:else if mapdLatest && mapdLatest !== mapdVersion}
+              <button
+                class="text-xs px-3 py-1.5 rounded-lg bg-engage-green/15 text-engage-green hover:bg-engage-green/25 transition-colors"
+                onclick={handleMapdUpdate}
+              >
+                Install Update
+              </button>
+            {:else if mapdLatest}
+              <span class="text-xs px-3 py-1.5 text-surface-500">Up to Date</span>
+            {:else}
+              <button
+                class="text-xs px-3 py-1.5 rounded-lg bg-surface-700 text-surface-300 hover:bg-surface-600 transition-colors"
+                onclick={handleMapdCheck}
+              >Retry</button>
+            {/if}
+          </div>
+        </div>
+
+        <!-- Map Tiles Management -->
+        <div class="pt-3 border-t border-surface-700">
+          <a
+            href="/tiles"
+            class="flex items-center justify-between group"
           >
-            <div class="text-sm {tileSource === key ? 'text-engage-blue' : 'text-surface-100'}">{src.label}</div>
-            <div class="text-xs text-surface-500 mt-0.5">{src.desc}</div>
-          </button>
-        {/each}
+            <div>
+              <div class="text-sm text-surface-100">Map Tiles Management</div>
+              <div class="text-xs text-surface-500 mt-0.5">Download and manage OSM offline tiles</div>
+            </div>
+            <svg class="w-5 h-5 text-surface-500 group-hover:text-surface-300 transition-colors" viewBox="0 0 20 20" fill="currentColor">
+              <path fill-rule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clip-rule="evenodd" />
+            </svg>
+          </a>
+        </div>
+
+        <!-- Map Tile Source -->
+        <div class="pt-3 border-t border-surface-700">
+          <div class="text-sm text-surface-100 mb-2">Map Tile Source</div>
+          <div class="flex gap-2">
+            {#each Object.entries(TILE_SOURCES) as [key, src]}
+              <button
+                class="flex-1 rounded-lg px-3 py-2 text-left transition-colors {tileSource === key ? 'bg-engage-blue/15 border border-engage-blue/40' : 'bg-surface-700 border border-surface-600 hover:border-surface-500'}"
+                onclick={() => { tileSource = key; setTileSource(key) }}
+              >
+                <div class="text-sm {tileSource === key ? 'text-engage-blue' : 'text-surface-100'}">{src.label}</div>
+                <div class="text-xs text-surface-500 mt-0.5">{src.desc}</div>
+              </button>
+            {/each}
+          </div>
+          <div class="text-xs text-surface-500 mt-2">Reload route page to apply</div>
+        </div>
+
       </div>
-      <div class="text-xs text-surface-500 mt-2">Reload route page to apply</div>
+      {/if}
     </div>
 
     <!-- Software Section -->

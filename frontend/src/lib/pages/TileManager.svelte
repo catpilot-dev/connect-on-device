@@ -14,11 +14,14 @@
   // State
   let downloaded = $state([])
   let selected = $state([])
+  let selectedForDelete = $state([])
   let storage = $state({ total_mb: 0, tile_count: 0 })
   let progress = $state({ active: false, total: 0, done: 0, current: null, error: null })
   let loading = $state(true)
   let error = $state(null)
   let pollTimer = null
+  let highlightedTile = $state(null) // {lat, lon} of tile hovered in list
+  let gridLayerMap = {}  // "lat,lon" -> Leaflet rectangle layer
 
   // Grid range for eastern China (covers most driving areas)
   const LAT_MIN = 18, LAT_MAX = 54
@@ -50,14 +53,28 @@
     return selected.some(t => t.lat === lat && t.lon === lon)
   }
 
+  function isSelectedForDelete(lat, lon) {
+    return selectedForDelete.some(t => t.lat === lat && t.lon === lon)
+  }
+
   function toggleTile(lat, lon) {
     if (progress.active) return
-    const key = tileKey(lat, lon)
-    const idx = selected.findIndex(t => t.lat === lat && t.lon === lon)
-    if (idx >= 0) {
-      selected = selected.filter((_, i) => i !== idx)
+    if (isDownloaded(lat, lon)) {
+      // Toggle delete selection for downloaded tiles
+      const idx = selectedForDelete.findIndex(t => t.lat === lat && t.lon === lon)
+      if (idx >= 0) {
+        selectedForDelete = selectedForDelete.filter((_, i) => i !== idx)
+      } else {
+        selectedForDelete = [...selectedForDelete, { lat, lon }]
+      }
     } else {
-      selected = [...selected, { lat, lon }]
+      // Toggle download selection for empty tiles
+      const idx = selected.findIndex(t => t.lat === lat && t.lon === lon)
+      if (idx >= 0) {
+        selected = selected.filter((_, i) => i !== idx)
+      } else {
+        selected = [...selected, { lat, lon }]
+      }
     }
     updateGrid()
   }
@@ -72,13 +89,36 @@
 
   function clearSelection() {
     selected = []
+    selectedForDelete = []
     updateGrid()
   }
 
   function tileStyle(lat, lon) {
-    if (isDownloaded(lat, lon)) return { color: '#22c55e', weight: 3, fillOpacity: 0 }
-    if (isSelected(lat, lon)) return { color: '#3b82f6', weight: 3, fillOpacity: 0 }
-    return { color: '#3a4254', weight: 1, fillOpacity: 0 }
+    if (isSelectedForDelete(lat, lon)) return { color: '#ef4444', weight: 3, fillOpacity: 0.2 }
+    if (isDownloaded(lat, lon)) return { color: '#22c55e', weight: 3, fillOpacity: 0.01 }
+    if (isSelected(lat, lon)) return { color: '#3b82f6', weight: 3, fillOpacity: 0.01 }
+    return { color: '#3a4254', weight: 1, fillOpacity: 0.01 }
+  }
+
+  function highlightTileOnMap(lat, lon) {
+    highlightedTile = { lat, lon }
+    const key = tileKey(lat, lon)
+    const layer = gridLayerMap[key]
+    if (layer) {
+      layer.setStyle({ color: '#ef4444', weight: 3, fillColor: '#ef4444', fillOpacity: 0.25 })
+      layer.bringToFront()
+    }
+  }
+
+  function clearHighlight() {
+    if (!highlightedTile) return
+    const key = tileKey(highlightedTile.lat, highlightedTile.lon)
+    const layer = gridLayerMap[key]
+    if (layer) {
+      const style = tileStyle(highlightedTile.lat, highlightedTile.lon)
+      layer.setStyle({ color: style.color, weight: style.weight, fillColor: style.color, fillOpacity: style.fillOpacity })
+    }
+    highlightedTile = null
   }
 
   function updateGrid() {
@@ -87,6 +127,7 @@
     // Remove old grid layers
     for (const layer of gridLayers) map.removeLayer(layer)
     gridLayers = []
+    gridLayerMap = {}
 
     for (let lat = LAT_MIN; lat < LAT_MAX; lat += GRID_STEP) {
       for (let lon = LON_MIN; lon < LON_MAX; lon += GRID_STEP) {
@@ -105,9 +146,7 @@
         })
 
         rect.on('click', () => {
-          if (!isDownloaded(lat, lon)) {
-            toggleTile(lat, lon)
-          }
+          toggleTile(lat, lon)
         })
 
         // Tooltip
@@ -121,7 +160,16 @@
 
         rect.addTo(map)
         gridLayers.push(rect)
+        gridLayerMap[tileKey(lat, lon)] = rect
       }
+    }
+
+    // Bring selected tiles to front so borders aren't overlapped by neighbors
+    for (const t of selected) {
+      gridLayerMap[tileKey(t.lat, t.lon)]?.bringToFront()
+    }
+    for (const t of selectedForDelete) {
+      gridLayerMap[tileKey(t.lat, t.lon)]?.bringToFront()
     }
   }
 
@@ -164,6 +212,20 @@
     }
   }
 
+  async function handleDeleteSelected() {
+    if (selectedForDelete.length === 0) return
+    error = null
+    try {
+      for (const t of selectedForDelete) {
+        await deleteTile(t.lat, t.lon)
+      }
+      selectedForDelete = []
+      await refresh()
+    } catch (e) {
+      error = e.message
+    }
+  }
+
   function startPolling() {
     stopPolling()
     pollTimer = setInterval(async () => {
@@ -171,9 +233,10 @@
         progress = await fetchTileProgress()
         if (!progress.active) {
           stopPolling()
-          // Remove successfully downloaded tiles from selection
-          selected = selected.filter(t => !isDownloaded(t.lat, t.lon))
           await refresh()
+          // Remove successfully downloaded tiles from selection (after refresh updates downloaded list)
+          selected = selected.filter(t => !isDownloaded(t.lat, t.lon))
+          updateGrid()
         }
       } catch (e) {
         console.warn('poll error:', e)
@@ -272,118 +335,114 @@
   }
 </style>
 
-<div class="flex flex-col h-full">
-  <!-- Map -->
-  <div
-    bind:this={mapContainer}
-    class="w-full flex-1"
-    style="min-height: 400px"
-  ></div>
+<div class="flex flex-col h-full overflow-y-auto">
+  <!-- Map (responsive with padding) -->
+  <div class="flex-1 px-4 pt-4">
+    <div
+      bind:this={mapContainer}
+      class="w-full h-full rounded-lg overflow-hidden"
+      style="min-height: 400px"
+    ></div>
+  </div>
 
-  <!-- Controls panel -->
-  <div class="bg-surface-900 border-t border-surface-700/50 p-4 space-y-3">
-    <!-- Error -->
-    {#if error}
-      <div class="text-engage-red text-sm">{error}</div>
-    {/if}
+  <!-- Two-column: Downloaded Tiles (left) | Download Button (right) -->
+  <div class="px-4 py-3 grid grid-cols-2 gap-4">
 
-    <!-- Progress bar -->
-    {#if progress.active}
-      <div class="space-y-1">
-        <div class="flex items-center justify-between text-xs text-surface-300">
-          <span>Downloading {currentTileLabel}</span>
-          <span>{progress.done}/{progress.total} tiles ({progressPct}%)</span>
+    <!-- Left: Downloaded tiles (collapsed by default) -->
+    <div>
+      {#if error}
+        <div class="text-engage-red text-xs mb-2">{error}</div>
+      {/if}
+      {#if progress.error}
+        <div class="text-engage-red text-xs p-1.5 rounded bg-engage-red/10 mb-2">{progress.error}</div>
+      {/if}
+
+      <details class="text-sm">
+        <summary class="cursor-pointer hover:bg-surface-800/50 rounded transition-colors px-2 py-1.5">
+          <span class="text-surface-400 text-xs font-semibold uppercase tracking-wider">Downloaded</span>
+          <div class="text-xs text-surface-500 mt-0.5">{storage.tile_count} tiles &middot; {storage.total_mb} MB</div>
+        </summary>
+        <div class="mt-1 space-y-1 max-h-48 overflow-y-auto">
+          {#if downloaded.length === 0}
+            <div class="text-xs text-surface-500 p-2 text-center">No tiles downloaded</div>
+          {:else}
+            {#each downloaded as tile}
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <div
+                class="flex items-center justify-between px-2 py-1.5 rounded transition-colors {highlightedTile?.lat === tile.lat && highlightedTile?.lon === tile.lon ? 'bg-engage-red/15' : 'bg-surface-800 hover:bg-surface-750'}"
+                onmouseenter={() => highlightTileOnMap(tile.lat, tile.lon)}
+                onmouseleave={clearHighlight}
+              >
+                <div class="min-w-0">
+                  <div class="text-surface-200 text-xs truncate">{tileLabel(tile.lat, tile.lon)}</div>
+                  <div class="text-surface-500 text-xs">{tile.size_mb} MB</div>
+                </div>
+                <button
+                  class="shrink-0 ml-2 text-xs text-engage-red/60 hover:text-engage-red transition-colors"
+                  onclick={() => handleDelete(tile.lat, tile.lon)}
+                  title="Delete tile"
+                >
+                  <svg class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M8.75 1A2.75 2.75 0 006 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 10.23 1.482l.149-.022.841 10.518A2.75 2.75 0 007.596 19h4.807a2.75 2.75 0 002.742-2.53l.841-10.52.149.023a.75.75 0 00.23-1.482A41.03 41.03 0 0014 4.193V3.75A2.75 2.75 0 0011.25 1h-2.5zM10 4c.84 0 1.673.025 2.5.075V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.325C8.327 4.025 9.16 4 10 4zM8.58 7.72a.75.75 0 00-1.5.06l.3 7.5a.75.75 0 101.5-.06l-.3-7.5zm4.34.06a.75.75 0 10-1.5-.06l-.3 7.5a.75.75 0 101.5.06l.3-7.5z" clip-rule="evenodd" />
+                  </svg>
+                </button>
+              </div>
+            {/each}
+          {/if}
         </div>
-        <div class="w-full h-2 rounded-full bg-surface-700 overflow-hidden">
-          <div
-            class="h-full rounded-full bg-engage-blue transition-all duration-300"
-            style="width: {progressPct}%"
-          ></div>
-        </div>
-      </div>
-    {/if}
+      </details>
+    </div>
 
-    <!-- Presets row -->
-    <div class="flex items-center gap-2 flex-wrap">
-      <span class="text-xs text-surface-400">Presets:</span>
-      {#each PRESETS as preset}
+    <!-- Right: Download button -->
+    <div class="space-y-1.5">
+      {#if progress.active}
+        <div class="space-y-1.5">
+          <div class="flex items-center justify-between text-xs text-surface-300">
+            <span class="truncate">{currentTileLabel}</span>
+            <span class="shrink-0">{progressPct}%</span>
+          </div>
+          <div class="w-full h-1.5 rounded-full bg-surface-700 overflow-hidden">
+            <div
+              class="h-full rounded-full bg-engage-blue transition-all duration-300"
+              style="width: {progressPct}%"
+            ></div>
+          </div>
+          <button
+            class="w-full py-2 text-sm rounded-lg bg-engage-red/20 text-engage-red hover:bg-engage-red/30 transition-colors"
+            onclick={cancelDownload}
+          >Cancel</button>
+        </div>
+      {:else if selectedForDelete.length > 0}
         <button
-          class="px-2.5 py-1 text-xs rounded bg-surface-700 text-surface-200 hover:bg-surface-600 transition-colors disabled:opacity-40"
-          disabled={progress.active}
-          onclick={() => applyPreset(preset)}
+          class="w-full py-2 text-sm rounded-lg transition-colors bg-engage-red/20 text-engage-red hover:bg-engage-red/30"
+          onclick={handleDeleteSelected}
         >
-          {preset.name}
+          {selectedForDelete.length} selected, Delete
         </button>
-      {/each}
-      {#if selected.length > 0}
         <button
-          class="px-2.5 py-1 text-xs rounded bg-surface-700 text-surface-400 hover:text-surface-200 hover:bg-surface-600 transition-colors"
-          onclick={clearSelection}
+          class="w-full py-1 text-xs text-surface-500 hover:text-surface-300 transition-colors"
+          onclick={() => { selectedForDelete = []; updateGrid() }}
+        >Clear selection</button>
+      {:else}
+        <button
+          class="w-full py-2 text-sm rounded-lg transition-colors {selected.length > 0 ? 'bg-engage-blue text-white hover:bg-engage-blue/80' : 'bg-surface-700 text-surface-200 border border-dashed border-surface-500'}"
+          disabled={selected.length === 0}
+          onclick={startDownload}
         >
-          Clear
+          {#if selected.length > 0}
+            {selected.length} selected, Download
+          {:else}
+            Click map to select
+          {/if}
         </button>
+        {#if selected.length > 0}
+          <button
+            class="w-full py-1 text-xs text-surface-500 hover:text-surface-300 transition-colors"
+            onclick={clearSelection}
+          >Clear selection</button>
+        {/if}
       {/if}
     </div>
 
-    <!-- Action bar -->
-    <div class="flex items-center justify-between">
-      <div class="text-sm text-surface-300">
-        <span class="text-surface-50 font-medium">{storage.tile_count}</span> tiles
-        <span class="text-surface-500 mx-1">|</span>
-        <span class="text-surface-50 font-medium">{storage.total_mb}</span> MB
-        {#if selected.length > 0}
-          <span class="text-surface-500 mx-1">|</span>
-          <span class="text-engage-blue font-medium">{selected.length}</span> selected
-        {/if}
-      </div>
-
-      <div class="flex items-center gap-2">
-        {#if progress.active}
-          <button
-            class="px-4 py-2 text-sm rounded bg-engage-red/20 text-engage-red hover:bg-engage-red/30 transition-colors"
-            onclick={cancelDownload}
-          >
-            Cancel
-          </button>
-        {:else}
-          <button
-            class="px-4 py-2 text-sm rounded bg-engage-blue text-white hover:bg-engage-blue/80 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            disabled={selected.length === 0}
-            onclick={startDownload}
-          >
-            Download {selected.length} tile{selected.length !== 1 ? 's' : ''}
-          </button>
-        {/if}
-      </div>
-    </div>
-
-    <!-- Downloaded tiles list -->
-    {#if downloaded.length > 0}
-      <details class="text-sm">
-        <summary class="text-surface-400 cursor-pointer hover:text-surface-200 transition-colors">
-          Downloaded tiles
-        </summary>
-        <div class="mt-2 space-y-1 max-h-40 overflow-y-auto">
-          {#each downloaded as tile}
-            <div class="flex items-center justify-between px-2 py-1 rounded bg-surface-800">
-              <span class="text-surface-200 text-xs">{tileLabel(tile.lat, tile.lon)}</span>
-              <div class="flex items-center gap-2">
-                <span class="text-surface-400 text-xs">{tile.size_mb} MB</span>
-                <button
-                  class="text-xs text-engage-red/60 hover:text-engage-red transition-colors"
-                  onclick={() => handleDelete(tile.lat, tile.lon)}
-                >
-                  Delete
-                </button>
-              </div>
-            </div>
-          {/each}
-        </div>
-      </details>
-    {/if}
-
-    {#if progress.error}
-      <div class="text-engage-red text-xs p-2 rounded bg-engage-red/10">{progress.error}</div>
-    {/if}
   </div>
 </div>

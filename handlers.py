@@ -1927,35 +1927,44 @@ async def handle_tile_delete(request: web.Request) -> web.Response:
 # ─── Mapd binary update ──────────────────────────────────────────────
 
 MAPD_MANAGER = OPENPILOT_DIR / "selfdrive" / "mapd" / "mapd_manager.py"
+_MAPD_ENV = {**os.environ, "PYTHONPATH": str(OPENPILOT_DIR), "PWD": str(OPENPILOT_DIR)}
 
 
 async def handle_mapd_check_update(request: web.Request) -> web.Response:
     """POST /v1/mapd/check-update — check for mapd binary updates via mapd_manager.py."""
-    loop = asyncio.get_event_loop()
     try:
         proc = await asyncio.wait_for(
             asyncio.create_subprocess_exec(
                 PYTHON_BIN, str(MAPD_MANAGER), "check",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                cwd=str(OPENPILOT_DIR),
+                env=_MAPD_ENV,
             ),
             timeout=30,
         )
         stdout, stderr = await proc.communicate()
         output = stdout.decode().strip()
 
-        if "UP_TO_DATE:" in output:
-            # "UP_TO_DATE: v2.0.6"
-            version = output.split("UP_TO_DATE:")[-1].strip()
+        # Extract optional date suffix like " (2026-01-31)"
+        import re
+        date_match = re.search(r"\((\d{4}-\d{2}-\d{2})\)", output)
+        release_date = date_match.group(1) if date_match else None
+        # Strip the date suffix for version parsing
+        clean = re.sub(r"\s*\(\d{4}-\d{2}-\d{2}\)", "", output)
+
+        if "UP_TO_DATE:" in clean:
+            version = clean.split("UP_TO_DATE:")[-1].strip()
             return web.json_response({
-                "current": version, "latest": version, "update_available": False,
+                "current": version, "latest": version,
+                "update_available": False, "release_date": release_date,
             })
-        elif "UPDATE_AVAILABLE:" in output:
-            # "UPDATE_AVAILABLE: v2.0.6 -> v2.1.0"
-            parts = output.split("UPDATE_AVAILABLE:")[-1].strip()
+        elif "UPDATE_AVAILABLE:" in clean:
+            parts = clean.split("UPDATE_AVAILABLE:")[-1].strip()
             current, latest = [p.strip() for p in parts.split("->")]
             return web.json_response({
-                "current": current, "latest": latest, "update_available": True,
+                "current": current, "latest": latest,
+                "update_available": True, "release_date": release_date,
             })
         else:
             return web.json_response(
@@ -1976,6 +1985,8 @@ async def handle_mapd_update(request: web.Request) -> web.Response:
                 PYTHON_BIN, str(MAPD_MANAGER), "update",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                cwd=str(OPENPILOT_DIR),
+                env=_MAPD_ENV,
             ),
             timeout=120,
         )
