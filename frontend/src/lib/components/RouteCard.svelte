@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte'
   import { selectedRoute } from '../stores.js'
-  import { formatDate, formatTime, formatDuration, formatDistance, getRouteDurationMs } from '../format.js'
+  import { formatDate, formatTimeRange, formatDuration, formatDistance, getRouteDurationMs } from '../format.js'
   import { fetchAllEvents } from '../api.js'
   import { buildTimelineEvents } from '../derived.js'
   import Filmstrip from './Filmstrip.svelte'
@@ -28,7 +28,7 @@
   })
 
   function handleClick() {
-    selectedRoute.set(route.fullname)
+    selectedRoute.set(route.local_id)
   }
 </script>
 
@@ -64,9 +64,8 @@
   <div class="px-3 py-2.5 flex items-center gap-3 flex-wrap text-sm">
     <div class="flex items-center gap-2 min-w-0">
       <span class="text-surface-100 font-medium truncate">
-        {formatDate(route.create_time)}
+        {formatDate(route.create_time)} {formatTimeRange(route.start_time, route.end_time)}
       </span>
-      <span class="text-surface-400">{formatTime(route.start_time)}</span>
     </div>
 
     <div class="flex items-center gap-2 text-xs text-surface-400 ml-auto">
