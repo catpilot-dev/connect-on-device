@@ -38,6 +38,7 @@
   let hudHls = null
   let manifestUrl = null
   let isPlaying = $state(false)
+  let isMuted = $state(true)
   let userWantsPause = false  // Guard against HLS spurious play events after seek
 
   // Track which video is active for control methods
@@ -55,11 +56,13 @@
       '#EXT-X-MEDIA-SEQUENCE:0',
       '#EXT-X-PLAYLIST-TYPE:VOD',
     ]
-    for (const url of qcameraUrls) {
+    for (let i = 0; i < qcameraUrls.length; i++) {
+      if (i > 0) lines.push('#EXT-X-DISCONTINUITY')
+      const url = qcameraUrls[i]
       if (!url) {
         lines.push('#EXT-X-GAP', '#EXTINF:60.0,', 'gap')
       } else {
-        lines.push(`#EXTINF:60.0,`, url)
+        lines.push('#EXTINF:60.0,', url)
       }
     }
     lines.push('#EXT-X-ENDLIST')
@@ -111,7 +114,9 @@
         }
       })
     } else if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
-      videoEl.src = manifestUrl
+      // Safari native HLS — use server-side manifest (blob URLs not supported)
+      const routeId = (route.local_id || route.fullname).replace('/', '|')
+      videoEl.src = `/v1/route/${routeId}/manifest.m3u8`
       videoEl.addEventListener('loadedmetadata', () => {
         if (!showingHud) videoEl.play().catch(() => {})
       }, { once: true })
@@ -302,13 +307,24 @@
     if (videoEl) videoEl.playbackRate = rate
     if (hudVideoEl) hudVideoEl.playbackRate = rate
   }
+
+  export function toggleMute() {
+    isMuted = !isMuted
+    if (videoEl) videoEl.muted = isMuted
+    if (hudVideoEl) hudVideoEl.muted = isMuted
+    return isMuted
+  }
+
+  export function getMuted() {
+    return isMuted
+  }
 </script>
 
-<div class="relative w-full bg-black rounded-lg overflow-hidden">
+<div class="relative w-full">
   <!-- HLS video element — hidden when HUD video is active -->
   <video
     bind:this={videoEl}
-    class="w-full aspect-video object-contain bg-black"
+    class="w-full block"
     class:hidden={showingHud}
     muted
     playsinline
@@ -328,7 +344,7 @@
   <!-- HUD live stream video element — shown when hudLiveUrl is active -->
   <video
     bind:this={hudVideoEl}
-    class="w-full aspect-video object-contain bg-black"
+    class="w-full block"
     class:hidden={!showingHud}
     muted
     playsinline

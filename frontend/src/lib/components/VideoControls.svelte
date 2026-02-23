@@ -63,10 +63,10 @@
 </script>
 
 <div class="flex items-center h-8 gap-1">
-  <!-- Center group: navigation + time info -->
+  <!-- Center group: -5s {Time}-{Seg} +5s | Play/Pause | -1f {Frame} +1f -->
   <div class="flex-1 min-w-0 flex items-center justify-center">
     <div class="flex items-center gap-0.5 sm:gap-1">
-      <!-- Skip back -->
+      <!-- Skip back -5s -->
       <button
         class="btn-ghost p-1"
         onclick={seekBack}
@@ -79,40 +79,12 @@
         </svg>
       </button>
 
-      <!-- Frame back -->
-      <button
-        class="btn-ghost p-1 text-engage-blue disabled:opacity-30"
-        onclick={() => onStepFrame?.(-1)}
-        disabled={isPlaying}
-        aria-label="Previous frame"
-        title="-1 frame"
-      >
-        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path d="M1 4v6h6"/>
-          <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
-        </svg>
-      </button>
-
-      <!-- Time - Seg - Frame -->
-      <span class="text-xs font-mono tabular-nums text-surface-200 px-1 truncate">
-        <span title="GPS local time">{timeDisplay}</span><span class="text-surface-500 mx-0.5">-</span><span title="Segment">{currentSeg}</span><span class="text-surface-500 mx-0.5">-</span><span class="text-engage-blue" class:opacity-30={isPlaying} title="Frame (0-19)">{currentFrame}</span>
+      <!-- Time - Seg -->
+      <span class="text-xs font-mono tabular-nums text-surface-200 px-0.5 truncate">
+        <span title="GPS local time">{timeDisplay}</span><span class="text-surface-500 mx-0.5">-</span><span title="Segment">{currentSeg}</span>
       </span>
 
-      <!-- Frame forward -->
-      <button
-        class="btn-ghost p-1 text-engage-blue disabled:opacity-30"
-        onclick={() => onStepFrame?.(1)}
-        disabled={isPlaying}
-        aria-label="Next frame"
-        title="+1 frame"
-      >
-        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path d="M23 4v6h-6"/>
-          <path d="M20.49 15a9 9 0 1 1-2.13-9.36L23 10"/>
-        </svg>
-      </button>
-
-      <!-- Skip forward -->
+      <!-- Skip forward +5s -->
       <button
         class="btn-ghost p-1"
         onclick={seekFwd}
@@ -141,6 +113,37 @@
             <path d="M6.3 2.841A1.5 1.5 0 004 4.11V15.89a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z"/>
           </svg>
         {/if}
+      </button>
+
+      <!-- Frame back -1f -->
+      <button
+        class="btn-ghost p-1 text-engage-blue disabled:opacity-30"
+        onclick={() => onStepFrame?.(-1)}
+        disabled={isPlaying}
+        aria-label="Previous frame"
+        title="-1 frame"
+      >
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path d="M1 4v6h6"/>
+          <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+        </svg>
+      </button>
+
+      <!-- Frame -->
+      <span class="text-xs font-mono tabular-nums px-0.5 text-engage-blue" class:opacity-30={isPlaying} title="Frame (0-19)">{currentFrame}</span>
+
+      <!-- Frame forward +1f -->
+      <button
+        class="btn-ghost p-1 text-engage-blue disabled:opacity-30"
+        onclick={() => onStepFrame?.(1)}
+        disabled={isPlaying}
+        aria-label="Next frame"
+        title="+1 frame"
+      >
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path d="M23 4v6h-6"/>
+          <path d="M20.49 15a9 9 0 1 1-2.13-9.36L23 10"/>
+        </svg>
       </button>
     </div>
   </div>

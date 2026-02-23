@@ -32,27 +32,30 @@ export function getRouteDurationMs(route) {
   return new Date(route.end_time).getTime() - new Date(route.start_time).getTime()
 }
 
-/** Format epoch timestamp to local date string */
+/** Format epoch timestamp to local date string — "Friday Feb 20" */
 export function formatDate(epoch) {
   if (!epoch) return '--'
   // Counter-based create_time (unenriched routes) — not a real epoch
   if (typeof epoch === 'number' && epoch < 1_000_000_000) return 'Pending...'
   const d = typeof epoch === 'string' ? new Date(epoch) : new Date(epoch * 1000)
   const now = new Date()
-  const opts = { weekday: 'short', month: 'short', day: 'numeric' }
 
+  const weekday = d.toLocaleDateString('en-US', { weekday: 'long' })
+  const month = d.toLocaleDateString('en-US', { month: 'short' })
+  const day = d.getDate()
+  const yearSuffix = d.getFullYear() !== now.getFullYear() ? ` ${d.getFullYear()}` : ''
+
+  let prefix = ''
   if (d.toDateString() === now.toDateString()) {
-    return `Today \u2013 ${d.toLocaleDateString(undefined, opts)}`
+    prefix = 'Today \u2013 '
+  } else {
+    const yesterday = new Date(now)
+    yesterday.setDate(yesterday.getDate() - 1)
+    if (d.toDateString() === yesterday.toDateString()) {
+      prefix = 'Yesterday \u2013 '
+    }
   }
-  const yesterday = new Date(now)
-  yesterday.setDate(yesterday.getDate() - 1)
-  if (d.toDateString() === yesterday.toDateString()) {
-    return `Yesterday \u2013 ${d.toLocaleDateString(undefined, opts)}`
-  }
-  if (d.getFullYear() !== now.getFullYear()) {
-    opts.year = 'numeric'
-  }
-  return d.toLocaleDateString(undefined, opts)
+  return `${prefix}${weekday} ${month} ${day}${yearSuffix}`
 }
 
 /** Format epoch or ISO string to local time string */
@@ -65,12 +68,29 @@ export function formatTime(epoch) {
   return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
 }
 
+/** Format start/end time range — "@ 15:39 - 15:45" */
+export function formatTimeRange(startTime, endTime) {
+  const start = formatTime(startTime)
+  const end = formatTime(endTime)
+  if (!start) return ''
+  return end ? `@ ${start} - ${end}` : `@ ${start}`
+}
+
 /** Format seconds to M:SS video time */
 export function formatVideoTime(totalSeconds) {
   const sec = Math.max(0, Math.floor(totalSeconds))
   const m = Math.floor(sec / 60)
   const s = String(sec % 60).padStart(2, '0')
   return `${m}:${s}`
+}
+
+/** Format seconds to HH:MM:SS video time */
+export function formatVideoTimeHMS(totalSeconds) {
+  const sec = Math.max(0, Math.floor(totalSeconds))
+  const h = String(Math.floor(sec / 3600)).padStart(2, '0')
+  const m = String(Math.floor((sec % 3600) / 60)).padStart(2, '0')
+  const s = String(sec % 60).padStart(2, '0')
+  return `${h}:${m}:${s}`
 }
 
 /** Format start time (epoch or ISO string) + offset seconds to HH:MM:SS local time */
