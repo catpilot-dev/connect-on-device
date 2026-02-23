@@ -47,6 +47,9 @@
   let devTogglesExpanded = $state(false)
   let toggling = $state(null) // key currently being toggled
 
+  // Section expanded state (Driving, Speed Limits — default expanded)
+  let sectionExpanded = $state({ 'Driving': true, 'Speed Limits': true })
+
   // Mapd update state
   let mapdVersion = $state(null)
   let mapdLatest = $state(null)
@@ -689,8 +692,17 @@
 
     {#each SECTIONS as section}
       <div class="card p-4">
-        <h3 class="text-surface-400 text-xs font-semibold uppercase tracking-wider mb-4">{section.title}</h3>
-        <div class="space-y-4">
+        <button
+          class="w-full flex items-center justify-between"
+          onclick={() => { sectionExpanded[section.title] = !sectionExpanded[section.title] }}
+        >
+          <h3 class="text-surface-400 text-xs font-semibold uppercase tracking-wider">{section.title}</h3>
+          <svg class="w-4 h-4 text-surface-500 transition-transform {sectionExpanded[section.title] ? 'rotate-180' : ''}" viewBox="0 0 20 20" fill="currentColor">
+            <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd" />
+          </svg>
+        </button>
+        {#if sectionExpanded[section.title]}
+        <div class="space-y-4 mt-4">
           {#each section.items as item}
             {#if item.type === 'bool'}
               <button
@@ -768,6 +780,7 @@
           {/if}
 
         </div>
+        {/if}
       </div>
     {/each}
 
@@ -778,9 +791,14 @@
         onclick={() => { mapdExpanded = !mapdExpanded; if (mapdExpanded && !mapdLatest && !mapdChecking) handleMapdCheck() }}
       >
         <h3 class="text-surface-400 text-xs font-semibold uppercase tracking-wider">Mapd & Maps</h3>
-        <svg class="w-4 h-4 text-surface-500 transition-transform {mapdExpanded ? 'rotate-180' : ''}" viewBox="0 0 20 20" fill="currentColor">
-          <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd" />
-        </svg>
+        <div class="flex items-center gap-3">
+          {#if mapdVersion}
+            <span class="text-xs text-surface-500 font-mono">{mapdVersion}{#if mapdReleaseDate} / {mapdReleaseDate}{/if}</span>
+          {/if}
+          <svg class="w-4 h-4 text-surface-500 transition-transform {mapdExpanded ? 'rotate-180' : ''}" viewBox="0 0 20 20" fill="currentColor">
+            <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd" />
+          </svg>
+        </div>
       </button>
 
       {#if mapdExpanded}
