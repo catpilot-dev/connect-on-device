@@ -80,6 +80,9 @@ from handlers import (
     handle_tile_progress,
     handle_mapd_check_update,
     handle_mapd_update,
+    handle_ssh_keys_get,
+    handle_ssh_keys_set,
+    handle_ssh_keys_delete,
     handle_webrtc,
 )
 from hud_stream import HudStreamManager, is_available as hud_stream_available
@@ -220,6 +223,11 @@ def create_app(data_dir: str, static_dir: str) -> web.Application:
     app.router.add_post("/v1/mapd/update", handle_mapd_update)
 
     # WebRTC signaling proxy (to local webrtcd on port 5001)
+    # SSH keys
+    app.router.add_get("/v1/ssh-keys", handle_ssh_keys_get)
+    app.router.add_post("/v1/ssh-keys", handle_ssh_keys_set)
+    app.router.add_delete("/v1/ssh-keys", handle_ssh_keys_delete)
+
     app.router.add_post("/api/webrtc", handle_webrtc)
 
     # HUD overlay WebSocket (server-side rendered overlay at 20Hz)

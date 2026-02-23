@@ -353,6 +353,31 @@ export async function setToggle(key, value) {
   return res.json()
 }
 
+// ── SSH keys ──────────────────────────────────────────────
+
+export async function fetchSshKeys() {
+  const res = await fetch('/v1/ssh-keys')
+  if (!res.ok) throw new Error(`fetchSshKeys: ${res.status}`)
+  return res.json()
+}
+
+export async function setSshKeys(username) {
+  const res = await fetch('/v1/ssh-keys', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username }),
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || `setSshKeys: ${res.status}`)
+  return data
+}
+
+export async function removeSshKeys() {
+  const res = await fetch('/v1/ssh-keys', { method: 'DELETE' })
+  if (!res.ok) throw new Error(`removeSshKeys: ${res.status}`)
+  return res.json()
+}
+
 // ── BMW params ─────────────────────────────────────────────
 
 export async function fetchParams() {

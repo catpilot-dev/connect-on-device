@@ -4,7 +4,8 @@
   import { fetchParams, setParam, fetchModels, swapModel, checkModelUpdates, downloadModel,
     fetchSoftware, softwareCheck, softwareDownload, softwareInstall, softwareBranch, softwareUninstall,
     fetchLateralDelay, fetchDeviceInfo, deviceReboot, devicePoweroff, deviceSetLanguage,
-    fetchToggles, setToggle, fetchStorage, mapdCheckUpdate, mapdUpdate } from '../api.js'
+    fetchToggles, setToggle, fetchStorage, mapdCheckUpdate, mapdUpdate,
+    fetchSshKeys, setSshKeys, removeSshKeys } from '../api.js'
   import { getTileSource, setTileSource, TILE_SOURCES } from '../tileSource.js'
   import { formatBytes, storageLevel } from '../format.js'
 
@@ -47,6 +48,9 @@
   let togglesExpanded = $state(false)
   let devTogglesExpanded = $state(false)
   let toggling = $state(null) // key currently being toggled
+  let sshKeys = $state(null) // { username, has_keys }
+  let sshLoading = $state(false)
+  let sshError = $state(null)
 
   // Section expanded state (Driving, Speed Limits — default expanded)
   let sectionExpanded = $state({ 'Driving': true, 'Speed Limits': true })
@@ -72,8 +76,8 @@
       title: 'Speed Limits',
       items: [
         { key: 'MapdSpeedLimitControlEnabled', label: 'Map Speed Limit Control', desc: 'Automatically limit speed based on OSM map data', type: 'bool' },
-        { key: 'MapdSpeedLimitOffsetPercent', label: 'Speed Limit Offset', desc: 'Percentage above the posted speed limit', type: 'int', options: [0, 5, 10, 15] },
-        { key: 'MapdCurveTargetLatAccel', label: 'Curve Comfort', desc: 'Target lateral acceleration in curves (m/s²). Lower = gentler, higher = sportier.', type: 'choice', options: ['1.5', '2.0', '2.5', '3.0'] },
+        { key: 'MapdSpeedLimitOffsetPercent', label: 'Speed Limit Offset', desc: 'Percentage above the posted speed limit', type: 'int', options: [0, 5, 10, 15], dependsOn: 'MapdSpeedLimitControlEnabled' },
+        { key: 'MapdCurveTargetLatAccel', label: 'Curve Comfort', desc: 'Target lateral acceleration in curves (m/s²). Lower = gentler, higher = sportier.', type: 'choice', options: ['1.5', '2.0', '2.5', '3.0'], dependsOn: 'MapdSpeedLimitControlEnabled' },
       ],
     },
   ]
@@ -99,6 +103,7 @@
     fetchDeviceInfo().then(d => { dev = d }).catch(() => {})
     fetchToggles().then(t => { toggles = t }).catch(() => {})
     fetchStorage().then(s => { storage = s }).catch(() => {})
+    fetchSshKeys().then(s => { sshKeys = s }).catch(() => {})
   })
 
   async function loadModels() {
@@ -685,6 +690,47 @@
                   ></div>
                 </button>
               </div>
+              <!-- SSH Keys — right after Enable SSH toggle -->
+              {#if t.key === 'SshEnabled' && sshKeys}
+                <div class="flex items-center justify-between gap-3">
+                  <div class="text-sm text-surface-100">SSH Keys</div>
+                  <div class="flex items-center gap-2 shrink-0">
+                    {#if sshKeys.has_keys}
+                      <span class="text-sm text-surface-300">{sshKeys.username}</span>
+                    {/if}
+                    {#if sshError}
+                      <span class="text-xs text-engage-red">{sshError}</span>
+                    {/if}
+                    {#if sshLoading}
+                      <button class="px-3 py-1.5 text-xs rounded-lg bg-surface-700 text-surface-400" disabled>
+                        <svg class="w-3 h-3 animate-spin inline" viewBox="0 0 24 24" fill="none">
+                          <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-dasharray="32 32" />
+                        </svg>
+                      </button>
+                    {:else if sshKeys.has_keys}
+                      <button
+                        class="px-3 py-1.5 text-xs rounded-lg bg-engage-red/15 text-engage-red hover:bg-engage-red/25 transition-colors"
+                        onclick={async () => {
+                          sshLoading = true; sshError = null
+                          try { sshKeys = await removeSshKeys() } catch (e) { sshError = e.message }
+                          sshLoading = false
+                        }}
+                      >REMOVE</button>
+                    {:else}
+                      <button
+                        class="px-3 py-1.5 text-xs rounded-lg bg-engage-blue/15 text-engage-blue hover:bg-engage-blue/25 transition-colors"
+                        onclick={async () => {
+                          const username = prompt('Enter your GitHub username')
+                          if (!username) return
+                          sshLoading = true; sshError = null
+                          try { sshKeys = await setSshKeys(username) } catch (e) { sshError = e.message }
+                          sshLoading = false
+                        }}
+                      >ADD</button>
+                    {/if}
+                  </div>
+                </div>
+              {/if}
             {/each}
           </div>
         {/if}
@@ -724,7 +770,8 @@
                 </div>
               </button>
             {:else if item.type === 'int'}
-              <div>
+              {@const disabled = item.dependsOn ? !params[item.dependsOn] : false}
+              <div class={disabled ? 'opacity-40' : ''}>
                 <div class="text-sm text-surface-100">{item.label}</div>
                 <div class="text-xs text-surface-500 mt-0.5 mb-2">{item.desc}</div>
                 <div class="flex gap-2">
@@ -732,7 +779,7 @@
                     <button
                       class="px-3 py-1.5 text-sm rounded-lg transition-colors {params[item.key] === opt ? 'bg-engage-blue text-white' : 'bg-surface-700 text-surface-300 hover:bg-surface-600'}"
                       onclick={() => setOffset(item.key, opt)}
-                      disabled={saving === item.key}
+                      disabled={disabled || saving === item.key}
                     >
                       {opt}%
                     </button>
@@ -740,7 +787,8 @@
                 </div>
               </div>
             {:else if item.type === 'choice'}
-              <div>
+              {@const disabled = item.dependsOn ? !params[item.dependsOn] : false}
+              <div class={disabled ? 'opacity-40' : ''}>
                 <div class="text-sm text-surface-100">{item.label}</div>
                 <div class="text-xs text-surface-500 mt-0.5 mb-2">{item.desc}</div>
                 <div class="flex gap-2">
@@ -748,7 +796,7 @@
                     <button
                       class="px-3 py-1.5 text-sm rounded-lg transition-colors {params[item.key] === i ? 'bg-engage-blue text-white' : 'bg-surface-700 text-surface-300 hover:bg-surface-600'}"
                       onclick={() => setOffset(item.key, i)}
-                      disabled={saving === item.key}
+                      disabled={disabled || saving === item.key}
                     >
                       {opt}
                     </button>

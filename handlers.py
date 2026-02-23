@@ -1461,6 +1461,61 @@ async def handle_stub_error(request: web.Request) -> web.Response:
     return web.json_response({"error": "Not available on local device"}, status=501)
 
 
+# ─── SSH Keys ─────────────────────────────────────────────────────────
+
+async def handle_ssh_keys_get(request: web.Request) -> web.Response:
+    """GET /v1/ssh-keys — read GithubUsername."""
+    username = ""
+    has_keys = False
+    try:
+        username = open(f"{PARAMS_DIR}/GithubUsername").read().strip()
+    except FileNotFoundError:
+        pass
+    try:
+        keys = open(f"{PARAMS_DIR}/GithubSshKeys").read().strip()
+        has_keys = len(keys) > 0
+    except FileNotFoundError:
+        pass
+    return web.json_response({"username": username, "has_keys": has_keys})
+
+
+async def handle_ssh_keys_set(request: web.Request) -> web.Response:
+    """POST /v1/ssh-keys — fetch GitHub keys for username and store them."""
+    import aiohttp
+    body = await request.json()
+    username = body.get("username", "").strip()
+    if not username:
+        raise web.HTTPBadRequest(text=json.dumps({"error": "username required"}))
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"https://github.com/{username}.keys", timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status != 200:
+                    return web.json_response({"error": f"GitHub user '{username}' not found"}, status=404)
+                keys = await resp.text()
+    except asyncio.TimeoutError:
+        return web.json_response({"error": "Request timed out"}, status=504)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=502)
+    if not keys.strip():
+        return web.json_response({"error": f"User '{username}' has no keys on GitHub"}, status=404)
+    with open(f"{PARAMS_DIR}/GithubUsername", "w") as f:
+        f.write(username)
+    with open(f"{PARAMS_DIR}/GithubSshKeys", "w") as f:
+        f.write(keys)
+    return web.json_response({"status": "ok", "username": username, "has_keys": True})
+
+
+async def handle_ssh_keys_delete(request: web.Request) -> web.Response:
+    """DELETE /v1/ssh-keys — remove stored SSH keys."""
+    for param in ("GithubUsername", "GithubSshKeys"):
+        path = f"{PARAMS_DIR}/{param}"
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+    return web.json_response({"status": "ok", "username": "", "has_keys": False})
+
+
 # ─── WebRTC proxy ─────────────────────────────────────────────────────
 
 async def handle_webrtc(request: web.Request) -> web.Response:
