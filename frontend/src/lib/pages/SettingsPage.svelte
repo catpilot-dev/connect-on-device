@@ -32,6 +32,9 @@
   let swError = $state(null)
   let swPollTimer = $state(null)
   let swExpanded = $state(false)
+  let swChecking = $state(false)
+  let swDownloading = $state(false)
+  let swChecked = $state(false)
 
   // Device state
   let dev = $state(null)
@@ -115,7 +118,12 @@
     swError = null
     try {
       sw = await fetchSoftware()
+      // Reflect existing state on load
+      if (sw.UpdateAvailable) swChecked = true
+      if (sw.UpdaterFetchAvailable) swChecked = true
       if (sw.UpdaterState && sw.UpdaterState !== 'idle') {
+        if (sw.UpdaterState === 'checking') swChecking = true
+        else swDownloading = true
         startSwPoll()
       }
     } catch (e) {
@@ -133,34 +141,41 @@
         if (!sw.UpdaterState || sw.UpdaterState === 'idle') {
           clearInterval(swPollTimer)
           swPollTimer = null
+          if (swChecking) { swChecking = false; swChecked = true }
+          if (swDownloading) swDownloading = false
         }
       } catch { /* ignore */ }
     }, 2000)
   }
 
-  async function handleSwCheck() {
+  async function handleSwAutoCheck() {
+    if (swChecking || swDownloading) return
+    swChecking = true
+    swChecked = false
     swError = null
     try {
       await softwareCheck()
       startSwPoll()
     } catch (e) {
       swError = e.message
+      swChecking = false
     }
   }
 
-  async function handleSwDownload() {
+  async function handleSwUpdate() {
+    swDownloading = true
     swError = null
     try {
       await softwareDownload()
       startSwPoll()
     } catch (e) {
       swError = e.message
+      swDownloading = false
     }
   }
 
-  async function handleSwInstall() {
-    if (!confirm('Install update and reboot?')) return
-    swError = null
+  async function handleSwReboot() {
+    if (!confirm('Reboot to apply update?')) return
     try {
       await softwareInstall()
     } catch (e) {
@@ -171,12 +186,17 @@
   async function handleSwBranch(branch) {
     if (!branch || branch === sw?.UpdaterTargetBranch) return
     swError = null
+    swChecked = false
     try {
       await softwareBranch(branch)
       sw = { ...sw, UpdaterTargetBranch: branch }
+      // Auto-check after branch change
+      swChecking = true
+      await softwareCheck()
       startSwPoll()
     } catch (e) {
       swError = e.message
+      swChecking = false
     }
   }
 
@@ -855,131 +875,152 @@
       {/if}
     </div>
 
-    <!-- Software Section -->
+    <!-- Software Section (collapsed by default) -->
     <div class="card p-4">
-      <h3 class="text-surface-400 text-xs font-semibold uppercase tracking-wider mb-4">Software</h3>
-
-      {#if swLoading}
-        <div class="space-y-3 animate-pulse">
-          <div class="h-4 bg-surface-700 rounded w-48"></div>
-          <div class="h-4 bg-surface-700 rounded w-32"></div>
+      <button
+        class="w-full flex items-center justify-between"
+        onclick={() => { swExpanded = !swExpanded; if (swExpanded && !swChecked && !swChecking && !swDownloading && !sw?.UpdateAvailable) handleSwAutoCheck() }}
+      >
+        <h3 class="text-surface-400 text-xs font-semibold uppercase tracking-wider">Software</h3>
+        <div class="flex items-center gap-3">
+          {#if sw}
+            <span class="text-xs text-surface-500 font-mono">{sw.GitBranch} / {sw.GitCommit?.slice(0, 7) || '???'}</span>
+          {/if}
+          <svg class="w-4 h-4 text-surface-500 transition-transform {swExpanded ? 'rotate-180' : ''}" viewBox="0 0 20 20" fill="currentColor">
+            <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd" />
+          </svg>
         </div>
-      {:else if swError}
-        <div class="text-engage-red text-sm mb-2">{swError}</div>
-        <button class="btn-ghost text-xs" onclick={() => { swError = null; loadSoftware() }}>Retry</button>
-      {:else if sw}
-        <!-- Summary (always visible) -->
-        <div class="text-sm text-surface-100">
-          {sw.UpdaterCurrentDescription || `${sw.GitBranch} / ${sw.GitCommit?.slice(0, 7) || '???'}`}
-        </div>
+      </button>
 
-        <!-- Updater status -->
-        {#if sw.UpdaterState && sw.UpdaterState !== 'idle'}
-          <div class="flex items-center gap-2 text-sm text-surface-300 mt-2">
-            <svg class="w-4 h-4 animate-spin text-engage-blue shrink-0" viewBox="0 0 24 24" fill="none">
-              <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-dasharray="32 32" />
-            </svg>
-            {sw.UpdaterState}...
+      {#if swExpanded}
+      <div class="mt-4 space-y-4">
+        {#if swLoading}
+          <div class="space-y-3 animate-pulse">
+            <div class="h-4 bg-surface-700 rounded w-48"></div>
+            <div class="h-4 bg-surface-700 rounded w-32"></div>
           </div>
-        {:else if sw.UpdateFailedCount > 0}
-          <div class="text-sm text-engage-red mt-2">Failed to check for update</div>
-        {:else if sw.UpdaterFetchAvailable}
-          <div class="mt-2">
-            <button class="btn-primary text-sm px-4 py-1.5" onclick={handleSwDownload}>Download</button>
-            <span class="text-xs text-surface-400 ml-2">update available</span>
-          </div>
-        {:else if sw.LastUpdateTime}
-          <div class="text-xs text-surface-500 mt-1">up to date, checked {lastCheckedAgo(sw.LastUpdateTime)}</div>
-        {/if}
-
-        <!-- Install Update card -->
-        {#if sw.UpdateAvailable}
-          <div class="rounded-lg border border-engage-blue/30 bg-engage-blue/5 p-3 mt-3">
-            <div class="text-xs text-surface-400 uppercase font-medium mb-1">Install Update</div>
-            <div class="text-sm text-surface-200 mb-2">
-              {sw.UpdaterNewDescription || 'New version ready'}
-            </div>
-            <button class="btn-primary text-sm px-4 py-1.5" onclick={handleSwInstall}>Install</button>
-          </div>
-        {/if}
-
-        <!-- Expand/collapse details -->
-        <button
-          class="text-xs text-surface-500 hover:text-surface-300 transition-colors mt-3"
-          onclick={() => { swExpanded = !swExpanded }}
-        >
-          {swExpanded ? 'Hide details' : 'Show details'}
-        </button>
-
-        {#if swExpanded}
-          <div class="mt-3 space-y-3">
-            <!-- Version details -->
-            <div class="text-xs text-surface-500 space-y-1">
-              <div>Branch: <span class="text-surface-300">{sw.GitBranch}</span></div>
-              <div>Commit: <span class="text-surface-300">{sw.GitCommit?.slice(0, 7) || '???'}</span></div>
-              {#if sw.GitCommitDate}
-                <div>Date: <span class="text-surface-300">{sw.GitCommitDate}</span></div>
-              {/if}
-            </div>
-
-            <!-- Branch selector (hidden if IsTestedBranch) -->
-            {#if !sw.IsTestedBranch && sw.UpdaterAvailableBranches?.length > 0}
-              <div>
-                <div class="text-xs text-surface-500 uppercase font-medium mb-2">Target Branch</div>
-                <Select.Root
-                  type="single"
-                  value={sw.UpdaterTargetBranch || sw.GitBranch}
-                  onValueChange={handleSwBranch}
-                  items={sw.UpdaterAvailableBranches.map(b => ({ value: b, label: b }))}
-                >
-                  <Select.Trigger
-                    class="w-full flex items-center justify-between rounded-lg px-3 py-2.5 bg-surface-700 border border-surface-600 hover:border-surface-500 transition-colors text-left"
-                  >
-                    <span class="text-sm text-surface-100 truncate">{sw.UpdaterTargetBranch || sw.GitBranch}</span>
-                    <svg class="w-4 h-4 text-surface-400 shrink-0" viewBox="0 0 20 20" fill="currentColor">
-                      <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd" />
-                    </svg>
-                  </Select.Trigger>
-                  <Select.Content
-                    class="z-50 rounded-lg bg-surface-700 border border-surface-600 shadow-xl py-1 max-h-64 overflow-y-auto max-w-[calc(100vw-2rem)]"
-                    sideOffset={4}
-                  >
-                    {#each sw.UpdaterAvailableBranches as branch}
-                      {@const isCurrent = branch === (sw.UpdaterTargetBranch || sw.GitBranch)}
-                      <Select.Item
-                        value={branch}
-                        label={branch}
-                        class="flex items-center gap-2 px-3 py-2 text-sm cursor-pointer transition-colors
-                          data-[highlighted]:bg-surface-600 data-[selected]:text-engage-blue"
-                      >
-                        {#if isCurrent}
-                          <div class="w-1.5 h-1.5 rounded-full bg-engage-blue shrink-0"></div>
-                        {/if}
-                        <span class="truncate">{branch}</span>
-                      </Select.Item>
-                    {/each}
-                  </Select.Content>
-                </Select.Root>
-              </div>
+        {:else if sw}
+          <!-- Version details -->
+          <div class="text-xs text-surface-500 space-y-1">
+            {#if sw.UpdaterCurrentDescription}
+              <div class="text-sm text-surface-100">{sw.UpdaterCurrentDescription}</div>
             {/if}
+            <div>Branch: <span class="text-surface-300">{sw.GitBranch}</span></div>
+            <div>Commit: <span class="text-surface-300">{sw.GitCommit?.slice(0, 7) || '???'}</span></div>
+            {#if sw.GitCommitDate}
+              <div>Date: <span class="text-surface-300">{sw.GitCommitDate}</span></div>
+            {/if}
+          </div>
 
-            <!-- Action buttons (2 columns) -->
-            <div class="pt-3 border-t border-surface-700 grid grid-cols-2 gap-2">
+          <!-- New version info -->
+          {#if (sw.UpdaterFetchAvailable || sw.UpdateAvailable) && sw.UpdaterNewDescription}
+            <div class="text-sm text-engage-green">{sw.UpdaterNewDescription}</div>
+          {/if}
+          {#if swError}
+            <div class="text-xs text-engage-red">{swError}</div>
+          {/if}
+
+          <!-- Branch selector (hidden if IsTestedBranch) -->
+          {#if !sw.IsTestedBranch && sw.UpdaterAvailableBranches?.length > 0}
+            <div class="pt-3 border-t border-surface-700">
+              <div class="text-xs text-surface-500 uppercase font-medium mb-2">Target Branch</div>
+              <Select.Root
+                type="single"
+                value={sw.UpdaterTargetBranch || sw.GitBranch}
+                onValueChange={handleSwBranch}
+                items={sw.UpdaterAvailableBranches.map(b => ({ value: b, label: b }))}
+              >
+                <Select.Trigger
+                  class="w-full flex items-center justify-between rounded-lg px-3 py-2.5 bg-surface-700 border border-surface-600 hover:border-surface-500 transition-colors text-left"
+                >
+                  <span class="text-sm text-surface-100 truncate">{sw.UpdaterTargetBranch || sw.GitBranch}</span>
+                  <svg class="w-4 h-4 text-surface-400 shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd" />
+                  </svg>
+                </Select.Trigger>
+                <Select.Content
+                  class="z-50 rounded-lg bg-surface-700 border border-surface-600 shadow-xl py-1 max-h-64 overflow-y-auto max-w-[calc(100vw-2rem)]"
+                  sideOffset={4}
+                >
+                  {#each sw.UpdaterAvailableBranches as branch}
+                    {@const isCurrent = branch === (sw.UpdaterTargetBranch || sw.GitBranch)}
+                    <Select.Item
+                      value={branch}
+                      label={branch}
+                      class="flex items-center gap-2 px-3 py-2 text-sm cursor-pointer transition-colors
+                        data-[highlighted]:bg-surface-600 data-[selected]:text-engage-blue"
+                    >
+                      {#if isCurrent}
+                        <div class="w-1.5 h-1.5 rounded-full bg-engage-blue shrink-0"></div>
+                      {/if}
+                      <span class="truncate">{branch}</span>
+                    </Select.Item>
+                  {/each}
+                </Select.Content>
+              </Select.Root>
+            </div>
+          {/if}
+
+          <!-- Action buttons -->
+          <div class="pt-3 border-t border-surface-700 grid grid-cols-2 gap-2">
+            {#if swDownloading}
+              <button class="text-sm py-2 rounded-lg bg-surface-700 text-surface-400 flex items-center justify-center gap-2" disabled>
+                <svg class="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10" stroke-opacity="0.25" />
+                  <path d="M12 2a10 10 0 019.95 9" />
+                </svg>
+                Updating
+              </button>
+            {:else if swChecking}
+              <button class="text-sm py-2 rounded-lg bg-surface-700 text-surface-400 flex items-center justify-center gap-2" disabled>
+                <svg class="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10" stroke-opacity="0.25" />
+                  <path d="M12 2a10 10 0 019.95 9" />
+                </svg>
+                Checking
+              </button>
+            {:else if sw.UpdateAvailable}
               <button
-                class="btn-ghost text-sm justify-center py-2"
-                onclick={handleSwCheck}
+                class="text-sm py-2 rounded-lg bg-engage-green/15 text-engage-green hover:bg-engage-green/25 transition-colors"
+                onclick={handleSwReboot}
+              >
+                Reboot
+              </button>
+            {:else if sw.UpdaterFetchAvailable}
+              <button
+                class="text-sm py-2 rounded-lg bg-engage-green/15 text-engage-green hover:bg-engage-green/25 transition-colors"
+                onclick={handleSwUpdate}
               >
                 Update
               </button>
+            {:else if sw.UpdateFailedCount > 0}
               <button
-                class="text-sm py-2 rounded-lg text-engage-red/80 hover:text-engage-red hover:bg-engage-red/5 transition-colors"
-                onclick={handleSwUninstall}
+                class="text-sm py-2 rounded-lg bg-surface-700 text-surface-300 hover:bg-surface-600 transition-colors"
+                onclick={handleSwAutoCheck}
               >
-                Uninstall
+                Retry
               </button>
-            </div>
+            {:else if swChecked}
+              <button class="text-sm py-2 rounded-lg bg-surface-700 text-surface-500" disabled>
+                Up to Date
+              </button>
+            {:else}
+              <button
+                class="text-sm py-2 rounded-lg bg-surface-700 text-surface-300 hover:bg-surface-600 transition-colors"
+                onclick={handleSwAutoCheck}
+              >
+                Check
+              </button>
+            {/if}
+            <button
+              class="text-sm py-2 rounded-lg bg-engage-red/15 text-engage-red hover:bg-engage-red/25 transition-colors"
+              onclick={handleSwUninstall}
+            >
+              Uninstall
+            </button>
           </div>
         {/if}
+      </div>
       {/if}
     </div>
 
