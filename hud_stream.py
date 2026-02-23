@@ -407,16 +407,34 @@ def _restore_stock_weston():
     subprocess.run(["sudo", "pkill", "-f", "weston"], capture_output=True)
     time.sleep(2)
 
+    os.makedirs(XDG_RUNTIME_DIR, exist_ok=True)
+
     env = os.environ.copy()
     env["XDG_RUNTIME_DIR"] = XDG_RUNTIME_DIR
-    subprocess.Popen(
+    proc = subprocess.Popen(
         ["sudo", "-E", WESTON_STOCK, "--idle-time=0", "--tty=1",
          f"--config={WESTON_CONFIG}"],
         env=env,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
-    time.sleep(2)
-    logger.info("Stock weston restored")
+
+    # Wait for wayland socket to appear (up to 5s)
+    socket_path = os.path.join(XDG_RUNTIME_DIR, WAYLAND_DISPLAY)
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            logger.error("Stock weston exited immediately (code %s)", proc.returncode)
+            break
+        if os.path.exists(socket_path):
+            break
+        time.sleep(0.3)
+
+    # Open socket permissions so openpilot UI can connect
+    if os.path.exists(socket_path):
+        subprocess.run(["sudo", "chmod", "777", socket_path], capture_output=True)
+        logger.info("Stock weston restored (socket ready)")
+    else:
+        logger.error("Stock weston socket not found at %s", socket_path)
 
     # Kill any stale openpilot UI so the manager restarts it on the new weston
     subprocess.run(["pkill", "-f", "selfdrive/ui/ui"], capture_output=True)

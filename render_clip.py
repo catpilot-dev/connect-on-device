@@ -146,14 +146,35 @@ def restore_stock_weston():
     print("Restoring stock weston...", file=sys.stderr)
     subprocess.run(["sudo", "pkill", "-f", "weston"], capture_output=True)
     time.sleep(2)
+
+    os.makedirs(XDG_RUNTIME_DIR, exist_ok=True)
+
     env = os.environ.copy()
     env["XDG_RUNTIME_DIR"] = XDG_RUNTIME_DIR
-    Popen(["sudo", "-E", WESTON_STOCK, "--idle-time=0", "--tty=1",
-           f"--config={WESTON_CONFIG}"],
-          env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(2)
+    proc = Popen(["sudo", "-E", WESTON_STOCK, "--idle-time=0", "--tty=1",
+                   f"--config={WESTON_CONFIG}"],
+                  env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    # Wait for wayland socket to appear (up to 5s)
+    socket_path = os.path.join(XDG_RUNTIME_DIR, WAYLAND_DISPLAY)
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            print(f"Stock weston exited immediately (code {proc.returncode})", file=sys.stderr)
+            break
+        if os.path.exists(socket_path):
+            break
+        time.sleep(0.3)
+
+    # Open socket permissions so openpilot UI can connect
+    if os.path.exists(socket_path):
+        subprocess.run(["sudo", "chmod", "777", socket_path], capture_output=True)
+        print("Stock weston restored (socket ready)", file=sys.stderr)
+    else:
+        print(f"WARNING: Stock weston socket not found at {socket_path}", file=sys.stderr)
+
     subprocess.run(["pkill", "-f", "selfdrive/ui/ui"], capture_output=True)
-    print("Stock weston restored", file=sys.stderr)
+    print("Signaled openpilot UI restart", file=sys.stderr)
 
 
 def cleanup_procs(*procs):
@@ -173,7 +194,9 @@ def cleanup_procs(*procs):
             pass
     # Name-based fallback — catches orphans if SIGTERM arrived before
     # Popen handles were assigned (e.g., during wait_for_frames)
-    for pattern in ["stream_capture", "tools/replay/replay", "selfdrive/ui/ui"]:
+    # Note: don't kill selfdrive/ui/ui here — restore_stock_weston() handles
+    # that AFTER the new compositor is ready with correct socket permissions
+    for pattern in ["stream_capture", "tools/replay/replay"]:
         subprocess.run(["sudo", "pkill", "-KILL", "-f", pattern],
                        capture_output=True)
 
