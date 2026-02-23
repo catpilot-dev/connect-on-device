@@ -21,6 +21,8 @@
   let error = $state(null)
   let pollTimer = null
   let highlightedTile = $state(null) // {lat, lon} of tile hovered in list
+  let dlExpanded = $state(false)
+  let dlContainer = $state(null)
   let gridLayerMap = {}  // "lat,lon" -> Leaflet rectangle layer
 
   // Grid range for eastern China (covers most driving areas)
@@ -308,6 +310,16 @@
       ? tileLabel(...progress.current.split(',').map(Number))
       : '...'
   )
+
+  // Close Downloaded list on outside click
+  $effect(() => {
+    if (!dlExpanded) return
+    function onClick(e) {
+      if (dlContainer && !dlContainer.contains(e.target)) dlExpanded = false
+    }
+    document.addEventListener('click', onClick, true)
+    return () => document.removeEventListener('click', onClick, true)
+  })
 </script>
 
 <style>
@@ -349,7 +361,7 @@
   <div class="px-4 py-3 grid grid-cols-2 gap-4">
 
     <!-- Left: Downloaded tiles (collapsed by default) -->
-    <div>
+    <div bind:this={dlContainer}>
       {#if error}
         <div class="text-engage-red text-xs mb-2">{error}</div>
       {/if}
@@ -357,11 +369,17 @@
         <div class="text-engage-red text-xs p-1.5 rounded bg-engage-red/10 mb-2">{progress.error}</div>
       {/if}
 
-      <details class="text-sm">
-        <summary class="cursor-pointer hover:bg-surface-800/50 rounded transition-colors px-2 py-1.5">
-          <span class="text-surface-400 text-xs font-semibold uppercase tracking-wider">Downloaded</span>
-          <div class="text-xs text-surface-500 mt-0.5">{storage.tile_count} tiles &middot; {storage.total_mb} MB</div>
-        </summary>
+      <button
+        class="w-full flex flex-wrap items-center gap-x-2 gap-y-0.5 px-3 py-2 text-sm rounded-lg bg-surface-700 hover:bg-surface-650 transition-colors"
+        onclick={() => { dlExpanded = !dlExpanded }}
+      >
+        <span class="text-surface-200 text-sm">Downloaded</span>
+        <span class="text-xs text-surface-500 ml-auto sm:ml-0 hidden sm:inline">{storage.tile_count} tiles &middot; {storage.total_mb} MB</span>
+        <svg class="w-4 h-4 text-surface-500 transition-transform ml-auto {dlExpanded ? 'rotate-180' : ''}" viewBox="0 0 20 20" fill="currentColor">
+          <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd" />
+        </svg>
+      </button>
+      {#if dlExpanded}
         <div class="mt-1 space-y-1 max-h-48 overflow-y-auto">
           {#if downloaded.length === 0}
             <div class="text-xs text-surface-500 p-2 text-center">No tiles downloaded</div>
@@ -390,7 +408,7 @@
             {/each}
           {/if}
         </div>
-      </details>
+      {/if}
     </div>
 
     <!-- Right: Download button -->
