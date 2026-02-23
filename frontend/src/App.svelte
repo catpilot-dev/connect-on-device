@@ -7,9 +7,10 @@
   import RouteDetailPage from './lib/pages/RouteDetailPage.svelte'
   import TileManager from './lib/pages/TileManager.svelte'
   import SettingsPage from './lib/pages/SettingsPage.svelte'
+  import DashboardPage from './lib/pages/DashboardPage.svelte'
 
   let error = $state(null)
-  let page = $state('routes')  // 'routes' | 'tiles' | 'settings'
+  let page = $state('routes')  // 'routes' | 'tiles' | 'settings' | 'dashboard'
 
   function parseRoutePath() {
     // URL: /{dongleId}/{localId}/{start?}/{end?}
@@ -22,6 +23,7 @@
     const parts = location.pathname.split('/').filter(Boolean)
     if (parts[0] === 'tiles') return 'tiles'
     if (parts[0] === 'settings') return 'settings'
+    if (parts[0] === 'dashboard') return 'dashboard'
     return 'routes'
   }
 
@@ -77,6 +79,12 @@
     selectedRoute.set(null)
     history.pushState(null, '', '/settings')
   }
+
+  function showDashboard() {
+    page = 'dashboard'
+    selectedRoute.set(null)
+    history.pushState(null, '', '/dashboard')
+  }
 </script>
 
 <div class="min-h-dvh flex flex-col">
@@ -94,6 +102,12 @@
           onclick={showTiles}
         >
           Map Tiles
+        </button>
+        <button
+          class="px-3 py-1.5 text-sm rounded transition-colors {page === 'dashboard' ? 'bg-surface-700 text-surface-50' : 'text-surface-400 hover:text-surface-200'}"
+          onclick={showDashboard}
+        >
+          Dashboard
         </button>
         <button
           class="px-3 py-1.5 text-sm rounded transition-colors {page === 'settings' ? 'bg-surface-700 text-surface-50' : 'text-surface-400 hover:text-surface-200'}"
@@ -116,6 +130,8 @@
           </button>
         </div>
       </div>
+    {:else if page === 'dashboard'}
+      <DashboardPage />
     {:else if page === 'settings'}
       <SettingsPage />
     {:else if page === 'tiles'}

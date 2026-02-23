@@ -4,6 +4,7 @@
   import { wgs84ToGcj02 } from '../gcj02.js'
   import { tileLabel, tileName } from '../tile-names.js'
   import { getTileSource, TILE_SOURCES } from '../tileSource.js'
+  import ChevronIcon from '../components/ChevronIcon.svelte'
 
   let mapContainer = $state(null)
   let map = null
@@ -375,9 +376,7 @@
       >
         <span class="text-surface-200 text-sm">Downloaded</span>
         <span class="text-xs text-surface-500 ml-auto sm:ml-0 hidden sm:inline">{storage.tile_count} tiles &middot; {storage.total_mb} MB</span>
-        <svg class="w-4 h-4 text-surface-500 transition-transform ml-auto {dlExpanded ? 'rotate-180' : ''}" viewBox="0 0 20 20" fill="currentColor">
-          <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd" />
-        </svg>
+        <ChevronIcon rotated={dlExpanded} class="ml-auto" />
       </button>
       {#if dlExpanded}
         <div class="mt-1 space-y-1 max-h-48 overflow-y-auto">

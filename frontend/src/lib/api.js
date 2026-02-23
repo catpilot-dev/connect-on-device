@@ -1,8 +1,8 @@
 // API layer for connect_on_device
 // All fetch functions target the comma-compatible /v1 endpoints
 
-/** Encode route fullname for URL path: "dongle/date" → "dongle|date" */
-const encodeRouteName = (name) => name.replace('/', '|')
+/** Route identifier for API URLs — local_id is the canonical key (e.g. "00000123--ecd17bc154") */
+const routeId = (name) => name
 
 // ── Device & auth ───────────────────────────────────────────
 
@@ -41,19 +41,19 @@ export async function fetchPreservedRoutes(dongleId) {
 }
 
 export async function fetchRoute(routeName) {
-  const res = await fetch(`/v1/route/${encodeRouteName(routeName)}/`)
+  const res = await fetch(`/v1/route/${routeId(routeName)}/`)
   if (!res.ok) throw new Error(`fetchRoute: ${res.status}`)
   return res.json()
 }
 
 export async function fetchRouteFiles(routeName) {
-  const res = await fetch(`/v1/route/${encodeRouteName(routeName)}/files`)
+  const res = await fetch(`/v1/route/${routeId(routeName)}/files`)
   if (!res.ok) throw new Error(`fetchRouteFiles: ${res.status}`)
   return res.json()
 }
 
 export async function enrichRoute(routeName) {
-  const res = await fetch(`/v1/route/${encodeRouteName(routeName)}/enrich`, { method: 'POST' })
+  const res = await fetch(`/v1/route/${routeId(routeName)}/enrich`, { method: 'POST' })
   if (!res.ok) throw new Error(`enrichRoute: ${res.status}`)
   return res.json()
 }
@@ -61,25 +61,25 @@ export async function enrichRoute(routeName) {
 // ── Route actions ───────────────────────────────────────────
 
 export async function preserveRoute(routeName) {
-  const res = await fetch(`/v1/route/${encodeRouteName(routeName)}/preserve`, { method: 'POST' })
+  const res = await fetch(`/v1/route/${routeId(routeName)}/preserve`, { method: 'POST' })
   if (!res.ok) throw new Error(`preserveRoute: ${res.status}`)
   return res.json()
 }
 
 export async function unpreserveRoute(routeName) {
-  const res = await fetch(`/v1/route/${encodeRouteName(routeName)}/preserve`, { method: 'DELETE' })
+  const res = await fetch(`/v1/route/${routeId(routeName)}/preserve`, { method: 'DELETE' })
   if (!res.ok) throw new Error(`unpreserveRoute: ${res.status}`)
   return res.json()
 }
 
 export async function deleteRoute(routeName) {
-  const res = await fetch(`/v1/route/${encodeRouteName(routeName)}/`, { method: 'DELETE' })
+  const res = await fetch(`/v1/route/${routeId(routeName)}/`, { method: 'DELETE' })
   if (!res.ok) throw new Error(`deleteRoute: ${res.status}`)
   return res.json()
 }
 
 export async function saveNote(routeName, note) {
-  const res = await fetch(`/v1/route/${encodeRouteName(routeName)}/note`, {
+  const res = await fetch(`/v1/route/${routeId(routeName)}/note`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ note }),
@@ -89,7 +89,7 @@ export async function saveNote(routeName, note) {
 }
 
 export async function takeScreenshot(routeName, timeSec) {
-  const res = await fetch(`/v1/route/${encodeRouteName(routeName)}/screenshot`, {
+  const res = await fetch(`/v1/route/${routeId(routeName)}/screenshot`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ time: timeSec }),
@@ -100,12 +100,12 @@ export async function takeScreenshot(routeName, timeSec) {
 
 /** Build GET URL for a fcamera frame at the given time (opens as JPEG in browser) */
 export function frameUrl(routeName, timeSec) {
-  return `/v1/route/${encodeRouteName(routeName)}/frame?t=${timeSec.toFixed(2)}`
+  return `/v1/route/${routeId(routeName)}/frame?t=${timeSec.toFixed(2)}`
 }
 
 /** Build download URL with file type and segment selection */
 export function downloadUrl(routeName, fileTypes = ['rlog'], segments = null) {
-  let url = `/v1/route/${encodeRouteName(routeName)}/download?files=${fileTypes.join(',')}`
+  let url = `/v1/route/${routeId(routeName)}/download?files=${fileTypes.join(',')}`
   if (segments && segments.length > 0) url += `&segments=${segments.join(',')}`
   return url
 }
@@ -120,7 +120,7 @@ export function downloadUrl(routeName, fileTypes = ['rlog'], segments = null) {
  * @param {object} params - render params {speed, scale, fps}
  */
 export async function prerenderHud(routeName, start, end, params = {}) {
-  const res = await fetch(`/v1/route/${encodeRouteName(routeName)}/hud/prerender`, {
+  const res = await fetch(`/v1/route/${routeId(routeName)}/hud/prerender`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ start, end, ...params }),
@@ -130,19 +130,19 @@ export async function prerenderHud(routeName, start, end, params = {}) {
 }
 
 export async function cancelHudRender(routeName) {
-  const res = await fetch(`/v1/route/${encodeRouteName(routeName)}/hud/cancel`, { method: 'POST' })
+  const res = await fetch(`/v1/route/${routeId(routeName)}/hud/cancel`, { method: 'POST' })
   if (!res.ok) throw new Error(`cancelHudRender: ${res.status}`)
   return res.json()
 }
 
 export async function hudProgress(routeName) {
-  const res = await fetch(`/v1/route/${encodeRouteName(routeName)}/hud/progress`)
+  const res = await fetch(`/v1/route/${routeId(routeName)}/hud/progress`)
   if (!res.ok) throw new Error(`hudProgress: ${res.status}`)
   return res.json()
 }
 
 export function hudVideoUrl(routeName) {
-  return `/v1/route/${encodeRouteName(routeName)}/hud/video`
+  return `/v1/route/${routeId(routeName)}/hud/video`
 }
 
 // ── HUD live streaming ────────────────────────────────────
@@ -151,7 +151,7 @@ export async function startHudStream(routeName, start = 0) {
   const res = await fetch('/v1/hud/stream/start', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ route: encodeRouteName(routeName), start }),
+    body: JSON.stringify({ route: routeId(routeName), start }),
   })
   if (!res.ok) throw new Error(`startHudStream: ${res.status}`)
   return res.json()
@@ -253,6 +253,14 @@ export async function fetchAllEventsWithProgress(route, onProgress) {
     )
   )
   return results.flat()
+}
+
+// ── Dashboard telemetry ──────────────────────────────────────
+
+export async function fetchDashboardTelemetry(routeName, segments) {
+  const res = await fetch(`/v1/dashboard/telemetry/${routeId(routeName)}/${segments}`)
+  if (!res.ok) throw new Error(`fetchDashboardTelemetry: ${res.status}`)
+  return res.json()
 }
 
 // ── Software update management ──────────────────────────────

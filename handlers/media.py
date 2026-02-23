@@ -1,0 +1,365 @@
+import asyncio
+import hashlib
+import io
+import json
+import logging
+import os
+import subprocess
+import tempfile
+from bisect import bisect_left
+from datetime import datetime, timezone
+from math import floor
+from pathlib import Path
+
+from aiohttp import web
+
+from handler_helpers import get_route_or_404, parse_json
+from rlog_parser import _generate_coords_json
+from route_helpers import _resolve_local_id
+
+logger = logging.getLogger("connect")
+
+
+def _decimal_to_dms(decimal):
+    """Convert decimal degrees to EXIF DMS as IFDRational tuples."""
+    from PIL.TiffImagePlugin import IFDRational
+    d = int(decimal)
+    m = int((decimal - d) * 60)
+    s = round((decimal - d - m / 60) * 3600, 2)
+    return (IFDRational(d), IFDRational(m), IFDRational(int(s * 100), 100))
+
+
+def _extract_frame(hevc_path: str, offset: float) -> bytes:
+    """Extract a single JPEG frame from fcamera.hevc at the given offset.
+
+    Raw HEVC lacks container timestamps so cv2 seeking is broken.
+    Strategy: mux to mp4 (codec copy, ~1.5s one-time) then cv2 seeks in the
+    container.  Cached mp4 is stored in /tmp to avoid writing to route data.
+    Runs in executor thread.
+    """
+    import cv2
+    import subprocess
+    import hashlib
+
+    # Build a stable cache path on /data (tmpfs /tmp is only 150MB, too small for fcamera)
+    cache_dir = "/data/connect_on_device/cache"
+    os.makedirs(cache_dir, exist_ok=True)
+    path_hash = hashlib.md5(hevc_path.encode()).hexdigest()[:12]
+    mp4_path = os.path.join(cache_dir, f"fcamera_{path_hash}.mp4")
+
+    if not os.path.exists(mp4_path):
+        import tempfile
+        fd, tmp_path = tempfile.mkstemp(suffix='.mp4', dir=cache_dir)
+        os.close(fd)
+        try:
+            subprocess.run([
+                'ffmpeg', '-y', '-hide_banner', '-loglevel', 'error',
+                '-framerate', '20', '-i', hevc_path,
+                '-c', 'copy', '-movflags', '+faststart', tmp_path,
+            ], check=True, timeout=60)
+            os.rename(tmp_path, mp4_path)
+        except Exception:
+            os.unlink(tmp_path)
+            raise
+
+    cap = cv2.VideoCapture(mp4_path)
+    try:
+        cap.set(cv2.CAP_PROP_POS_MSEC, offset * 1000)
+        ret, frame = cap.read()
+        if not ret or frame is None:
+            raise RuntimeError(f"cv2 failed to read frame at {offset:.1f}s")
+        ok, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        if not ok:
+            raise RuntimeError("cv2 JPEG encoding failed")
+        return buf.tobytes()
+    finally:
+        cap.release()
+
+
+def _lookup_gps(coords: list, t: float) -> dict:
+    """Find GPS point closest to time t from coords list. Returns dict with lat, lng, speed, bearing."""
+    if not coords:
+        return {}
+    times = [c["t"] for c in coords]
+    idx = bisect_left(times, t)
+    if idx == 0:
+        best_idx = 0
+    elif idx >= len(coords):
+        best_idx = len(coords) - 1
+    elif (t - times[idx - 1]) <= (times[idx] - t):
+        best_idx = idx - 1
+    else:
+        best_idx = idx
+    best = coords[best_idx]
+    result = {k: best.get(k) for k in ("lat", "lng", "speed")}
+
+    # Compute bearing from consecutive GPS points
+    if best_idx + 1 < len(coords):
+        nxt = coords[best_idx + 1]
+    elif best_idx > 0:
+        nxt = best
+        best = coords[best_idx - 1]
+    else:
+        return result
+
+    import math
+    lat1, lon1 = math.radians(best["lat"]), math.radians(best["lng"])
+    lat2, lon2 = math.radians(nxt["lat"]), math.radians(nxt["lng"])
+    dlon = lon2 - lon1
+    x = math.sin(dlon) * math.cos(lat2)
+    y = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(dlon)
+    bearing = math.degrees(math.atan2(x, y)) % 360
+    result["bearing"] = bearing
+    return result
+
+
+def _load_calibration(seg_dir: Path) -> dict | None:
+    """Load cached calibration.json, or extract from rlog and cache it."""
+    calib_file = seg_dir / "calibration.json"
+    if calib_file.exists():
+        try:
+            return json.loads(calib_file.read_text())
+        except Exception:
+            pass
+
+    # Extract from rlog
+    rlog = seg_dir / "rlog.zst"
+    if not rlog.exists():
+        rlog = seg_dir / "rlog"
+    if not rlog.exists():
+        return None
+
+    try:
+        # Lazy import — only needed on C3 where openpilot is installed
+        import sys
+        if "/data/openpilot" not in sys.path:
+            sys.path.insert(0, "/data/openpilot")
+        from tools.lib.logreader import LogReader
+
+        calib = None
+        for msg in LogReader(str(rlog)):
+            if msg.which() == "liveCalibration":
+                c = msg.liveCalibration
+                rpy = list(c.rpyCalib)
+                try:
+                    height = list(c.height)
+                except Exception:
+                    height = [1.22]
+                calib = {"rpyCalib": rpy, "height": height}
+                break
+
+        if calib:
+            calib_file.write_text(json.dumps(calib))
+            return calib
+    except Exception:
+        pass
+    return None
+
+
+# C3 fcamera (tici AR0231) intrinsics — from openpilot common/transformations/camera.py
+_FCAM_WIDTH = 1928
+_FCAM_HEIGHT = 1208
+_FCAM_FOCAL_LENGTH = 2648.0  # pixels
+import math as _math
+_FCAM_HFOV = 2 * _math.degrees(_math.atan(_FCAM_WIDTH / 2 / _FCAM_FOCAL_LENGTH))  # ~40°
+_FCAM_VFOV = 2 * _math.degrees(_math.atan(_FCAM_HEIGHT / 2 / _FCAM_FOCAL_LENGTH))  # ~25.6°
+
+
+def _add_exif(frame_bytes: bytes, gps: dict, calibration: dict | None,
+              timestamp: float, route_ref: str) -> bytes:
+    """Embed rich EXIF metadata into a JPEG frame.
+
+    EXIF = immutable capture-time facts:
+    - GPS (lat, lon, heading, speed)
+    - Timestamp (UTC)
+    - Route reference (dongle/route/segment/frame)
+    - Camera intrinsics (focal length, resolution, FOV)
+    - Camera pose (height, pitch angle from calibration)
+    """
+    from PIL import Image
+    from PIL.ExifTags import IFD, GPS as GPSTags, Base
+    from PIL.TiffImagePlugin import IFDRational
+
+    img = Image.open(io.BytesIO(frame_bytes))
+    exif = img.getexif()
+
+    # --- GPS IFD ---
+    lat, lng = gps.get("lat"), gps.get("lng")
+    if lat is not None and lng is not None:
+        gps_ifd = exif.get_ifd(IFD.GPSInfo)
+        gps_ifd[GPSTags.GPSLatitudeRef] = 'N' if lat >= 0 else 'S'
+        gps_ifd[GPSTags.GPSLatitude] = _decimal_to_dms(abs(lat))
+        gps_ifd[GPSTags.GPSLongitudeRef] = 'E' if lng >= 0 else 'W'
+        gps_ifd[GPSTags.GPSLongitude] = _decimal_to_dms(abs(lng))
+        if gps.get("bearing") is not None:
+            gps_ifd[GPSTags.GPSImgDirectionRef] = 'T'  # True north
+            gps_ifd[GPSTags.GPSImgDirection] = IFDRational(round(gps["bearing"] * 100), 100)
+        if gps.get("speed") is not None:
+            gps_ifd[GPSTags.GPSSpeedRef] = 'K'  # km/h
+            gps_ifd[GPSTags.GPSSpeed] = IFDRational(round(gps["speed"] * 3.6 * 100), 100)
+
+    # --- Timestamp ---
+    dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+    exif[Base.DateTimeOriginal] = dt.strftime("%Y:%m:%d %H:%M:%S")
+
+    # --- UserComment: structured JSON with all metadata ---
+    meta = {
+        "route": route_ref,
+        "camera": {
+            "model": "AR0231",
+            "width": _FCAM_WIDTH,
+            "height": _FCAM_HEIGHT,
+            "focal_length_px": _FCAM_FOCAL_LENGTH,
+            "hfov_deg": round(_FCAM_HFOV, 1),
+            "vfov_deg": round(_FCAM_VFOV, 1),
+        },
+    }
+    if calibration:
+        rpy = calibration.get("rpyCalib", [0, 0, 0])
+        height = calibration.get("height", [1.22])
+        meta["pose"] = {
+            "height_m": round(height[0], 4),
+            "pitch_deg": round(_math.degrees(rpy[1]), 3),
+            "yaw_deg": round(_math.degrees(rpy[2]), 3),
+            "roll_deg": round(_math.degrees(rpy[0]), 3),
+        }
+    if gps.get("speed") is not None:
+        meta["speed_ms"] = round(gps["speed"], 2)
+    if gps.get("bearing") is not None:
+        meta["bearing_deg"] = round(gps["bearing"], 1)
+
+    # EXIF UserComment: JSON-encoded metadata for programmatic access
+    exif[Base.UserComment] = json.dumps(meta)
+    # ImageDescription: human-readable summary
+    exif[Base.ImageDescription] = route_ref
+
+    buf = io.BytesIO()
+    img.save(buf, format='JPEG', quality=95, exif=exif.tobytes())
+    return buf.getvalue()
+
+
+async def handle_screenshot(request: web.Request) -> web.Response:
+    """POST /v1/route/{routeName}/screenshot — extract fcamera frame with EXIF metadata."""
+    route_name, route, store = get_route_or_404(request)
+    body = await parse_json(request)
+
+    t = body.get("time", 0)
+    segment = int(t // 60)
+    offset = t % 60
+
+    fullname = route["fullname"]
+    local_id = route["_local_id"]
+
+    # Find fcamera.hevc (full resolution 1928x1208)
+    fcamera = store.resolve_segment_path(fullname, segment, "fcamera.hevc")
+    if not fcamera:
+        raise web.HTTPNotFound(text=json.dumps({"error": f"No fcamera.hevc for segment {segment}"}))
+
+    # Extract frame via cached mp4 mux + cv2 seek in thread executor
+    loop = asyncio.get_event_loop()
+    try:
+        frame_bytes = await loop.run_in_executor(
+            store._executor, _extract_frame, str(fcamera), offset
+        )
+    except Exception as e:
+        raise web.HTTPInternalServerError(text=json.dumps({"error": f"Frame extraction failed: {e}"}))
+
+    # Look up GPS (lat, lng, speed, bearing) from coords.json
+    seg_dir = store.data_dir / f"{local_id}--{segment}"
+    gps = {}
+    coords_file = seg_dir / "coords.json"
+    if coords_file.exists():
+        try:
+            coords = json.loads(coords_file.read_text())
+            gps = _lookup_gps(coords, t)
+        except Exception:
+            pass
+
+    # Load calibration (camera pose: height, pitch, yaw, roll)
+    calibration = await loop.run_in_executor(store._executor, _load_calibration, seg_dir)
+
+    # Build EXIF metadata
+    create_time = route.get("create_time", 0)
+    timestamp = create_time + t
+    route_ref = f"{fullname}/{local_id}/{segment}/{offset:.2f}"
+
+    try:
+        jpeg_bytes = await loop.run_in_executor(
+            None, _add_exif, frame_bytes, gps, calibration, timestamp, route_ref
+        )
+    except Exception as e:
+        logging.getLogger("connect").warning("EXIF embedding failed: %s", e)
+        jpeg_bytes = frame_bytes
+
+    # Build filename: {route_date}_{MM}m{SS}s.jpg
+    route_date = fullname.split("/")[-1]  # e.g. "2026-02-20--10-47-46"
+    mm = int(t // 60)
+    ss = int(t % 60)
+    filename = f"{route_date}_{mm:02d}m{ss:02d}s.jpg"
+
+    return web.Response(
+        body=jpeg_bytes,
+        content_type="image/jpeg",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+async def handle_frame(request: web.Request) -> web.Response:
+    """GET /v1/route/{routeName}/frame?t=123.45 — return fcamera JPEG for the given time.
+
+    URL-friendly: open in browser or use in <img> tags.
+    """
+    route_name, route, store = get_route_or_404(request)
+
+    try:
+        t = float(request.query.get("t", 0))
+    except (ValueError, TypeError):
+        raise web.HTTPBadRequest(text=json.dumps({"error": "Invalid t parameter"}))
+
+    segment = int(t // 60)
+    offset = t % 60
+
+    fcamera = store.resolve_segment_path(route["fullname"], segment, "fcamera.hevc")
+    if not fcamera:
+        raise web.HTTPNotFound(text=json.dumps({"error": f"No fcamera.hevc for segment {segment}"}))
+
+    fullname = route["fullname"]
+    local_id = route["_local_id"]
+
+    loop = asyncio.get_event_loop()
+    try:
+        frame_bytes = await loop.run_in_executor(
+            store._executor, _extract_frame, str(fcamera), offset
+        )
+    except Exception as e:
+        raise web.HTTPInternalServerError(text=json.dumps({"error": f"Frame extraction failed: {e}"}))
+
+    # Enrich with EXIF (GPS, calibration, camera intrinsics)
+    seg_dir = store.data_dir / f"{local_id}--{segment}"
+    gps = {}
+    coords_file = seg_dir / "coords.json"
+    if coords_file.exists():
+        try:
+            gps = _lookup_gps(json.loads(coords_file.read_text()), t)
+        except Exception:
+            pass
+
+    calibration = await loop.run_in_executor(store._executor, _load_calibration, seg_dir)
+
+    create_time = route.get("create_time", 0)
+    timestamp = create_time + t
+    route_ref = f"{fullname}/{local_id}/{segment}/{offset:.2f}"
+
+    try:
+        jpeg_bytes = await loop.run_in_executor(
+            None, _add_exif, frame_bytes, gps, calibration, timestamp, route_ref
+        )
+    except Exception as e:
+        logging.getLogger("connect").warning("EXIF embedding failed: %s", e)
+        jpeg_bytes = frame_bytes
+
+    return web.Response(
+        body=jpeg_bytes,
+        content_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )

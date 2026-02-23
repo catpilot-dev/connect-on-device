@@ -45,17 +45,17 @@ describe('spriteUrl', () => {
 
 describe('downloadUrl', () => {
   it('default (rlog only, no segments)', () => {
-    const result = downloadUrl('abc/date')
-    expect(result).toBe('/v1/route/abc|date/download?files=rlog')
+    const result = downloadUrl('00000123--abc')
+    expect(result).toBe('/v1/route/00000123--abc/download?files=rlog')
   })
 
   it('multiple file types with segments', () => {
-    const result = downloadUrl('abc/date', ['rlog', 'qcamera'], [0, 1, 2])
-    expect(result).toBe('/v1/route/abc|date/download?files=rlog,qcamera&segments=0,1,2')
+    const result = downloadUrl('00000123--abc', ['rlog', 'qcamera'], [0, 1, 2])
+    expect(result).toBe('/v1/route/00000123--abc/download?files=rlog,qcamera&segments=0,1,2')
   })
 
   it('no segments omits segment param', () => {
-    const result = downloadUrl('abc/date', ['fcamera'], null)
-    expect(result).toBe('/v1/route/abc|date/download?files=fcamera')
+    const result = downloadUrl('00000123--abc', ['fcamera'], null)
+    expect(result).toBe('/v1/route/00000123--abc/download?files=fcamera')
   })
 })

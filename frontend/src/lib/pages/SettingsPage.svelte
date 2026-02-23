@@ -1,6 +1,11 @@
 <script>
-  import { onMount } from 'svelte'
-  import { Select } from 'bits-ui'
+  import { onMount, onDestroy } from 'svelte'
+  import { Select, ToggleGroup } from 'bits-ui'
+  import CollapsibleCard from '../components/CollapsibleCard.svelte'
+  import Spinner from '../components/Spinner.svelte'
+  import ChevronIcon from '../components/ChevronIcon.svelte'
+  import Toggle from '../components/Toggle.svelte'
+  import { createPoll } from '../utils/poll.js'
   import { fetchParams, setParam, fetchModels, swapModel, checkModelUpdates, downloadModel,
     fetchSoftware, softwareCheck, softwareDownload, softwareInstall, softwareBranch, softwareUninstall,
     fetchLateralDelay, fetchDeviceInfo, deviceReboot, devicePoweroff, deviceSetLanguage,
@@ -12,48 +17,47 @@
   let params = $state({})
   let loading = $state(true)
   let error = $state(null)
-  let saving = $state(null) // key currently being saved
+  let saving = $state(null)
   let latDelay = $state(null)
   let tileSource = $state(getTileSource())
+
+  // Panel expanded state
+  let devExpanded = $state(false)
+  let togglesExpanded = $state(false)
+  let devTogglesExpanded = $state(false)
+  let sectionExpanded = $state({ 'Driving': true, 'Speed Limits': true })
+  let mapdExpanded = $state(false)
+  let swExpanded = $state(false)
+  let modelsExpanded = $state(false)
 
   // Model state
   let models = $state(null)
   let modelsLoading = $state(true)
   let modelsError = $state(null)
-  let swapping = $state(null) // model_id being swapped
-  let swapResult = $state(null) // result message after swap
-  let updates = $state(null) // available updates from check-updates
+  let swapping = $state(null)
+  let swapResult = $state(null)
+  let updates = $state(null)
   let checking = $state(false)
-  let downloading = $state(null) // model_id being downloaded
-  let downloadPollTimer = $state(null)
-  let modelsExpanded = $state(false)
+  let downloading = $state(null)
 
   // Software update state
   let sw = $state(null)
   let swLoading = $state(true)
   let swError = $state(null)
-  let swPollTimer = $state(null)
-  let swExpanded = $state(false)
   let swChecking = $state(false)
   let swDownloading = $state(false)
   let swChecked = $state(false)
 
   // Device state
   let dev = $state(null)
-  let devExpanded = $state(false)
   let storage = $state(null)
 
   // Toggles state
   let toggles = $state(null)
-  let togglesExpanded = $state(false)
-  let devTogglesExpanded = $state(false)
-  let toggling = $state(null) // key currently being toggled
-  let sshKeys = $state(null) // { username, has_keys }
+  let toggling = $state(null)
+  let sshKeys = $state(null)
   let sshLoading = $state(false)
   let sshError = $state(null)
-
-  // Section expanded state (Driving, Speed Limits — default expanded)
-  let sectionExpanded = $state({ 'Driving': true, 'Speed Limits': true })
 
   // Mapd update state
   let mapdVersion = $state(null)
@@ -62,7 +66,40 @@
   let mapdChecking = $state(false)
   let mapdUpdating = $state(false)
   let mapdError = $state(null)
-  let mapdExpanded = $state(false)
+
+  // Poll timers (cleaned up on destroy)
+  const swPoll = createPoll(async () => {
+    try {
+      sw = await fetchSoftware()
+      if (!sw.UpdaterState || sw.UpdaterState === 'idle') {
+        swPoll.stop()
+        if (swChecking) { swChecking = false; swChecked = true }
+        if (swDownloading) swDownloading = false
+      }
+    } catch { /* ignore */ }
+  }, 2000)
+
+  const downloadPoll = createPoll(async () => {
+    try {
+      const fresh = await fetchModels()
+      models = fresh
+      if (!fresh.download || fresh.download.status !== 'downloading') {
+        downloadPoll.stop()
+        downloading = null
+        if (updates && fresh.download?.status === 'complete') {
+          const doneId = fresh.download.model_id
+          const doneType = fresh.download.type
+          if (doneType === 'driving') {
+            updates = { ...updates, driving: updates.driving.filter(m => m.id !== doneId), total: updates.total - 1 }
+          } else {
+            updates = { ...updates, dm: updates.dm.filter(m => m.id !== doneId), total: updates.total - 1 }
+          }
+        }
+      }
+    } catch { /* ignore */ }
+  }, 3000)
+
+  onDestroy(() => { swPoll.stop(); downloadPoll.stop() })
 
   const SECTIONS = [
     {
@@ -113,7 +150,7 @@
       models = await fetchModels()
       if (models.download?.status === 'downloading') {
         downloading = models.download.model_id
-        startDownloadPoll()
+        downloadPoll.start()
       }
     } catch (e) {
       modelsError = e.message
@@ -133,28 +170,13 @@
       if (sw.UpdaterState && sw.UpdaterState !== 'idle') {
         if (sw.UpdaterState === 'checking') swChecking = true
         else swDownloading = true
-        startSwPoll()
+        swPoll.start()
       }
     } catch (e) {
       swError = e.message
     } finally {
       swLoading = false
     }
-  }
-
-  function startSwPoll() {
-    if (swPollTimer) return
-    swPollTimer = setInterval(async () => {
-      try {
-        sw = await fetchSoftware()
-        if (!sw.UpdaterState || sw.UpdaterState === 'idle') {
-          clearInterval(swPollTimer)
-          swPollTimer = null
-          if (swChecking) { swChecking = false; swChecked = true }
-          if (swDownloading) swDownloading = false
-        }
-      } catch { /* ignore */ }
-    }, 2000)
   }
 
   async function handleSwAutoCheck() {
@@ -164,7 +186,7 @@
     swError = null
     try {
       await softwareCheck()
-      startSwPoll()
+      swPoll.start()
     } catch (e) {
       swError = e.message
       swChecking = false
@@ -176,7 +198,7 @@
     swError = null
     try {
       await softwareDownload()
-      startSwPoll()
+      swPoll.start()
     } catch (e) {
       swError = e.message
       swDownloading = false
@@ -202,7 +224,7 @@
       // Auto-check after branch change
       swChecking = true
       await softwareCheck()
-      startSwPoll()
+      swPoll.start()
     } catch (e) {
       swError = e.message
       swChecking = false
@@ -410,37 +432,11 @@
     }
   }
 
-  function startDownloadPoll() {
-    if (downloadPollTimer) return
-    downloadPollTimer = setInterval(async () => {
-      try {
-        const fresh = await fetchModels()
-        models = fresh
-        if (!fresh.download || fresh.download.status !== 'downloading') {
-          clearInterval(downloadPollTimer)
-          downloadPollTimer = null
-          downloading = null
-          if (updates && fresh.download?.status === 'complete') {
-            const doneId = fresh.download.model_id
-            const doneType = fresh.download.type
-            if (doneType === 'driving') {
-              updates = { ...updates, driving: updates.driving.filter(m => m.id !== doneId), total: updates.total - 1 }
-            } else {
-              updates = { ...updates, dm: updates.dm.filter(m => m.id !== doneId), total: updates.total - 1 }
-            }
-          }
-        }
-      } catch {
-        // ignore poll errors
-      }
-    }, 3000)
-  }
-
   async function handleDownload(type, modelId) {
     downloading = modelId
     try {
       await downloadModel(type, modelId)
-      startDownloadPoll()
+      downloadPoll.start()
     } catch (e) {
       modelsError = e.message
       downloading = null
@@ -507,306 +503,250 @@
 
     <!-- Device Section (collapsed by default) -->
     {#if dev}
-      <div class="card p-4">
-        <button
-          class="w-full flex items-center justify-between"
-          onclick={() => { devExpanded = !devExpanded }}
-        >
-          <h3 class="text-surface-400 text-xs font-semibold uppercase tracking-wider">Device</h3>
-          <div class="flex items-center gap-3">
-            <span class="text-xs text-surface-500 font-mono">{dev.DongleId || '--'}</span>
-            <svg class="w-4 h-4 text-surface-500 transition-transform {devExpanded ? 'rotate-180' : ''}" viewBox="0 0 20 20" fill="currentColor">
-              <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd" />
-            </svg>
+      <CollapsibleCard title="Device" metadata={dev.DongleId || '--'} bind:open={devExpanded}>
+        <div class="space-y-3">
+          <div class="flex items-center justify-between">
+            <span class="text-sm text-surface-400">Dongle ID</span>
+            <span class="text-sm text-surface-100 font-mono">{dev.DongleId || '--'}</span>
           </div>
-        </button>
-
-        {#if devExpanded}
-          <div class="mt-4 space-y-3">
-            <!-- Dongle ID -->
-            <div class="flex items-center justify-between">
-              <span class="text-sm text-surface-400">Dongle ID</span>
-              <span class="text-sm text-surface-100 font-mono">{dev.DongleId || '--'}</span>
-            </div>
-
-            <!-- Serial -->
-            <div class="flex items-center justify-between">
-              <span class="text-sm text-surface-400">Serial</span>
-              <span class="text-sm text-surface-100 font-mono">{dev.HardwareSerial || '--'}</span>
-            </div>
-
-            <!-- Storage -->
-            {#if storage}
-              <div class="flex items-center justify-between gap-3">
-                <span class="text-sm text-surface-400">Storage</span>
-                <div class="flex items-center gap-2">
-                  <div class="w-24 h-1.5 rounded-full bg-surface-700 overflow-hidden">
-                    <div
-                      class="h-full rounded-full transition-all duration-500"
-                      class:bg-engage-green={storageColor === 'ok'}
-                      class:bg-engage-orange={storageColor === 'warning'}
-                      class:bg-engage-red={storageColor === 'critical'}
-                      style="width: {storagePct}%"
-                    ></div>
-                  </div>
-                  <span class="text-xs text-surface-400 whitespace-nowrap">
-                    {formatBytes(storage.used)} / {formatBytes(storage.total)}
-                  </span>
+          <div class="flex items-center justify-between">
+            <span class="text-sm text-surface-400">Serial</span>
+            <span class="text-sm text-surface-100 font-mono">{dev.HardwareSerial || '--'}</span>
+          </div>
+          {#if storage}
+            <div class="flex items-center justify-between gap-3">
+              <span class="text-sm text-surface-400">Storage</span>
+              <div class="flex items-center gap-2">
+                <div class="w-24 h-1.5 rounded-full bg-surface-700 overflow-hidden">
+                  <div
+                    class="h-full rounded-full transition-all duration-500"
+                    class:bg-engage-green={storageColor === 'ok'}
+                    class:bg-engage-orange={storageColor === 'warning'}
+                    class:bg-engage-red={storageColor === 'critical'}
+                    style="width: {storagePct}%"
+                  ></div>
                 </div>
+                <span class="text-xs text-surface-400 whitespace-nowrap">
+                  {formatBytes(storage.used)} / {formatBytes(storage.total)}
+                </span>
               </div>
-            {/if}
-
-            <!-- Language -->
-            <div class="flex items-center justify-between">
-              <span class="text-sm text-surface-400">Language</span>
-              <Select.Root
-                type="single"
-                value={dev.LanguageSetting || 'main_en'}
-                onValueChange={handleLanguage}
-                items={LANGUAGES}
-              >
-                <Select.Trigger
-                  class="flex items-center gap-2 rounded-lg px-3 py-1.5 bg-surface-700 border border-surface-600 hover:border-surface-500 transition-colors"
-                >
-                  <span class="text-sm text-surface-100">{LANGUAGES.find(l => l.value === (dev.LanguageSetting || 'main_en'))?.label || dev.LanguageSetting}</span>
-                  <svg class="w-3.5 h-3.5 text-surface-400" viewBox="0 0 20 20" fill="currentColor">
-                    <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd" />
-                  </svg>
-                </Select.Trigger>
-                <Select.Content
-                  class="z-50 rounded-lg bg-surface-700 border border-surface-600 shadow-xl py-1 max-h-64 overflow-y-auto max-w-[calc(100vw-2rem)]"
-                  sideOffset={4}
-                >
-                  {#each LANGUAGES as lang}
-                    <Select.Item
-                      value={lang.value}
-                      label={lang.label}
-                      class="px-3 py-2 text-sm cursor-pointer transition-colors
-                        data-[highlighted]:bg-surface-600 data-[selected]:text-engage-blue"
-                    >
-                      {lang.label}
-                    </Select.Item>
-                  {/each}
-                </Select.Content>
-              </Select.Root>
             </div>
-
-            <!-- Reboot / Power Off -->
-            <div class="pt-3 border-t border-surface-700 grid grid-cols-2 gap-2">
-              <button
-                class="text-sm py-2 rounded-lg bg-surface-700 text-surface-200 hover:bg-surface-600 transition-colors"
-                onclick={handleReboot}
+          {/if}
+          <div class="flex items-center justify-between">
+            <span class="text-sm text-surface-400">Language</span>
+            <Select.Root
+              type="single"
+              value={dev.LanguageSetting || 'main_en'}
+              onValueChange={handleLanguage}
+              items={LANGUAGES}
+            >
+              <Select.Trigger
+                class="flex items-center gap-2 rounded-lg px-3 py-1.5 bg-surface-700 border border-surface-600 hover:border-surface-500 transition-colors"
               >
-                Reboot
-              </button>
-              <button
-                class="text-sm py-2 rounded-lg bg-engage-red/15 text-engage-red hover:bg-engage-red/25 transition-colors"
-                onclick={handlePoweroff}
+                <span class="text-sm text-surface-100">{LANGUAGES.find(l => l.value === (dev.LanguageSetting || 'main_en'))?.label || dev.LanguageSetting}</span>
+                <ChevronIcon class="!w-3.5 !h-3.5 text-surface-400" />
+              </Select.Trigger>
+              <Select.Content
+                class="z-50 rounded-lg bg-surface-700 border border-surface-600 shadow-xl py-1 max-h-64 overflow-y-auto max-w-[calc(100vw-2rem)]"
+                sideOffset={4}
               >
-                Power Off
-              </button>
-            </div>
+                {#each LANGUAGES as lang}
+                  <Select.Item
+                    value={lang.value}
+                    label={lang.label}
+                    class="px-3 py-2 text-sm cursor-pointer transition-colors
+                      data-[highlighted]:bg-surface-600 data-[selected]:text-engage-blue"
+                  >
+                    {lang.label}
+                  </Select.Item>
+                {/each}
+              </Select.Content>
+            </Select.Root>
           </div>
-        {/if}
-      </div>
+          <div class="pt-3 border-t border-surface-700 grid grid-cols-2 gap-2">
+            <button
+              class="text-sm py-2 rounded-lg bg-surface-700 text-surface-200 hover:bg-surface-600 transition-colors"
+              onclick={handleReboot}
+            >
+              Reboot
+            </button>
+            <button
+              class="text-sm py-2 rounded-lg bg-engage-red/15 text-engage-red hover:bg-engage-red/25 transition-colors"
+              onclick={handlePoweroff}
+            >
+              Power Off
+            </button>
+          </div>
+        </div>
+      </CollapsibleCard>
     {/if}
 
     <!-- Toggles Section (collapsed by default) -->
     {#if toggles}
-      <div class="card p-4">
-        <button
-          class="w-full flex items-center justify-between"
-          onclick={() => { togglesExpanded = !togglesExpanded }}
-        >
-          <h3 class="text-surface-400 text-xs font-semibold uppercase tracking-wider">Toggles</h3>
-          <svg class="w-4 h-4 text-surface-500 transition-transform {togglesExpanded ? 'rotate-180' : ''}" viewBox="0 0 20 20" fill="currentColor">
-            <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd" />
-          </svg>
-        </button>
-
-        {#if togglesExpanded}
-          <div class="mt-4 space-y-4">
-            {#each TOGGLE_DEFS as t}
-              <div class="flex items-center justify-between gap-3">
-                <div class="text-sm text-surface-100">{t.label}</div>
-                <button
-                  class="shrink-0 w-11 h-6 rounded-full transition-colors relative {toggles[t.key] ? 'bg-engage-blue' : 'bg-surface-600'}"
-                  onclick={() => handleToggle(t.key)}
-                  disabled={toggling === t.key}
-                  aria-label={t.label}
-                >
-                  <div
-                    class="absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform {toggles[t.key] ? 'translate-x-[22px]' : 'translate-x-0.5'}"
-                  ></div>
-                </button>
-              </div>
-            {/each}
-
-            <!-- Driving Personality (button group) -->
-            <div class="pt-3 border-t border-surface-700">
-              <div class="text-sm text-surface-100 mb-2">Driving Personality</div>
-              <div class="grid grid-cols-3 gap-1 rounded-lg bg-surface-700 p-1">
-                {#each PERSONALITIES as p}
-                  <button
-                    class="text-xs py-1.5 rounded-md transition-colors {toggles.LongitudinalPersonality === p.value ? 'bg-engage-blue text-white' : 'text-surface-300 hover:text-surface-100'}"
-                    onclick={() => handlePersonality(p.value)}
-                  >
-                    {p.label}
-                  </button>
-                {/each}
-              </div>
+      <CollapsibleCard title="Toggles" bind:open={togglesExpanded}>
+        <div class="space-y-4">
+          {#each TOGGLE_DEFS as t}
+            <div class="flex items-center justify-between gap-3">
+              <div class="text-sm text-surface-100">{t.label}</div>
+              <Toggle
+                checked={toggles[t.key]}
+                disabled={toggling === t.key}
+                label={t.label}
+                onCheckedChange={() => handleToggle(t.key)}
+              />
             </div>
+          {/each}
+          <div class="pt-3 border-t border-surface-700">
+            <div class="text-sm text-surface-100 mb-2">Driving Personality</div>
+            <ToggleGroup.Root
+              type="single"
+              value={String(toggles.LongitudinalPersonality)}
+              onValueChange={(v) => { if (v) handlePersonality(Number(v)) }}
+              class="grid grid-cols-3 gap-1 rounded-lg bg-surface-700 p-1"
+            >
+              {#each PERSONALITIES as p}
+                <ToggleGroup.Item
+                  value={String(p.value)}
+                  class="text-xs py-1.5 rounded-md transition-colors
+                    data-[state=on]:bg-engage-blue data-[state=on]:text-white
+                    data-[state=off]:text-surface-300 data-[state=off]:hover:text-surface-100"
+                >
+                  {p.label}
+                </ToggleGroup.Item>
+              {/each}
+            </ToggleGroup.Root>
           </div>
-        {/if}
-      </div>
+        </div>
+      </CollapsibleCard>
     {/if}
 
     <!-- Developer Section (collapsed by default) -->
     {#if toggles}
-      <div class="card p-4">
-        <button
-          class="w-full flex items-center justify-between"
-          onclick={() => { devTogglesExpanded = !devTogglesExpanded }}
-        >
-          <h3 class="text-surface-400 text-xs font-semibold uppercase tracking-wider">Developer</h3>
-          <svg class="w-4 h-4 text-surface-500 transition-transform {devTogglesExpanded ? 'rotate-180' : ''}" viewBox="0 0 20 20" fill="currentColor">
-            <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd" />
-          </svg>
-        </button>
-
-        {#if devTogglesExpanded}
-          <div class="mt-4 space-y-4">
-            {#each DEV_DEFS as t}
+      <CollapsibleCard title="Developer" bind:open={devTogglesExpanded}>
+        <div class="space-y-4">
+          {#each DEV_DEFS as t}
+            <div class="flex items-center justify-between gap-3">
+              <div class="text-sm text-surface-100">{t.label}</div>
+              <Toggle
+                checked={toggles[t.key]}
+                disabled={toggling === t.key}
+                label={t.label}
+                onCheckedChange={() => handleToggle(t.key)}
+              />
+            </div>
+            <!-- SSH Keys — right after Enable SSH toggle -->
+            {#if t.key === 'SshEnabled' && sshKeys}
               <div class="flex items-center justify-between gap-3">
-                <div class="text-sm text-surface-100">{t.label}</div>
-                <button
-                  class="shrink-0 w-11 h-6 rounded-full transition-colors relative {toggles[t.key] ? 'bg-engage-blue' : 'bg-surface-600'}"
-                  onclick={() => handleToggle(t.key)}
-                  disabled={toggling === t.key}
-                  aria-label={t.label}
-                >
-                  <div
-                    class="absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform {toggles[t.key] ? 'translate-x-[22px]' : 'translate-x-0.5'}"
-                  ></div>
-                </button>
-              </div>
-              <!-- SSH Keys — right after Enable SSH toggle -->
-              {#if t.key === 'SshEnabled' && sshKeys}
-                <div class="flex items-center justify-between gap-3">
-                  <div class="text-sm text-surface-100">SSH Keys</div>
-                  <div class="flex items-center gap-2 shrink-0">
-                    {#if sshKeys.has_keys}
-                      <span class="text-sm text-surface-300">{sshKeys.username}</span>
-                    {/if}
-                    {#if sshError}
-                      <span class="text-xs text-engage-red">{sshError}</span>
-                    {/if}
-                    {#if sshLoading}
-                      <button class="px-3 py-1.5 text-xs rounded-lg bg-surface-700 text-surface-400" disabled>
-                        <svg class="w-3 h-3 animate-spin inline" viewBox="0 0 24 24" fill="none">
-                          <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-dasharray="32 32" />
-                        </svg>
-                      </button>
-                    {:else if sshKeys.has_keys}
-                      <button
-                        class="px-3 py-1.5 text-xs rounded-lg bg-engage-red/15 text-engage-red hover:bg-engage-red/25 transition-colors"
-                        onclick={async () => {
-                          sshLoading = true; sshError = null
-                          try { sshKeys = await removeSshKeys() } catch (e) { sshError = e.message }
-                          sshLoading = false
-                        }}
-                      >REMOVE</button>
-                    {:else}
-                      <button
-                        class="px-3 py-1.5 text-xs rounded-lg bg-engage-blue/15 text-engage-blue hover:bg-engage-blue/25 transition-colors"
-                        onclick={async () => {
-                          const username = prompt('Enter your GitHub username')
-                          if (!username) return
-                          sshLoading = true; sshError = null
-                          try { sshKeys = await setSshKeys(username) } catch (e) { sshError = e.message }
-                          sshLoading = false
-                        }}
-                      >ADD</button>
-                    {/if}
-                  </div>
+                <div class="text-sm text-surface-100">SSH Keys</div>
+                <div class="flex items-center gap-2 shrink-0">
+                  {#if sshKeys.has_keys}
+                    <span class="text-sm text-surface-300">{sshKeys.username}</span>
+                  {/if}
+                  {#if sshError}
+                    <span class="text-xs text-engage-red">{sshError}</span>
+                  {/if}
+                  {#if sshLoading}
+                    <button class="px-3 py-1.5 text-xs rounded-lg bg-surface-700 text-surface-400" disabled>
+                      <Spinner class="w-3 h-3 inline" />
+                    </button>
+                  {:else if sshKeys.has_keys}
+                    <button
+                      class="px-3 py-1.5 text-xs rounded-lg bg-engage-red/15 text-engage-red hover:bg-engage-red/25 transition-colors"
+                      onclick={async () => {
+                        sshLoading = true; sshError = null
+                        try { sshKeys = await removeSshKeys() } catch (e) { sshError = e.message }
+                        sshLoading = false
+                      }}
+                    >REMOVE</button>
+                  {:else}
+                    <button
+                      class="px-3 py-1.5 text-xs rounded-lg bg-engage-blue/15 text-engage-blue hover:bg-engage-blue/25 transition-colors"
+                      onclick={async () => {
+                        const username = prompt('Enter your GitHub username')
+                        if (!username) return
+                        sshLoading = true; sshError = null
+                        try { sshKeys = await setSshKeys(username) } catch (e) { sshError = e.message }
+                        sshLoading = false
+                      }}
+                    >ADD</button>
+                  {/if}
                 </div>
-              {/if}
-            {/each}
-          </div>
-        {/if}
-      </div>
+              </div>
+            {/if}
+          {/each}
+        </div>
+      </CollapsibleCard>
     {/if}
 
     {#each SECTIONS as section}
-      <div class="card p-4">
-        <button
-          class="w-full flex items-center justify-between"
-          onclick={() => { sectionExpanded[section.title] = !sectionExpanded[section.title] }}
-        >
-          <h3 class="text-surface-400 text-xs font-semibold uppercase tracking-wider">{section.title}</h3>
-          <svg class="w-4 h-4 text-surface-500 transition-transform {sectionExpanded[section.title] ? 'rotate-180' : ''}" viewBox="0 0 20 20" fill="currentColor">
-            <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd" />
-          </svg>
-        </button>
-        {#if sectionExpanded[section.title]}
-        <div class="space-y-4 mt-4">
+      <CollapsibleCard title={section.title} bind:open={sectionExpanded[section.title]}>
+        <div class="space-y-4">
           {#each section.items as item}
             {#if item.type === 'bool'}
-              <button
-                class="w-full flex items-center justify-between gap-4 group"
-                onclick={() => toggle(item.key)}
-                disabled={saving === item.key}
-              >
-                <div class="text-left">
+              <div class="flex items-center justify-between gap-4">
+                <div>
                   <div class="text-sm text-surface-100">{item.label}</div>
                   <div class="text-xs text-surface-500 mt-0.5">{item.desc}</div>
                 </div>
-                <div
-                  class="relative w-11 h-6 rounded-full shrink-0 transition-colors duration-200 {params[item.key] ? 'bg-engage-blue' : 'bg-surface-600'}"
-                >
-                  <div
-                    class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform duration-200 {params[item.key] ? 'translate-x-5' : 'translate-x-0'}"
-                  ></div>
-                </div>
-              </button>
+                <Toggle
+                  checked={params[item.key]}
+                  disabled={saving === item.key}
+                  label={item.label}
+                  onCheckedChange={() => toggle(item.key)}
+                />
+              </div>
             {:else if item.type === 'int'}
               {@const disabled = item.dependsOn ? !params[item.dependsOn] : false}
               <div class={disabled ? 'opacity-40' : ''}>
                 <div class="text-sm text-surface-100">{item.label}</div>
                 <div class="text-xs text-surface-500 mt-0.5 mb-2">{item.desc}</div>
-                <div class="flex gap-2">
+                <ToggleGroup.Root
+                  type="single"
+                  value={String(params[item.key])}
+                  onValueChange={(v) => { if (v) setOffset(item.key, Number(v)) }}
+                  {disabled}
+                  class="flex gap-2"
+                >
                   {#each item.options as opt}
-                    <button
-                      class="px-3 py-1.5 text-sm rounded-lg transition-colors {params[item.key] === opt ? 'bg-engage-blue text-white' : 'bg-surface-700 text-surface-300 hover:bg-surface-600'}"
-                      onclick={() => setOffset(item.key, opt)}
-                      disabled={disabled || saving === item.key}
+                    <ToggleGroup.Item
+                      value={String(opt)}
+                      disabled={saving === item.key}
+                      class="px-3 py-1.5 text-sm rounded-lg transition-colors
+                        data-[state=on]:bg-engage-blue data-[state=on]:text-white
+                        data-[state=off]:bg-surface-700 data-[state=off]:text-surface-300 data-[state=off]:hover:bg-surface-600"
                     >
                       {opt}%
-                    </button>
+                    </ToggleGroup.Item>
                   {/each}
-                </div>
+                </ToggleGroup.Root>
               </div>
             {:else if item.type === 'choice'}
               {@const disabled = item.dependsOn ? !params[item.dependsOn] : false}
               <div class={disabled ? 'opacity-40' : ''}>
                 <div class="text-sm text-surface-100">{item.label}</div>
                 <div class="text-xs text-surface-500 mt-0.5 mb-2">{item.desc}</div>
-                <div class="flex gap-2">
+                <ToggleGroup.Root
+                  type="single"
+                  value={String(params[item.key])}
+                  onValueChange={(v) => { if (v) setOffset(item.key, Number(v)) }}
+                  {disabled}
+                  class="flex gap-2"
+                >
                   {#each item.options as opt, i}
-                    <button
-                      class="px-3 py-1.5 text-sm rounded-lg transition-colors {params[item.key] === i ? 'bg-engage-blue text-white' : 'bg-surface-700 text-surface-300 hover:bg-surface-600'}"
-                      onclick={() => setOffset(item.key, i)}
-                      disabled={disabled || saving === item.key}
+                    <ToggleGroup.Item
+                      value={String(i)}
+                      disabled={saving === item.key}
+                      class="px-3 py-1.5 text-sm rounded-lg transition-colors
+                        data-[state=on]:bg-engage-blue data-[state=on]:text-white
+                        data-[state=off]:bg-surface-700 data-[state=off]:text-surface-300 data-[state=off]:hover:bg-surface-600"
                     >
                       {opt}
-                    </button>
+                    </ToggleGroup.Item>
                   {/each}
-                </div>
+                </ToggleGroup.Root>
               </div>
             {/if}
           {/each}
-
-          <!-- Lateral Delay (Driving section only) -->
           {#if section.title === 'Driving' && latDelay && !latDelay.error}
             <div class="pt-3 border-t border-surface-700">
               <div class="flex items-center justify-between">
@@ -827,33 +767,18 @@
               </div>
             </div>
           {/if}
-
         </div>
-        {/if}
-      </div>
+      </CollapsibleCard>
     {/each}
 
     <!-- Mapd & Maps -->
-    <div class="card p-4">
-      <button
-        class="w-full flex items-center justify-between"
-        onclick={() => { mapdExpanded = !mapdExpanded; if (mapdExpanded && !mapdLatest && !mapdChecking) handleMapdCheck() }}
-      >
-        <h3 class="text-surface-400 text-xs font-semibold uppercase tracking-wider">Mapd & Maps</h3>
-        <div class="flex items-center gap-3">
-          {#if mapdVersion}
-            <span class="text-xs text-surface-500 font-mono">{mapdVersion}{#if mapdReleaseDate} / {mapdReleaseDate}{/if}</span>
-          {/if}
-          <svg class="w-4 h-4 text-surface-500 transition-transform {mapdExpanded ? 'rotate-180' : ''}" viewBox="0 0 20 20" fill="currentColor">
-            <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd" />
-          </svg>
-        </div>
-      </button>
-
-      {#if mapdExpanded}
-      <div class="mt-4 space-y-4">
-
-        <!-- Mapd version & update -->
+    <CollapsibleCard
+      title="Mapd & Maps"
+      metadata={mapdVersion ? `${mapdVersion}${mapdReleaseDate ? ` / ${mapdReleaseDate}` : ''}` : ''}
+      bind:open={mapdExpanded}
+      onOpenChange={(open) => { if (open && !mapdLatest && !mapdChecking) handleMapdCheck() }}
+    >
+      <div class="space-y-4">
         <div class="flex items-center justify-between gap-3">
           <div class="min-w-0">
             <div class="text-sm text-surface-100">
@@ -873,18 +798,12 @@
           <div class="shrink-0">
             {#if mapdUpdating}
               <div class="flex items-center gap-2 text-xs text-surface-400">
-                <svg class="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="12" cy="12" r="10" stroke-opacity="0.25" />
-                  <path d="M12 2a10 10 0 019.95 9" />
-                </svg>
+                <Spinner />
                 Installing...
               </div>
             {:else if mapdChecking}
               <div class="flex items-center gap-2 text-xs text-surface-400">
-                <svg class="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="12" cy="12" r="10" stroke-opacity="0.25" />
-                  <path d="M12 2a10 10 0 019.95 9" />
-                </svg>
+                <Spinner />
                 Checking
               </div>
             {:else if mapdLatest && mapdLatest !== mapdVersion}
@@ -904,13 +823,8 @@
             {/if}
           </div>
         </div>
-
-        <!-- Map Tiles Management -->
         <div class="pt-3 border-t border-surface-700">
-          <a
-            href="/tiles"
-            class="flex items-center justify-between group"
-          >
+          <a href="/tiles" class="flex items-center justify-between group">
             <div>
               <div class="text-sm text-surface-100">Map Tiles Management</div>
               <div class="text-xs text-surface-500 mt-0.5">Download and manage OSM offline tiles</div>
@@ -920,8 +834,6 @@
             </svg>
           </a>
         </div>
-
-        <!-- Map Tile Source -->
         <div class="pt-3 border-t border-surface-700">
           <div class="text-sm text-surface-100 mb-2">Map Tile Source</div>
           <div class="flex gap-2">
@@ -937,37 +849,23 @@
           </div>
           <div class="text-xs text-surface-500 mt-2">Reload route page to apply</div>
         </div>
-
       </div>
-      {/if}
-    </div>
+    </CollapsibleCard>
 
     <!-- Software Section (collapsed by default) -->
-    <div class="card p-4">
-      <button
-        class="w-full flex items-center justify-between"
-        onclick={() => { swExpanded = !swExpanded; if (swExpanded && !swChecked && !swChecking && !swDownloading && !sw?.UpdateAvailable) handleSwAutoCheck() }}
-      >
-        <h3 class="text-surface-400 text-xs font-semibold uppercase tracking-wider">Software</h3>
-        <div class="flex items-center gap-3">
-          {#if sw}
-            <span class="text-xs text-surface-500 font-mono">{sw.GitBranch} / {sw.GitCommit?.slice(0, 7) || '???'}</span>
-          {/if}
-          <svg class="w-4 h-4 text-surface-500 transition-transform {swExpanded ? 'rotate-180' : ''}" viewBox="0 0 20 20" fill="currentColor">
-            <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd" />
-          </svg>
+    <CollapsibleCard
+      title="Software"
+      metadata={sw ? `${sw.GitBranch} / ${sw.GitCommit?.slice(0, 7) || '???'}` : ''}
+      bind:open={swExpanded}
+      onOpenChange={(open) => { if (open && !swChecked && !swChecking && !swDownloading && !sw?.UpdateAvailable) handleSwAutoCheck() }}
+    >
+      {#if swLoading}
+        <div class="space-y-3 animate-pulse">
+          <div class="h-4 bg-surface-700 rounded w-48"></div>
+          <div class="h-4 bg-surface-700 rounded w-32"></div>
         </div>
-      </button>
-
-      {#if swExpanded}
-      <div class="mt-4 space-y-4">
-        {#if swLoading}
-          <div class="space-y-3 animate-pulse">
-            <div class="h-4 bg-surface-700 rounded w-48"></div>
-            <div class="h-4 bg-surface-700 rounded w-32"></div>
-          </div>
-        {:else if sw}
-          <!-- Version details -->
+      {:else if sw}
+        <div class="space-y-4">
           <div class="text-xs text-surface-500 space-y-1">
             {#if sw.UpdaterCurrentDescription}
               <div class="text-sm text-surface-100">{sw.UpdaterCurrentDescription}</div>
@@ -978,16 +876,12 @@
               <div>Date: <span class="text-surface-300">{sw.GitCommitDate}</span></div>
             {/if}
           </div>
-
-          <!-- New version info -->
           {#if (sw.UpdaterFetchAvailable || sw.UpdateAvailable) && sw.UpdaterNewDescription}
             <div class="text-sm text-engage-green">{sw.UpdaterNewDescription}</div>
           {/if}
           {#if swError}
             <div class="text-xs text-engage-red">{swError}</div>
           {/if}
-
-          <!-- Branch selector (hidden if IsTestedBranch) -->
           {#if !sw.IsTestedBranch && sw.UpdaterAvailableBranches?.length > 0}
             <div class="pt-3 border-t border-surface-700">
               <div class="text-xs text-surface-500 uppercase font-medium mb-2">Target Branch</div>
@@ -1001,9 +895,7 @@
                   class="w-full flex items-center justify-between rounded-lg px-3 py-2.5 bg-surface-700 border border-surface-600 hover:border-surface-500 transition-colors text-left"
                 >
                   <span class="text-sm text-surface-100 truncate">{sw.UpdaterTargetBranch || sw.GitBranch}</span>
-                  <svg class="w-4 h-4 text-surface-400 shrink-0" viewBox="0 0 20 20" fill="currentColor">
-                    <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd" />
-                  </svg>
+                  <ChevronIcon class="text-surface-400 shrink-0" />
                 </Select.Trigger>
                 <Select.Content
                   class="z-50 rounded-lg bg-surface-700 border border-surface-600 shadow-xl py-1 max-h-64 overflow-y-auto max-w-[calc(100vw-2rem)]"
@@ -1027,23 +919,15 @@
               </Select.Root>
             </div>
           {/if}
-
-          <!-- Action buttons -->
           <div class="pt-3 border-t border-surface-700 grid grid-cols-2 gap-2">
             {#if swDownloading}
               <button class="text-sm py-2 rounded-lg bg-surface-700 text-surface-400 flex items-center justify-center gap-2" disabled>
-                <svg class="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="12" cy="12" r="10" stroke-opacity="0.25" />
-                  <path d="M12 2a10 10 0 019.95 9" />
-                </svg>
+                <Spinner />
                 Updating
               </button>
             {:else if swChecking}
               <button class="text-sm py-2 rounded-lg bg-surface-700 text-surface-400 flex items-center justify-center gap-2" disabled>
-                <svg class="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="12" cy="12" r="10" stroke-opacity="0.25" />
-                  <path d="M12 2a10 10 0 019.95 9" />
-                </svg>
+                <Spinner />
                 Checking
               </button>
             {:else if sw.UpdateAvailable}
@@ -1086,30 +970,12 @@
               Uninstall
             </button>
           </div>
-        {/if}
-      </div>
+        </div>
       {/if}
-    </div>
+    </CollapsibleCard>
 
     <!-- Models Section -->
-    <div class="card p-4">
-      <button
-        class="w-full flex items-center justify-between"
-        onclick={() => { modelsExpanded = !modelsExpanded }}
-      >
-        <h3 class="text-surface-400 text-xs font-semibold uppercase tracking-wider">Models</h3>
-        <div class="flex items-center gap-3">
-          {#if activeDriving}
-            <span class="text-xs text-surface-500 font-mono">{activeDriving.name}</span>
-          {/if}
-          <svg class="w-4 h-4 text-surface-500 transition-transform {modelsExpanded ? 'rotate-180' : ''}" viewBox="0 0 20 20" fill="currentColor">
-            <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd" />
-          </svg>
-        </div>
-      </button>
-
-      {#if modelsExpanded}
-      <div class="mt-4">
+    <CollapsibleCard title="Models" metadata={activeDriving?.name ?? ''} bind:open={modelsExpanded}>
       {#if modelsLoading}
         <div class="space-y-3 animate-pulse">
           <div class="h-10 bg-surface-700 rounded-lg"></div>
@@ -1146,13 +1012,9 @@
                   {/if}
                 </div>
                 {#if swapping}
-                  <svg class="w-4 h-4 animate-spin text-surface-400 shrink-0" viewBox="0 0 24 24" fill="none">
-                    <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-dasharray="32 32" />
-                  </svg>
+                  <Spinner class="w-4 h-4 text-surface-400 shrink-0" />
                 {:else}
-                  <svg class="w-4 h-4 text-surface-400 shrink-0" viewBox="0 0 20 20" fill="currentColor">
-                    <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd" />
-                  </svg>
+                  <ChevronIcon class="text-surface-400 shrink-0" />
                 {/if}
               </Select.Trigger>
               <Select.Content
@@ -1206,9 +1068,7 @@
                       <span class="text-xs text-surface-500 shrink-0">{activeDm.date}</span>
                     {/if}
                   </div>
-                  <svg class="w-4 h-4 text-surface-400 shrink-0" viewBox="0 0 20 20" fill="currentColor">
-                    <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd" />
-                  </svg>
+                  <ChevronIcon class="text-surface-400 shrink-0" />
                 </Select.Trigger>
                 <Select.Content
                   class="z-50 rounded-lg bg-surface-700 border border-surface-600 shadow-xl py-1 max-h-64 overflow-y-auto max-w-[calc(100vw-2rem)]"
@@ -1252,9 +1112,7 @@
             disabled={checking}
           >
             {#if checking}
-              <svg class="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
-                <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-dasharray="32 32" />
-              </svg>
+              <Spinner />
               Checking...
             {:else}
               Check for Updates
@@ -1281,9 +1139,7 @@
                         disabled={downloading != null}
                       >
                         {#if downloading === model.id}
-                          <svg class="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none">
-                            <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-dasharray="32 32" />
-                          </svg>
+                          <Spinner class="w-3 h-3" />
                         {:else}
                           Download
                         {/if}
@@ -1308,9 +1164,7 @@
                         disabled={downloading != null}
                       >
                         {#if downloading === model.id}
-                          <svg class="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none">
-                            <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-dasharray="32 32" />
-                          </svg>
+                          <Spinner class="w-3 h-3" />
                         {:else}
                           Download
                         {/if}
@@ -1323,8 +1177,6 @@
           {/if}
         </div>
       {/if}
-      </div>
-      {/if}
-    </div>
+    </CollapsibleCard>
   {/if}
 </div>

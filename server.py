@@ -21,6 +21,8 @@ from handlers import (
     cors_middleware,
     handle_auth,
     handle_connectdata,
+    handle_dashboard_telemetry,
+    handle_dashboard_ws,
     handle_device_get,
     handle_device_location,
     handle_device_stats,
@@ -232,6 +234,10 @@ def create_app(data_dir: str, static_dir: str) -> web.Application:
 
     # HUD overlay WebSocket (server-side rendered overlay at 20Hz)
     app.router.add_get("/ws/hud", handle_hud_ws)
+
+    # Dashboard telemetry (replay REST + live WebSocket)
+    app.router.add_get("/v1/dashboard/telemetry/{routeName}/{segments}", handle_dashboard_telemetry)
+    app.router.add_get("/ws/dashboard", handle_dashboard_ws)
 
     # Media file serving
     app.router.add_get("/connectdata/{path:.*}", handle_connectdata)
