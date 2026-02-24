@@ -47,6 +47,7 @@
   let swChecking = $state(false)
   let swInstallPhase = $state(null)  // null | 'downloading' | 'installing' | 'rebooting'
   let swChecked = $state(false)
+  const swRepoUrl = $derived(sw?.GitRemote?.replace(/\.git$/, '') || null)
 
   // Device state
   let dev = $state(null)
@@ -178,7 +179,7 @@
   }
 
   async function handleSwAutoCheck() {
-    if (swChecking || swDownloading) return
+    if (swChecking || swInstallPhase) return
     swChecking = true
     swChecked = false
     swError = null
@@ -885,7 +886,7 @@
       title="Software"
       metadata={sw ? `${sw.GitBranch} / ${sw.GitCommit?.slice(0, 7) || '???'}` : ''}
       bind:open={swExpanded}
-      onOpenChange={(open) => { if (open && !swChecked && !swChecking && !swDownloading && !sw?.UpdateAvailable) handleSwAutoCheck() }}
+      onOpenChange={(open) => { if (open && !swChecked && !swChecking && !swInstallPhase && !sw?.UpdateAvailable) handleSwAutoCheck() }}
     >
       {#if swLoading}
         <div class="space-y-3 animate-pulse">
@@ -894,18 +895,21 @@
         </div>
       {:else if sw}
         <div class="space-y-4">
-          <div class="text-xs text-surface-500 space-y-1">
-            {#if sw.UpdaterCurrentDescription}
-              <div class="text-sm text-surface-100">{sw.UpdaterCurrentDescription}</div>
-            {/if}
-            <div>Branch: <span class="text-surface-300">{sw.GitBranch}</span></div>
-            <div>Commit: <span class="text-surface-300">{sw.GitCommit?.slice(0, 7) || '???'}</span></div>
-            {#if sw.GitCommitDate}
-              <div>Date: <span class="text-surface-300">{sw.GitCommitDate}</span></div>
-            {/if}
-          </div>
+          {#if sw.UpdaterCurrentDescription}
+            {@const curParts = sw.UpdaterCurrentDescription.split(' / ')}
+            {@const curCommitShort = curParts.length >= 3 ? curParts[2] : null}
+            <div class="text-sm text-surface-100">
+              {curParts[0]}{curParts.length > 1 ? ` / ${curParts[1]}` : ''}
+              {#if curCommitShort && swRepoUrl && sw.GitCommit}
+                / <a href="{swRepoUrl}/commit/{sw.GitCommit}" target="_blank" rel="noopener" class="text-engage-blue hover:underline">{curCommitShort}</a>
+              {:else if curCommitShort}
+                / {curCommitShort}
+              {/if}
+              {#if curParts.length > 3} / {curParts.slice(3).join(' / ')}{/if}
+            </div>
+          {/if}
           {#if (sw.UpdaterFetchAvailable || sw.UpdateAvailable) && sw.UpdaterNewDescription}
-            <div class="text-sm text-engage-green">{sw.UpdaterNewDescription}</div>
+            <div class="text-sm text-engage-green">Update: {sw.UpdaterNewDescription}</div>
           {/if}
           {#if swError}
             <div class="text-xs text-engage-red">{swError}</div>

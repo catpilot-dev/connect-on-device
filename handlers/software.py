@@ -13,7 +13,7 @@ logger = logging.getLogger("connect")
 # ─── Software update management ──────────────────────────────────────
 
 SOFTWARE_PARAMS = [
-    "GitBranch", "GitCommit", "GitCommitDate",
+    "GitBranch", "GitCommit", "GitCommitDate", "GitRemote",
     "UpdaterState", "UpdaterTargetBranch",
     "UpdaterCurrentDescription", "UpdaterNewDescription",
     "UpdaterCurrentReleaseNotes", "UpdaterNewReleaseNotes",
