@@ -17,8 +17,8 @@ ssh "$HOST" "mkdir -p $REMOTE_DIR"
 # Clean old layout (monolithic handlers.py replaced by handlers/ package)
 ssh "$HOST" "rm -f $REMOTE_DIR/handlers.py; rm -rf $REMOTE_DIR/handlers $REMOTE_DIR/static"
 
-# Copy all Python modules
-scp "$LOCAL_DIR"/*.py "$HOST:$REMOTE_DIR/"
+# Copy all Python modules + service file
+scp "$LOCAL_DIR"/*.py "$LOCAL_DIR"/*.service "$HOST:$REMOTE_DIR/"
 
 # Copy handlers package
 scp -r "$LOCAL_DIR/handlers" "$HOST:$REMOTE_DIR/"
@@ -26,13 +26,14 @@ scp -r "$LOCAL_DIR/handlers" "$HOST:$REMOTE_DIR/"
 # Copy built frontend
 scp -r "$LOCAL_DIR/static" "$HOST:$REMOTE_DIR/"
 
-# Restart server — kill ALL existing server.py processes, then start fresh
+# Ensure systemd user service symlink exists
+ssh "$HOST" "mkdir -p ~/.config/systemd/user && ln -sf $REMOTE_DIR/connect-on-device.service ~/.config/systemd/user/"
+
+# Restart via systemd user service
 echo "Restarting server..."
-ssh "$HOST" "pkill -9 -f 'python.*server.py'" 2>/dev/null || true
-sleep 1
-# Use -f to force pseudo-tty allocation off; redirect all fds so ssh doesn't hang
-ssh -f "$HOST" "cd $REMOTE_DIR && nohup /usr/local/venv/bin/python -u server.py > /tmp/connect.log 2>&1 &"
+ssh "$HOST" "systemctl --user daemon-reload && systemctl --user restart connect-on-device"
 
 sleep 2
+ssh "$HOST" "systemctl --user status connect-on-device --no-pager" || true
 echo ""
 echo "Deployed and running at http://$HOST:8082/"
