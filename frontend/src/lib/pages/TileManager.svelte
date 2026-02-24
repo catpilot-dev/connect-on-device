@@ -4,7 +4,6 @@
   import { wgs84ToGcj02 } from '../gcj02.js'
   import { tileLabel, tileName } from '../tile-names.js'
   import { getTileSource, TILE_SOURCES } from '../tileSource.js'
-  import ChevronIcon from '../components/ChevronIcon.svelte'
 
   let mapContainer = $state(null)
   let map = null
@@ -22,8 +21,6 @@
   let error = $state(null)
   let pollTimer = null
   let highlightedTile = $state(null) // {lat, lon} of tile hovered in list
-  let dlExpanded = $state(false)
-  let dlContainer = $state(null)
   let gridLayerMap = {}  // "lat,lon" -> Leaflet rectangle layer
 
   // Grid range for eastern China (covers most driving areas)
@@ -312,15 +309,6 @@
       : '...'
   )
 
-  // Close Downloaded list on outside click
-  $effect(() => {
-    if (!dlExpanded) return
-    function onClick(e) {
-      if (dlContainer && !dlContainer.contains(e.target)) dlExpanded = false
-    }
-    document.addEventListener('click', onClick, true)
-    return () => document.removeEventListener('click', onClick, true)
-  })
 </script>
 
 <style>
@@ -346,77 +334,40 @@
   :global(.tile-tooltip::before) {
     border-top-color: #2a3040 !important;
   }
+  .animate-pulse-border {
+    animation: pulse-border 2.5s ease-in-out infinite;
+  }
+  @keyframes pulse-border {
+    0%, 100% { border-color: rgba(100, 116, 139, 0.4); }
+    50% { border-color: rgba(100, 116, 139, 1); }
+  }
 </style>
 
-<div class="flex flex-col h-full overflow-y-auto">
-  <!-- Map (responsive with padding) -->
-  <div class="flex-1 px-4 pt-4">
+<div class="flex flex-col h-dvh overflow-hidden">
+  <!-- Map fills all available space -->
+  <div class="flex-1 min-h-0 px-2 sm:px-4 pt-2 sm:pt-4">
     <div
       bind:this={mapContainer}
       class="w-full h-full rounded-lg overflow-hidden"
-      style="min-height: 400px"
     ></div>
   </div>
 
-  <!-- Two-column: Downloaded Tiles (left) | Download Button (right) -->
-  <div class="px-4 py-3 grid grid-cols-2 gap-4">
+  <!-- Controls pinned to bottom -->
+  <div class="shrink-0 px-2 sm:px-4 py-2 space-y-2">
+    {#if error}
+      <div class="text-engage-red text-xs">{error}</div>
+    {/if}
+    {#if progress.error}
+      <div class="text-engage-red text-xs p-1.5 rounded bg-engage-red/10">{progress.error}</div>
+    {/if}
 
-    <!-- Left: Downloaded tiles (collapsed by default) -->
-    <div bind:this={dlContainer}>
-      {#if error}
-        <div class="text-engage-red text-xs mb-2">{error}</div>
-      {/if}
-      {#if progress.error}
-        <div class="text-engage-red text-xs p-1.5 rounded bg-engage-red/10 mb-2">{progress.error}</div>
-      {/if}
-
-      <button
-        class="w-full flex flex-wrap items-center gap-x-2 gap-y-0.5 px-3 py-2 text-sm rounded-lg bg-surface-700 hover:bg-surface-650 transition-colors"
-        onclick={() => { dlExpanded = !dlExpanded }}
-      >
-        <span class="text-surface-200 text-sm">Downloaded</span>
-        <span class="text-xs text-surface-500 ml-auto sm:ml-0 hidden sm:inline">{storage.tile_count} tiles &middot; {storage.total_mb} MB</span>
-        <ChevronIcon rotated={dlExpanded} class="ml-auto" />
-      </button>
-      {#if dlExpanded}
-        <div class="mt-1 space-y-1 max-h-48 overflow-y-auto">
-          {#if downloaded.length === 0}
-            <div class="text-xs text-surface-500 p-2 text-center">No tiles downloaded</div>
-          {:else}
-            {#each downloaded as tile}
-              <!-- svelte-ignore a11y_no_static_element_interactions -->
-              <div
-                class="flex items-center justify-between px-2 py-1.5 rounded transition-colors {highlightedTile?.lat === tile.lat && highlightedTile?.lon === tile.lon ? 'bg-engage-red/15' : 'bg-surface-800 hover:bg-surface-750'}"
-                onmouseenter={() => highlightTileOnMap(tile.lat, tile.lon)}
-                onmouseleave={clearHighlight}
-              >
-                <div class="min-w-0">
-                  <div class="text-surface-200 text-xs truncate">{tileLabel(tile.lat, tile.lon)}</div>
-                  <div class="text-surface-500 text-xs">{tile.size_mb} MB</div>
-                </div>
-                <button
-                  class="shrink-0 ml-2 text-xs text-engage-red/60 hover:text-engage-red transition-colors"
-                  onclick={() => handleDelete(tile.lat, tile.lon)}
-                  title="Delete tile"
-                >
-                  <svg class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
-                    <path fill-rule="evenodd" d="M8.75 1A2.75 2.75 0 006 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 10.23 1.482l.149-.022.841 10.518A2.75 2.75 0 007.596 19h4.807a2.75 2.75 0 002.742-2.53l.841-10.52.149.023a.75.75 0 00.23-1.482A41.03 41.03 0 0014 4.193V3.75A2.75 2.75 0 0011.25 1h-2.5zM10 4c.84 0 1.673.025 2.5.075V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.325C8.327 4.025 9.16 4 10 4zM8.58 7.72a.75.75 0 00-1.5.06l.3 7.5a.75.75 0 101.5-.06l-.3-7.5zm4.34.06a.75.75 0 10-1.5-.06l-.3 7.5a.75.75 0 101.5.06l.3-7.5z" clip-rule="evenodd" />
-                  </svg>
-                </button>
-              </div>
-            {/each}
-          {/if}
-        </div>
-      {/if}
-    </div>
-
-    <!-- Right: Download button -->
-    <div class="space-y-1.5">
-      {#if progress.active}
-        <div class="space-y-1.5">
-          <div class="flex items-center justify-between text-xs text-surface-300">
+    {#if progress.active}
+      <!-- Download progress -->
+      <div class="flex items-center gap-3">
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center justify-between text-xs text-surface-300 mb-1">
             <span class="truncate">{currentTileLabel}</span>
-            <span class="shrink-0">{progressPct}%</span>
+            <span class="shrink-0 ml-2">{progressPct}%</span>
           </div>
           <div class="w-full h-1.5 rounded-full bg-surface-700 overflow-hidden">
             <div
@@ -424,42 +375,48 @@
               style="width: {progressPct}%"
             ></div>
           </div>
-          <button
-            class="w-full py-2 text-sm rounded-lg bg-engage-red/20 text-engage-red hover:bg-engage-red/30 transition-colors"
-            onclick={cancelDownload}
-          >Cancel</button>
         </div>
-      {:else if selectedForDelete.length > 0}
         <button
-          class="w-full py-2 text-sm rounded-lg transition-colors bg-engage-red/20 text-engage-red hover:bg-engage-red/30"
-          onclick={handleDeleteSelected}
-        >
-          {selectedForDelete.length} selected, Delete
-        </button>
-        <button
-          class="w-full py-1 text-xs text-surface-500 hover:text-surface-300 transition-colors"
-          onclick={() => { selectedForDelete = []; updateGrid() }}
-        >Clear selection</button>
-      {:else}
-        <button
-          class="w-full py-2 text-sm rounded-lg transition-colors {selected.length > 0 ? 'bg-engage-blue text-white hover:bg-engage-blue/80' : 'bg-surface-700 text-surface-200 border border-dashed border-surface-500'}"
-          disabled={selected.length === 0}
-          onclick={startDownload}
-        >
-          {#if selected.length > 0}
-            {selected.length} selected, Download
-          {:else}
-            Click map to select
-          {/if}
-        </button>
-        {#if selected.length > 0}
-          <button
-            class="w-full py-1 text-xs text-surface-500 hover:text-surface-300 transition-colors"
-            onclick={clearSelection}
-          >Clear selection</button>
+          class="shrink-0 px-3 py-1.5 text-xs rounded-lg bg-engage-red/20 text-engage-red hover:bg-engage-red/30 transition-colors"
+          onclick={cancelDownload}
+        >Cancel</button>
+      </div>
+    {:else}
+      <!-- Action bar -->
+      <div class="flex items-center gap-2">
+        {#if selectedForDelete.length > 0}
+          <div class="flex-1 flex items-center justify-center gap-2">
+            <button
+              class="px-3 py-1.5 text-xs rounded-lg bg-engage-red/20 text-engage-red hover:bg-engage-red/30 transition-colors"
+              onclick={handleDeleteSelected}
+            >
+              Delete {selectedForDelete.length} selected
+            </button>
+            <button
+              class="px-2 py-1.5 text-xs text-surface-500 hover:text-surface-300 transition-colors"
+              onclick={() => { selectedForDelete = []; updateGrid() }}
+            >Clear</button>
+          </div>
+        {:else if selected.length > 0}
+          <div class="flex-1 flex items-center justify-center gap-2">
+            <button
+              class="px-3 py-1.5 text-xs rounded-lg bg-engage-blue text-white hover:bg-engage-blue/80 transition-colors"
+              onclick={startDownload}
+            >
+              Download {selected.length} selected
+            </button>
+            <button
+              class="px-2 py-1.5 text-xs text-surface-500 hover:text-surface-300 transition-colors"
+              onclick={clearSelection}
+            >Clear</button>
+          </div>
+        {:else}
+          <div class="flex-1 flex justify-center">
+            <span class="text-sm text-surface-200 px-4 py-1.5 rounded-lg border border-dashed border-surface-500 animate-pulse-border">Click map to select tiles</span>
+          </div>
         {/if}
-      {/if}
-    </div>
 
+      </div>
+    {/if}
   </div>
 </div>

@@ -4,6 +4,7 @@
   /** @type {{ route: object, maxSegment: number, onclick?: (seg: number) => void }} */
   let { route, maxSegment = 0, onclick } = $props()
 
+
   let container = $state(null)
   let imageCount = $state(4)
 
@@ -11,7 +12,7 @@
     if (!container) return
     const ro = new ResizeObserver((entries) => {
       const width = entries[0].contentRect.width
-      imageCount = Math.max(2, Math.floor(width / 80))
+      imageCount = Math.max(2, Math.floor(width / 40))
     })
     ro.observe(container)
     return () => ro.disconnect()

@@ -10,7 +10,7 @@
     fetchSoftware, softwareCheck, softwareDownload, softwareInstall, softwareBranch, softwareUninstall,
     fetchLateralDelay, fetchDeviceInfo, deviceReboot, devicePoweroff, deviceSetLanguage,
     fetchToggles, setToggle, fetchStorage, mapdCheckUpdate, mapdUpdate,
-    fetchSshKeys, setSshKeys, removeSshKeys } from '../api.js'
+    fetchSshKeys, setSshKeys, removeSshKeys, fetchTileList } from '../api.js'
   import { getTileSource, setTileSource, TILE_SOURCES } from '../tileSource.js'
   import { formatBytes, storageLevel } from '../format.js'
 
@@ -67,6 +67,7 @@
   let mapdChecking = $state(false)
   let mapdUpdating = $state(false)
   let mapdError = $state(null)
+  let tileStorage = $state(null)  // {tile_count, total_mb}
 
   // Poll timers (cleaned up on destroy)
   const swPoll = createPoll(async () => {
@@ -105,8 +106,7 @@
     {
       title: 'Driving',
       items: [
-        { key: 'DccCalibrationMode', label: 'DCC Calibration Mode', desc: 'Collect DCC response data for acceleration mapping', type: 'bool' },
-        { key: 'LaneCenteringCorrection', label: 'Lane Centering Correction', desc: 'Apply learned steering offset for better centering', type: 'bool' },
+{ key: 'LaneCenteringCorrection', label: 'Lane Centering Correction', desc: 'Apply learned steering offset for better centering', type: 'bool' },
       ],
     },
     {
@@ -135,13 +135,45 @@
     } finally {
       loading = false
     }
-    loadModels()
-    loadSoftware()
-    fetchDeviceInfo().then(d => { dev = d }).catch(() => {})
-    fetchToggles().then(t => { toggles = t }).catch(() => {})
-    fetchStorage().then(s => { storage = s }).catch(() => {})
-    fetchSshKeys().then(s => { sshKeys = s }).catch(() => {})
   })
+
+  function onDevOpen(open) {
+    if (open && !dev) {
+      fetchDeviceInfo().then(d => { dev = d }).catch(() => {})
+      fetchStorage().then(s => { storage = s }).catch(() => {})
+    }
+  }
+
+  function onTogglesOpen(open) {
+    if (open && !toggles) {
+      fetchToggles().then(t => { toggles = t }).catch(() => {})
+    }
+  }
+
+  function onDevTogglesOpen(open) {
+    if (open && !toggles) {
+      fetchToggles().then(t => { toggles = t }).catch(() => {})
+    }
+    if (open && !sshKeys) {
+      fetchSshKeys().then(s => { sshKeys = s }).catch(() => {})
+    }
+  }
+
+  function onSwOpen(open) {
+    if (open && !sw) loadSoftware()
+    if (open && sw && !swChecked && !swChecking && !swInstallPhase && !sw?.UpdateAvailable) handleSwAutoCheck()
+  }
+
+  function onMapdOpen(open) {
+    if (open && !mapdLatest && !mapdChecking) handleMapdCheck()
+    if (open && !tileStorage) {
+      fetchTileList().then(d => { tileStorage = d.storage }).catch(() => {})
+    }
+  }
+
+  function onModelsOpen(open) {
+    if (open && !models) loadModels()
+  }
 
   async function loadModels() {
     modelsLoading = true
@@ -530,9 +562,14 @@
       </div>
     {/if}
 
-    <!-- Device Section (collapsed by default) -->
-    {#if dev}
-      <CollapsibleCard title="Device" metadata={dev.DongleId || '--'} bind:open={devExpanded}>
+    <!-- Device Section (collapsed by default, lazy loaded) -->
+    <CollapsibleCard title="Device" metadata={dev?.DongleId || ''} bind:open={devExpanded} onOpenChange={onDevOpen}>
+      {#if !dev}
+        <div class="space-y-3 animate-pulse">
+          <div class="h-4 bg-surface-700 rounded w-48"></div>
+          <div class="h-4 bg-surface-700 rounded w-32"></div>
+        </div>
+      {:else}
         <div class="space-y-3">
           <div class="flex items-center justify-between">
             <span class="text-sm text-surface-400">Dongle ID</span>
@@ -592,7 +629,7 @@
               </Select.Content>
             </Select.Root>
           </div>
-          <div class="pt-3 border-t border-surface-700 grid grid-cols-2 gap-2">
+          <div class="pt-3  grid grid-cols-2 gap-2">
             <button
               class="text-sm py-2 rounded-lg bg-surface-700 text-surface-200 hover:bg-surface-600 transition-colors"
               onclick={handleReboot}
@@ -607,12 +644,17 @@
             </button>
           </div>
         </div>
-      </CollapsibleCard>
-    {/if}
+      {/if}
+    </CollapsibleCard>
 
-    <!-- Toggles Section (collapsed by default) -->
-    {#if toggles}
-      <CollapsibleCard title="Toggles" bind:open={togglesExpanded}>
+    <!-- Toggles Section (collapsed by default, lazy loaded) -->
+    <CollapsibleCard title="Toggles" bind:open={togglesExpanded} onOpenChange={onTogglesOpen}>
+      {#if !toggles}
+        <div class="space-y-3 animate-pulse">
+          <div class="h-4 bg-surface-700 rounded w-48"></div>
+          <div class="h-4 bg-surface-700 rounded w-32"></div>
+        </div>
+      {:else}
         <div class="space-y-4">
           {#each TOGGLE_DEFS as t}
             <div class="flex items-center justify-between gap-3">
@@ -625,7 +667,7 @@
               />
             </div>
           {/each}
-          <div class="pt-3 border-t border-surface-700">
+          <div class="pt-3 ">
             <div class="text-sm text-surface-100 mb-2">Driving Personality</div>
             <ToggleGroup.Root
               type="single"
@@ -646,12 +688,17 @@
             </ToggleGroup.Root>
           </div>
         </div>
-      </CollapsibleCard>
-    {/if}
+      {/if}
+    </CollapsibleCard>
 
-    <!-- Developer Section (collapsed by default) -->
-    {#if toggles}
-      <CollapsibleCard title="Developer" bind:open={devTogglesExpanded}>
+    <!-- Developer Section (collapsed by default, lazy loaded) -->
+    <CollapsibleCard title="Developer" bind:open={devTogglesExpanded} onOpenChange={onDevTogglesOpen}>
+      {#if !toggles}
+        <div class="space-y-3 animate-pulse">
+          <div class="h-4 bg-surface-700 rounded w-48"></div>
+          <div class="h-4 bg-surface-700 rounded w-32"></div>
+        </div>
+      {:else}
         <div class="space-y-4">
           {#each DEV_DEFS as t}
             <div class="flex items-center justify-between gap-3">
@@ -704,8 +751,8 @@
             {/if}
           {/each}
         </div>
-      </CollapsibleCard>
-    {/if}
+      {/if}
+    </CollapsibleCard>
 
     {#each SECTIONS as section}
       <CollapsibleCard title={section.title} bind:open={sectionExpanded[section.title]}>
@@ -777,7 +824,7 @@
             {/if}
           {/each}
           {#if section.title === 'Driving' && latDelay && !latDelay.error}
-            <div class="pt-3 border-t border-surface-700">
+            <div class="pt-3 ">
               <div class="flex items-center justify-between">
                 <div>
                   <div class="text-sm text-surface-100">Lateral Delay</div>
@@ -803,9 +850,9 @@
     <!-- Mapd & Maps -->
     <CollapsibleCard
       title="Mapd & Maps"
-      metadata={mapdVersion ? `${mapdVersion}${mapdReleaseDate ? ` / ${mapdReleaseDate}` : ''}` : ''}
+      metadata={mapdVersion || ''}
       bind:open={mapdExpanded}
-      onOpenChange={(open) => { if (open && !mapdLatest && !mapdChecking) handleMapdCheck() }}
+      onOpenChange={onMapdOpen}
     >
       <div class="space-y-4">
         <div class="flex items-center justify-between gap-3">
@@ -852,31 +899,28 @@
             {/if}
           </div>
         </div>
-        <div class="pt-3 border-t border-surface-700">
-          <button class="w-full flex items-center justify-between group" onclick={() => window.open('/tiles', 'tiles', 'width=900,height=700')}>
+        <div class="pt-3 ">
+          <button class="w-full flex items-center justify-between group" onclick={() => window.open('/tiles', 'tiles', 'width=720,height=500')}>
             <div class="text-left">
               <div class="text-sm text-surface-100">Map Tiles Management</div>
-              <div class="text-xs text-surface-500 mt-0.5">Download and manage OSM offline tiles</div>
+              <div class="text-xs text-surface-500 mt-0.5">{#if tileStorage}{tileStorage.tile_count} tiles &middot; {tileStorage.total_mb} MB{:else}Download and manage OSM offline tiles{/if}</div>
             </div>
             <svg class="w-5 h-5 text-surface-500 group-hover:text-surface-300 transition-colors" viewBox="0 0 20 20" fill="currentColor">
               <path fill-rule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clip-rule="evenodd" />
             </svg>
           </button>
         </div>
-        <div class="pt-3 border-t border-surface-700">
-          <div class="text-sm text-surface-100 mb-2">Map Tile Source</div>
-          <div class="flex gap-2">
-            {#each Object.entries(TILE_SOURCES) as [key, src]}
-              <button
-                class="flex-1 rounded-lg px-3 py-2 text-left transition-colors {tileSource === key ? 'bg-engage-blue/15 border border-engage-blue/40' : 'bg-surface-700 border border-surface-600 hover:border-surface-500'}"
-                onclick={() => { tileSource = key; setTileSource(key) }}
-              >
-                <div class="text-sm {tileSource === key ? 'text-engage-blue' : 'text-surface-100'}">{src.label}</div>
-                <div class="text-xs text-surface-500 mt-0.5">{src.desc}</div>
-              </button>
-            {/each}
-          </div>
-          <div class="text-xs text-surface-500 mt-2">Reload route page to apply</div>
+        <div class="pt-3  flex items-center gap-2">
+          <div class="text-sm text-surface-100">Tile Source</div>
+          <div class="flex-1"></div>
+          {#each Object.entries(TILE_SOURCES) as [key, src]}
+            <button
+              class="px-2.5 py-1 text-xs rounded-full transition-colors {tileSource === key ? 'bg-engage-blue/20 text-engage-blue border border-engage-blue/40' : 'bg-surface-700 text-surface-300 border border-surface-600 hover:border-surface-500'}"
+              onclick={() => { tileSource = key; setTileSource(key) }}
+            >
+              {src.label}
+            </button>
+          {/each}
         </div>
       </div>
     </CollapsibleCard>
@@ -884,9 +928,9 @@
     <!-- Software Section (collapsed by default) -->
     <CollapsibleCard
       title="Software"
-      metadata={sw ? `${sw.GitBranch} / ${sw.GitCommit?.slice(0, 7) || '???'}` : ''}
+      metadata={sw?.GitBranch || ''}
       bind:open={swExpanded}
-      onOpenChange={(open) => { if (open && !swChecked && !swChecking && !swInstallPhase && !sw?.UpdateAvailable) handleSwAutoCheck() }}
+      onOpenChange={onSwOpen}
     >
       {#if swLoading}
         <div class="space-y-3 animate-pulse">
@@ -915,8 +959,8 @@
             <div class="text-xs text-engage-red">{swError}</div>
           {/if}
           {#if !sw.IsTestedBranch && sw.UpdaterAvailableBranches?.length > 0}
-            <div class="pt-3 border-t border-surface-700">
-              <div class="text-xs text-surface-500 uppercase font-medium mb-2">Target Branch</div>
+            <div class="pt-3 ">
+              <div class="text-sm text-surface-100 mb-2">Target Branch</div>
               <Select.Root
                 type="single"
                 value={sw.UpdaterTargetBranch || sw.GitBranch}
@@ -951,7 +995,7 @@
               </Select.Root>
             </div>
           {/if}
-          <div class="pt-3 border-t border-surface-700 grid grid-cols-2 gap-2">
+          <div class="pt-3  grid grid-cols-2 gap-2">
             {#if swInstallPhase}
               <button class="text-sm py-2 rounded-lg bg-surface-700 text-surface-400 flex items-center justify-center gap-2" disabled>
                 <Spinner />
@@ -1000,7 +1044,7 @@
     </CollapsibleCard>
 
     <!-- Models Section -->
-    <CollapsibleCard title="Models" metadata={activeDriving?.name ?? ''} bind:open={modelsExpanded}>
+    <CollapsibleCard title="Models" metadata={activeDriving?.name ?? ''} bind:open={modelsExpanded} onOpenChange={onModelsOpen}>
       {#if modelsLoading}
         <div class="space-y-3 animate-pulse">
           <div class="h-10 bg-surface-700 rounded-lg"></div>
@@ -1130,7 +1174,7 @@
         </div>
 
         <!-- Updates -->
-        <div class="pt-3 mt-3 border-t border-surface-700">
+        <div class="pt-3 mt-3 ">
           <button
             class="btn-ghost text-sm w-full justify-center"
             onclick={handleCheckUpdates}

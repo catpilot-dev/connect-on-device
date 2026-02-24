@@ -1,9 +1,18 @@
 /** Map tile source preference — persisted to localStorage */
 
 const STORAGE_KEY = 'mapTileSource'
-const DEFAULT = 'amap'
+const DEFAULT = 'cartodb'
 
 export const TILE_SOURCES = {
+  cartodb: {
+    label: 'CartoDB',
+    desc: 'Dark Matter (global)',
+    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+    subdomains: 'abcd',
+    className: '',
+    gcj02: false,  // standard WGS-84
+    maxZoom: 19,
+  },
   amap: {
     label: 'AMap',
     desc: 'Gaode Maps (China)',
@@ -12,15 +21,6 @@ export const TILE_SOURCES = {
     className: 'amap-dark',
     gcj02: true,  // needs WGS-84 → GCJ-02 transform
     maxZoom: 18,
-  },
-  cartodb: {
-    label: 'CartoDB',
-    desc: 'Dark Matter (overseas)',
-    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-    subdomains: 'abcd',
-    className: '',
-    gcj02: false,  // standard WGS-84
-    maxZoom: 19,
   },
 }
 

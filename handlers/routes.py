@@ -404,24 +404,28 @@ async def handle_connectdata(request: web.Request) -> web.Response:
     file_path = store.resolve_segment_path(fullname, seg_int, filename)
 
     # Generate sprite.jpg on demand from qcamera.ts
+    # Skip to 5s to avoid black camera-init frames; fall back to 1s if too short
     if not file_path and filename == "sprite.jpg":
         qcam = store.resolve_segment_path(fullname, seg_int, "qcamera.ts")
         if qcam:
             sprite_path = qcam.parent / "sprite.jpg"
-            try:
-                proc = await asyncio.get_event_loop().run_in_executor(
-                    None,
-                    lambda: subprocess.run(
-                        ["ffmpeg", "-y", "-i", str(qcam), "-vframes", "1",
-                         "-q:v", "5", "-vf", "scale=480:-1",
-                         "-f", "image2", str(sprite_path)],
-                        capture_output=True, timeout=10,
-                    ),
-                )
-                if proc.returncode == 0 and sprite_path.exists():
-                    file_path = sprite_path
-            except Exception:
-                pass
+            loop = asyncio.get_event_loop()
+            for seek in ["5", "1", "0"]:
+                try:
+                    proc = await loop.run_in_executor(
+                        None,
+                        lambda s=seek: subprocess.run(
+                            ["ffmpeg", "-y", "-ss", s, "-i", str(qcam),
+                             "-vframes", "1", "-q:v", "5", "-vf", "scale=480:-1",
+                             "-f", "image2", str(sprite_path)],
+                            capture_output=True, timeout=10,
+                        ),
+                    )
+                    if proc.returncode == 0 and sprite_path.exists() and sprite_path.stat().st_size > 1000:
+                        file_path = sprite_path
+                        break
+                except Exception:
+                    pass
 
     if not file_path:
         raise web.HTTPNotFound()
