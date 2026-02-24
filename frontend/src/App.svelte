@@ -11,15 +11,6 @@
   import SignalBrowserPage from './lib/pages/SignalBrowserPage.svelte'
 
   let error = $state(null)
-  let page = $state('routes')  // 'routes' | 'tiles' | 'settings' | 'dashboard' | 'signals'
-
-  function parseRoutePath() {
-    // URL: /{dongleId}/{localId}/{start?}/{end?}
-    const parts = location.pathname.split('/').filter(Boolean)
-    if (parts[0] === 'tiles') return null
-    return parts.length >= 2 ? parts[1] : null  // local_id
-  }
-
   function parsePage() {
     const parts = location.pathname.split('/').filter(Boolean)
     if (parts[0] === 'tiles') return 'tiles'
@@ -27,6 +18,15 @@
     if (parts[0] === 'dashboard') return 'dashboard'
     if (parts[0] === 'signals') return 'signals'
     return 'routes'
+  }
+
+  let page = $state(parsePage())
+
+  function parseRoutePath() {
+    // URL: /{dongleId}/{localId}/{start?}/{end?}
+    const parts = location.pathname.split('/').filter(Boolean)
+    if (parts[0] === 'tiles') return null
+    return parts.length >= 2 ? parts[1] : null  // local_id
   }
 
   onMount(async () => {
@@ -70,12 +70,6 @@
     history.pushState(null, '', '/')
   }
 
-  function showTiles() {
-    page = 'tiles'
-    selectedRoute.set(null)
-    history.pushState(null, '', '/tiles')
-  }
-
   function showSettings() {
     page = 'settings'
     selectedRoute.set(null)
@@ -91,6 +85,8 @@
 
 {#if page === 'signals'}
   <SignalBrowserPage />
+{:else if page === 'tiles'}
+  <TileManager />
 {:else}
   <div class="min-h-dvh flex flex-col">
     <DeviceHeader>
@@ -101,12 +97,6 @@
             onclick={showRoutes}
           >
             Routes
-          </button>
-          <button
-            class="px-3 py-1.5 text-sm rounded transition-colors {page === 'tiles' ? 'bg-surface-700 text-surface-50' : 'text-surface-400 hover:text-surface-200'}"
-            onclick={showTiles}
-          >
-            Map Tiles
           </button>
           <button
             class="px-3 py-1.5 text-sm rounded transition-colors {page === 'dashboard' ? 'bg-surface-700 text-surface-50' : 'text-surface-400 hover:text-surface-200'}"
@@ -139,8 +129,6 @@
         <DashboardPage />
       {:else if page === 'settings'}
         <SettingsPage />
-      {:else if page === 'tiles'}
-        <TileManager />
       {:else if $selectedRoute}
         <RouteDetailPage />
       {:else}

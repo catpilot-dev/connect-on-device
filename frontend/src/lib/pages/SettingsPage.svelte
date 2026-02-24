@@ -853,15 +853,15 @@
           </div>
         </div>
         <div class="pt-3 border-t border-surface-700">
-          <a href="/tiles" class="flex items-center justify-between group">
-            <div>
+          <button class="w-full flex items-center justify-between group" onclick={() => window.open('/tiles', 'tiles', 'width=900,height=700')}>
+            <div class="text-left">
               <div class="text-sm text-surface-100">Map Tiles Management</div>
               <div class="text-xs text-surface-500 mt-0.5">Download and manage OSM offline tiles</div>
             </div>
             <svg class="w-5 h-5 text-surface-500 group-hover:text-surface-300 transition-colors" viewBox="0 0 20 20" fill="currentColor">
               <path fill-rule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clip-rule="evenodd" />
             </svg>
-          </a>
+          </button>
         </div>
         <div class="pt-3 border-t border-surface-700">
           <div class="text-sm text-surface-100 mb-2">Map Tile Source</div>
