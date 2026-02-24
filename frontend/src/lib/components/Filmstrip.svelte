@@ -18,12 +18,11 @@
     return () => ro.disconnect()
   })
 
-  // Distribute thumbnails evenly across segments
+  // Always show imageCount thumbnails, distributed evenly across segments
   const segments = $derived(() => {
     const count = maxSegment + 1
-    if (count <= imageCount) return Array.from({ length: count }, (_, i) => i)
     const step = (count - 1) / (imageCount - 1)
-    return Array.from({ length: imageCount }, (_, i) => Math.round(i * step))
+    return Array.from({ length: imageCount }, (_, i) => Math.min(Math.round(i * step), maxSegment))
   })
 </script>
 

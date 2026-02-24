@@ -543,7 +543,7 @@
   }
 </script>
 
-<div class="max-w-lg mx-auto px-4 py-6 space-y-6 overflow-hidden">
+<div class="w-full max-w-lg mx-auto px-4 py-6 space-y-6 overflow-hidden">
   {#if loading}
     <div class="space-y-4">
       {#each [1, 2] as _}
