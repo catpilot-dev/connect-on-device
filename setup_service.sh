@@ -2,15 +2,14 @@
 # Set up connect-on-device as a systemd user service
 # Called from /data/continue.sh on every boot
 # (home dir is on read-only root, so symlink must be recreated each boot)
-# Runs in background to avoid blocking openpilot startup
+# Runs in background; waits for manager.py (openpilot ready) before starting
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
 (
-  # Wait for systemd user manager to be ready (up to 30s)
-  for i in $(seq 1 30); do
-    systemctl --user is-system-running &>/dev/null && break
-    sleep 1
+  # Wait for openpilot manager — guarantees systemd user instance is ready
+  while ! pgrep -f 'manager.py' &>/dev/null; do
+    sleep 2
   done
 
   mkdir -p /home/comma/.config/systemd/user
