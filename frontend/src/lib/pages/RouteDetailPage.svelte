@@ -566,12 +566,24 @@
     hudMode = 'download'
   }
 
-  function openDownload() {
-    if (!route) return
-    const a = document.createElement('a')
-    a.href = hudVideoUrl(route.local_id)
-    a.download = `${route.fullname.split('/').pop()}_hud.mp4`
-    a.click()
+  let dlDownloading = $state(false)
+
+  async function openDownload() {
+    if (!route || dlDownloading) return
+    dlDownloading = true
+    try {
+      const res = await fetch(hudVideoUrl(route.local_id))
+      const blob = await res.blob()
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = `${route.fullname.split('/').pop()}_hud.mp4`
+      a.click()
+      URL.revokeObjectURL(a.href)
+    } catch (e) {
+      console.error('Download failed:', e)
+    } finally {
+      dlDownloading = false
+    }
   }
 </script>
 
@@ -699,8 +711,10 @@
               </div>
             {:else if dlReady}
               <div class="flex items-center justify-between h-8 px-2">
-                <button class="btn-sm bg-engage-green text-black font-medium px-3 py-1 rounded text-xs"
-                  onclick={openDownload}>Download MP4</button>
+                <button class="btn-sm bg-engage-green text-black font-medium px-3 py-1 rounded text-xs disabled:opacity-50 disabled:cursor-not-allowed"
+                  onclick={openDownload} disabled={dlDownloading}>
+                  {#if dlDownloading}Downloading...{:else}Download MP4{/if}
+                </button>
                 <button class="btn-sm bg-surface-700 text-surface-300 px-3 py-1 rounded text-xs"
                   onclick={cancelDownload}>Close</button>
               </div>

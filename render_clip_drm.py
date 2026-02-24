@@ -354,7 +354,7 @@ def main():
                     "status": "rendering",
                     "elapsed_sec": round(route_elapsed, 1),
                     "total_sec": duration,
-                    "remaining_sec": round(max(0, (wall_duration - elapsed) * REPLAY_SPEED)),
+                    "remaining_sec": round(max(0, wall_duration - elapsed)),
                     "phase": "recording",
                 })
                 time.sleep(2)
