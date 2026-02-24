@@ -53,7 +53,7 @@
 
   // Quality slider: controls resolution continuously (0-100)
   // Single-pass render at 0.2x replay speed → 25fps unique route content from 5fps capture
-  let dlQualityPct = $state(50)
+  let dlQualityPct = $state(100)
   const DL_RECORD_SPEED = 0.2
   const DL_FPS = 20
   // Resolution: slider interpolates width from 540 to 2160 (height is half)
@@ -70,6 +70,9 @@
   const dlEstimatedMB = $derived(Math.round(dlDurationSec * dlBitrate / 8))
   // Single-pass render at 0.2x speed + setup overhead
   const dlEstimatedRenderSec = $derived(Math.round(dlDurationSec / DL_RECORD_SPEED + 30))
+
+  // HUD mode: null (normal), 'stream', 'download'
+  let hudMode = $state(null)
 
   let screenshotBusy = $state(false)
   let isMuted = $state(true)
@@ -377,6 +380,7 @@
     dlRendering = false
     dlReady = false
     dlError = null
+    hudMode = null
     restoreVideoDefaults()
     try {
       if (route) await cancelHudRender(route.local_id)
@@ -388,7 +392,7 @@
     if (route) await saveNote(route.local_id, noteText)
   }
 
-  let activeTab = $state('route')
+  let activeTab = $state('map')
 
   // ── Dashboard replay state (progressive per-segment loading) ──
   let dashSegData = $state({})       // { segNum: [...samples] }
@@ -548,6 +552,20 @@
     }
   }
 
+  function handleHudStream() {
+    hudMode = 'stream'
+    toggleHud()
+  }
+
+  function stopHudStream_mode() {
+    hudMode = null
+    toggleHud()  // toggleHud sees hudWanted=true and stops
+  }
+
+  function handleHudDownload() {
+    hudMode = 'download'
+  }
+
   function openDownload() {
     if (!route) return
     const a = document.createElement('a')
@@ -568,6 +586,15 @@
     </button>
     {#if route}
       <span class="text-sm text-surface-100 font-medium">{formatDate(route.create_time)} {selectionTimeRange}</span>
+      <button class="btn-ghost text-xs ml-auto" onclick={() => {
+        const d = route.dongle_id
+        const lid = route.local_id
+        let url = `/signals/${d}/${lid}`
+        if (selectionStart > 0 || selectionEnd > 0) url += `/${Math.round(selectionStart)}/${Math.round(selectionEnd)}`
+        window.open(url, '_blank')
+      }}>
+        Signals
+      </button>
     {/if}
   </div>
 
@@ -621,33 +648,92 @@
             onTimeUpdate={handleTimeUpdate}
             onPlay={handlePlay}
             onPause={handlePause}
+            onHudStream={!enriching && !hudMode ? handleHudStream : undefined}
+            onHudDownload={!enriching && !hudMode ? handleHudDownload : undefined}
           />
         </div>
 
         {#if !enriching}
-          <VideoControls
-            {route}
-            {currentTime}
-            {duration}
-            startTime={route.start_time}
-            onSeek={handleSeek}
-            onToggle={handleToggle}
-            onRate={handleRate}
-            onScreenshot={handleScreenshot}
-            onStepFrame={handleStepFrame}
-            onMuteToggle={handleMuteToggle}
-            {isPlaying}
-            {isMuted}
-            {screenshotBusy}
-          />
+          {#if hudMode === 'stream'}
+            <!-- HUD Stream active panel -->
+            <div class="flex items-center justify-between h-8 px-2">
+              <div class="flex items-center gap-2">
+                {#if hudStarting}
+                  <div class="w-3 h-3 border-2 border-engage-green border-t-transparent rounded-full animate-spin"></div>
+                  <span class="text-xs text-surface-400">Starting stream...</span>
+                {:else if hudStreaming}
+                  <div class="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
+                  <span class="text-xs text-surface-400">Preview of HUD UI in slow motion</span>
+                {:else if hudError}
+                  <span class="text-xs text-red-400">{hudError}</span>
+                {/if}
+              </div>
+              <button class="btn-sm bg-red-600 hover:bg-red-500 text-white px-3 py-1 rounded text-xs"
+                onclick={stopHudStream_mode}>Stop</button>
+            </div>
+          {:else if hudMode === 'download'}
+            <!-- HUD Download panel -->
+            {#if !dlRendering && !dlReady}
+              <div class="flex items-center justify-between h-8 px-2">
+                <span class="text-xs text-surface-400">
+                  ~{dlEstimatedMB} MB · ~{Math.ceil(dlEstimatedRenderSec / 60)} min render
+                </span>
+                <div class="flex items-center gap-2">
+                  <button class="btn-sm bg-engage-green text-black font-medium px-3 py-1 rounded text-xs"
+                    onclick={startDownload}>Start</button>
+                  <button class="btn-sm bg-surface-700 text-surface-300 px-3 py-1 rounded text-xs"
+                    onclick={cancelDownload}>Close</button>
+                </div>
+              </div>
+            {:else if dlRendering}
+              <div class="space-y-1 px-2">
+                <div class="h-1.5 bg-surface-700 rounded-full overflow-hidden">
+                  <div class="h-full bg-engage-green rounded-full transition-all"
+                    style="width: {dlTotal > 0 ? (dlElapsed / dlTotal) * 100 : 0}%"></div>
+                </div>
+                <div class="flex items-center justify-between">
+                  <span class="text-xs text-surface-400">{dlPhase || 'rendering'} · {Math.round(dlElapsed)}s/{Math.round(dlTotal)}s{dlRemainingSec > 0 ? ` · ~${dlRemainingSec}s left` : ''}</span>
+                  <button class="btn-sm bg-red-600 hover:bg-red-500 text-white px-3 py-1 rounded text-xs"
+                    onclick={cancelDownload}>Cancel</button>
+                </div>
+              </div>
+            {:else if dlReady}
+              <div class="flex items-center justify-between h-8 px-2">
+                <button class="btn-sm bg-engage-green text-black font-medium px-3 py-1 rounded text-xs"
+                  onclick={openDownload}>Download MP4</button>
+                <button class="btn-sm bg-surface-700 text-surface-300 px-3 py-1 rounded text-xs"
+                  onclick={cancelDownload}>Close</button>
+              </div>
+            {/if}
+            {#if dlError}
+              <p class="text-xs text-red-400 px-2">{dlError}</p>
+            {/if}
+          {:else}
+            <!-- Normal video controls -->
+            <VideoControls
+              {route}
+              {currentTime}
+              {duration}
+              startTime={route.start_time}
+              onSeek={handleSeek}
+              onToggle={handleToggle}
+              onRate={handleRate}
+              onScreenshot={handleScreenshot}
+              onStepFrame={handleStepFrame}
+              onMuteToggle={handleMuteToggle}
+              {isPlaying}
+              {isMuted}
+              {screenshotBusy}
+            />
+          {/if}
         {/if}
       </div>
 
       <!-- Tabbed info panel -->
-      <div class="card">
-        <Tabs.Root bind:value={activeTab}>
+      <div class="card md:h-full">
+        <Tabs.Root bind:value={activeTab} class="md:h-full md:grid md:grid-rows-[auto_1fr]">
           <Tabs.List class="flex border-b border-surface-700/50">
-            {#each [['route','Route'],['dashboard','Dashboard'],['note','Note'],['device','Device'],['overlay','UI Overlay']] as [id, label]}
+            {#each [['map','Map'],['route','Route'],['dashboard','Dashboard'],['note','Note']] as [id, label]}
               <Tabs.Trigger value={id}
                 class="flex-1 px-2 py-3 text-xs font-medium text-center transition-colors
                   {activeTab === id ? 'text-surface-100 border-b-2 border-engage-blue' : 'text-surface-500 hover:text-surface-300'}"
@@ -655,22 +741,24 @@
             {/each}
           </Tabs.List>
 
+          <!-- Map tab -->
+          <Tabs.Content value="map" class="pt-2 md:h-full md:overflow-hidden">
+            <RouteMap
+              {coords}
+              events={timelineEvents}
+              {currentTime}
+              {durationMs}
+              {selectionStart}
+              {selectionEnd}
+              visible={activeTab === 'map'}
+              startLat={route.start_lat}
+              startLng={route.start_lng}
+            />
+          </Tabs.Content>
+
           <!-- Route tab -->
-          <Tabs.Content value="route">
-            <div class="pb-4 space-y-3 pt-3">
-              <div class="px-4">
-                <RouteMap
-                  {coords}
-                  events={timelineEvents}
-                  {currentTime}
-                  {durationMs}
-                  {selectionStart}
-                  {selectionEnd}
-                  visible={activeTab === 'route'}
-                  startLat={route.start_lat}
-                  startLng={route.start_lng}
-                />
-              </div>
+          <Tabs.Content value="route" class="pt-2">
+            <div class="flex flex-col md:h-full pt-1">
               <div class="px-4 grid grid-cols-2 gap-2 text-sm">
                 {#if route.platform}
                   <div>
@@ -704,16 +792,58 @@
                   <p class="text-xs text-surface-500">Distance</p>
                   <p class="text-surface-200">{formatDistance(route.distance)}</p>
                 </div>
+                <div>
+                  <p class="text-xs text-surface-500">Device</p>
+                  <p class="text-surface-200">{route.device_type === 'tici' ? 'Comma 3' : route.device_type === 'tizi' ? 'Comma 3X' : route.device_type === 'mici' ? 'Comma 4' : route.device_type ?? '--'}</p>
+                </div>
+                <div>
+                  <p class="text-xs text-surface-500">Dongle ID</p>
+                  <p class="text-surface-200 font-mono truncate">{route.dongle_id ?? '--'}</p>
+                </div>
+                {#if route.agnos_version}
+                  <div>
+                    <p class="text-xs text-surface-500">AGNOS</p>
+                    <p class="text-surface-200">{route.agnos_version}</p>
+                  </div>
+                {/if}
+                {#if route.version}
+                  <div>
+                    <p class="text-xs text-surface-500">Openpilot</p>
+                    <p class="text-surface-200">{route.version}</p>
+                  </div>
+                {/if}
+                {#if route.git_branch}
+                  <div>
+                    <p class="text-xs text-surface-500">Branch</p>
+                    <p class="text-surface-200 truncate">{route.git_branch}</p>
+                  </div>
+                {/if}
+                {#if route.git_commit}
+                  <div>
+                    <p class="text-xs text-surface-500">Commit</p>
+                    {#if route.git_remote}
+                      {@const repoUrl = route.git_remote.replace(/\.git$/, '')}
+                      <a
+                        href="{repoUrl}/commit/{route.git_commit}"
+                        target="_blank"
+                        rel="noopener"
+                        class="text-engage-blue font-mono truncate block hover:underline"
+                      >{route.git_commit.slice(0, 12)}</a>
+                    {:else}
+                      <p class="text-surface-200 font-mono truncate">{route.git_commit.slice(0, 12)}</p>
+                    {/if}
+                  </div>
+                {/if}
               </div>
-              <div class="px-4 border-t border-surface-700/50 pt-3">
+              <div class="px-4 border-t border-surface-700/50 py-3 mt-auto">
                 <RouteActions {route} onEnrich={reEnrich} enrichBusy={reEnriching || enriching} />
               </div>
             </div>
           </Tabs.Content>
 
           <!-- Dashboard tab (replay telemetry) -->
-          <Tabs.Content value="dashboard">
-            <div class="p-3 overflow-hidden">
+          <Tabs.Content value="dashboard" class="pt-2">
+            <div class="px-3 pb-3 overflow-hidden">
               {#if dashSamples === null && dashStarted}
                 <div class="flex items-center gap-2 justify-center py-8">
                   <div class="w-4 h-4 border-2 border-engage-green border-t-transparent rounded-full animate-spin"></div>
@@ -785,8 +915,8 @@
           </Tabs.Content>
 
           <!-- Note tab (note + bookmarks) -->
-          <Tabs.Content value="note">
-            <div class="p-4 space-y-3">
+          <Tabs.Content value="note" class="pt-2">
+            <div class="px-4 pb-4 space-y-3">
               {#if editingNote}
                 <!-- svelte-ignore a11y_autofocus -->
                 <textarea
@@ -840,153 +970,6 @@
             </div>
           </Tabs.Content>
 
-          <!-- Device tab -->
-          <Tabs.Content value="device">
-            <div class="p-4">
-              <div class="grid grid-cols-2 gap-2 text-sm">
-                <div>
-                  <p class="text-xs text-surface-500">Device</p>
-                  <p class="text-surface-200">{route.device_type === 'tici' ? 'Comma 3' : route.device_type === 'tizi' ? 'Comma 3X' : route.device_type === 'mici' ? 'Comma 4' : route.device_type ?? '--'}</p>
-                </div>
-                <div>
-                  <p class="text-xs text-surface-500">Dongle ID</p>
-                  <p class="text-surface-200 font-mono truncate">{route.dongle_id ?? '--'}</p>
-                </div>
-                {#if route.agnos_version}
-                  <div>
-                    <p class="text-xs text-surface-500">AGNOS</p>
-                    <p class="text-surface-200">{route.agnos_version}</p>
-                  </div>
-                {/if}
-                {#if route.version}
-                  <div>
-                    <p class="text-xs text-surface-500">Openpilot</p>
-                    <p class="text-surface-200">{route.version}</p>
-                  </div>
-                {/if}
-                {#if route.git_branch}
-                  <div>
-                    <p class="text-xs text-surface-500">Branch</p>
-                    <p class="text-surface-200 truncate">{route.git_branch}</p>
-                  </div>
-                {/if}
-                {#if route.git_commit}
-                  <div>
-                    <p class="text-xs text-surface-500">Commit</p>
-                    {#if route.git_remote}
-                      {@const repoUrl = route.git_remote.replace(/\.git$/, '')}
-                      <a
-                        href="{repoUrl}/commit/{route.git_commit}"
-                        target="_blank"
-                        rel="noopener"
-                        class="text-engage-blue font-mono truncate block hover:underline"
-                      >{route.git_commit.slice(0, 12)}</a>
-                    {:else}
-                      <p class="text-surface-200 font-mono truncate">{route.git_commit.slice(0, 12)}</p>
-                    {/if}
-                  </div>
-                {/if}
-              </div>
-            </div>
-          </Tabs.Content>
-
-          <!-- UI Overlay tab -->
-          <Tabs.Content value="overlay">
-            {#if !enriching}
-              <div class="p-4 space-y-4">
-                <!-- HUD Live Stream -->
-                <div class="space-y-2" class:opacity-50={dlRendering}>
-                  <label class="flex items-center gap-2 text-sm text-surface-200" class:cursor-pointer={!dlRendering} class:cursor-not-allowed={dlRendering}>
-                    <input type="checkbox" checked={hudWanted} onchange={toggleHud} disabled={dlRendering} class="accent-engage-green" />
-                    HUD Live Stream
-                  </label>
-                  {#if dlRendering}
-                    <p class="text-xs text-yellow-400">Unavailable while rendering video</p>
-                  {/if}
-                  {#if hudStarting}
-                    <div class="flex items-center gap-2">
-                      <div class="w-3 h-3 border-2 border-engage-green border-t-transparent rounded-full animate-spin"></div>
-                      <p class="text-xs text-surface-400">Starting stream...</p>
-                    </div>
-                  {/if}
-                  {#if hudStreaming}
-                    <div class="flex items-center gap-2">
-                      <div class="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
-                      <p class="text-xs text-surface-400">LIVE</p>
-                    </div>
-                  {/if}
-                  {#if hudError}
-                    <p class="text-xs text-red-400">{hudError}</p>
-                  {/if}
-                </div>
-
-                <div class="border-t border-surface-700/50"></div>
-
-                <!-- Download HUD Video -->
-                <div class="space-y-2" class:opacity-50={hudWanted}>
-                  <p class="text-sm text-surface-200">Download HUD Video</p>
-                  {#if hudWanted}
-                    <p class="text-xs text-surface-500">Stop live stream to render video</p>
-                  {:else}
-                    <p class="text-xs text-surface-400">Render openpilot UI overlay via slow-motion replay{selectionEnd > 0 ? ' (selection range)' : ''}</p>
-
-                    {#if !dlRendering && !dlReady}
-                      <!-- Quality slider (continuous) -->
-                      <div class="flex items-center gap-3">
-                        <span class="text-xs text-surface-500 shrink-0">Low</span>
-                        <input type="range" min="0" max="100" step="1" bind:value={dlQualityPct}
-                          class="flex-1 accent-engage-green h-1.5" />
-                        <span class="text-xs text-surface-500 shrink-0">High</span>
-                      </div>
-                      <p class="text-xs text-surface-300">{dlWidth}x{dlHeight} @ 20fps</p>
-                      <p class="text-xs text-surface-400">
-                        ~{dlEstimatedMB} MB
-                        · ~{Math.ceil(dlEstimatedRenderSec / 60)} min render time
-                      </p>
-                      <button class="btn btn-sm bg-surface-700 hover:bg-surface-600 text-surface-200 px-3 py-1 rounded text-xs" onclick={startDownload}>
-                        Render & Download
-                      </button>
-                    {:else if dlRendering}
-                      <div class="space-y-1">
-                        <div class="h-2 bg-surface-700 rounded-full overflow-hidden">
-                          <div
-                            class="h-full bg-engage-green rounded-full transition-all duration-300"
-                            style="width: {dlTotal > 0 ? (dlElapsed / dlTotal) * 100 : 0}%"
-                          ></div>
-                        </div>
-                        <p class="text-xs text-surface-400 text-center">
-                          {dlPhase === 'encoding' ? 'Encoding' : 'Rendering'}... {dlFrame} / {dlTotalFrames} frames
-                          {#if dlRemainingSec > 60}
-                            · ~{Math.ceil(dlRemainingSec / 60)} min remaining
-                          {:else if dlRemainingSec > 0}
-                            · ~{dlRemainingSec}s remaining
-                          {/if}
-                        </p>
-                        <button class="btn btn-sm bg-surface-700 hover:bg-red-900 text-surface-300 px-3 py-1 rounded text-xs" onclick={cancelDownload}>
-                          Stop
-                        </button>
-                      </div>
-                    {:else if dlReady}
-                      <button class="btn btn-sm bg-engage-green text-black font-medium px-3 py-1 rounded" onclick={openDownload}>
-                        Download MP4
-                      </button>
-                      <button class="btn btn-sm bg-surface-700 hover:bg-surface-600 text-surface-200 px-3 py-1 rounded text-xs ml-2"
-                        onclick={() => { dlReady = false; dlRendering = false }}>
-                        Re-render
-                      </button>
-                    {/if}
-                    {#if dlError}
-                      <p class="text-xs text-red-400">{dlError}</p>
-                    {/if}
-                  {/if}
-                </div>
-              </div>
-            {:else}
-              <div class="p-4">
-                <p class="text-sm text-surface-500">Available after enrichment completes</p>
-              </div>
-            {/if}
-          </Tabs.Content>
         </Tabs.Root>
       </div>
     </div>

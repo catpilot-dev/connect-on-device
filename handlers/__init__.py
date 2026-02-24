@@ -96,6 +96,12 @@ from .dashboard import (
     handle_dashboard_ws,
 )
 
+from .signals import (
+    handle_signal_catalog,
+    handle_signal_data,
+    handle_signal_all,
+)
+
 from .stubs import (
     handle_stub_empty_array,
     handle_stub_error,

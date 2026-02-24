@@ -354,6 +354,201 @@ def _generate_events_json(rlog_path: str, segment_num: int) -> list:
     return events
 
 
+def extract_signal_catalog(seg_log_pairs: list) -> dict:
+    """Scan rlogs and return inventory of all message types with field names.
+
+    Args:
+        seg_log_pairs: list of (seg_num, log_path) tuples.
+
+    Returns:
+        {msgType: {count: int, fields: [str], freq_hz: float, kind: "numeric"|"snapshot"}}
+    """
+    catalog = {}  # {msgType: {count, fields, kind}}
+    seg_count = len(seg_log_pairs)
+
+    for _seg_num, log_path in seg_log_pairs:
+        try:
+            for ev in _iter_rlog(log_path):
+                w = ev.which()
+                if w not in catalog:
+                    # First occurrence — capture field names via to_dict
+                    try:
+                        msg_obj = getattr(ev, w)
+                        d = msg_obj.to_dict(verbose=True) if hasattr(msg_obj, 'to_dict') else {}
+                        fields = list(d.keys()) if isinstance(d, dict) else []
+                    except Exception:
+                        fields = []
+                    catalog[w] = {"count": 1, "fields": fields}
+                else:
+                    catalog[w]["count"] += 1
+        except Exception as e:
+            logger.debug("signal catalog error for %s: %s", log_path, e)
+
+    # Classify and compute frequency
+    duration_sec = max(seg_count * 60, 1)
+    result = {}
+    for msg_type, info in catalog.items():
+        freq_hz = round(info["count"] / duration_sec, 2)
+        # Heuristic: <=2 per segment → snapshot, otherwise numeric
+        avg_per_seg = info["count"] / max(seg_count, 1)
+        kind = "snapshot" if avg_per_seg <= 2 else "numeric"
+        result[msg_type] = {
+            "count": info["count"],
+            "fields": info["fields"],
+            "freq_hz": freq_hz,
+            "kind": kind,
+        }
+
+    return result
+
+
+def extract_signal_data(seg_log_pairs: list, msg_type: str, max_samples: int = 3000) -> list:
+    """Extract all fields for a specific message type from rlogs.
+
+    Args:
+        seg_log_pairs: list of (seg_num, log_path) tuples.
+        msg_type: cereal message type name (e.g. "carState", "initData").
+        max_samples: max samples to return (downsampled if exceeded).
+
+    Returns:
+        [{t: float, ...all_fields_from_to_dict...}, ...]
+    """
+    raw = []
+
+    for seg_num, log_path in seg_log_pairs:
+        base_mono = None
+        try:
+            for ev in _iter_rlog(log_path):
+                if base_mono is None and ev.which() != "initData":
+                    base_mono = ev.logMonoTime
+
+                if ev.which() != msg_type:
+                    continue
+
+                t = seg_num * 60.0
+                if base_mono is not None:
+                    t += (ev.logMonoTime - base_mono) / 1e9
+
+                try:
+                    msg_obj = getattr(ev, msg_type)
+                    d = msg_obj.to_dict(verbose=True) if hasattr(msg_obj, 'to_dict') else {}
+                    if not isinstance(d, dict):
+                        d = {"value": d}
+                except Exception:
+                    d = {}
+
+                d["t"] = round(t, 3)
+                raw.append(d)
+        except Exception as e:
+            logger.debug("signal data error for %s/%s: %s", log_path, msg_type, e)
+
+    # Downsample if needed (for numeric types with many samples)
+    if len(raw) > max_samples:
+        stride = len(raw) / max_samples
+        raw = [raw[int(i * stride)] for i in range(max_samples)]
+
+    logger.info("Extracted %d signal samples for %s from %d segments", len(raw), msg_type, len(seg_log_pairs))
+    return raw
+
+
+def _sanitize_for_json(obj):
+    """Recursively convert non-JSON-serializable types (bytes, etc.) to strings."""
+    if isinstance(obj, bytes):
+        # Short bytes as hex, long bytes as truncated
+        if len(obj) <= 64:
+            return obj.hex()
+        return f"<{len(obj)} bytes>"
+    if isinstance(obj, dict):
+        return {k: _sanitize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize_for_json(v) for v in obj]
+    if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+        return None
+    return obj
+
+
+def extract_all_signals(seg_log_pairs: list, max_samples: int = 3000) -> dict:
+    """Single-pass extraction of catalog + data for ALL message types.
+
+    Reads each log file once, collecting to_dict() for every message.
+    Returns: {
+        catalog: {msgType: {count, fields, freq_hz, kind}},
+        data: {msgType: [{t, ...fields...}, ...]}
+    }
+    """
+    catalog_counts = {}   # {msgType: int}
+    catalog_fields = {}   # {msgType: [str]}
+    all_data = {}         # {msgType: [{t, ...}, ...]}
+    seg_count = len(seg_log_pairs)
+
+    for seg_num, log_path in seg_log_pairs:
+        base_mono = None
+        try:
+            for ev in _iter_rlog(log_path):
+                w = ev.which()
+                if base_mono is None and w != "initData":
+                    base_mono = ev.logMonoTime
+
+                t = seg_num * 60.0
+                if base_mono is not None:
+                    t += (ev.logMonoTime - base_mono) / 1e9
+
+                # Catalog: count + capture fields on first occurrence
+                if w not in catalog_counts:
+                    catalog_counts[w] = 1
+                    try:
+                        msg_obj = getattr(ev, w)
+                        d = msg_obj.to_dict(verbose=True) if hasattr(msg_obj, 'to_dict') else {}
+                        catalog_fields[w] = list(d.keys()) if isinstance(d, dict) else []
+                    except Exception:
+                        d = {}
+                        catalog_fields[w] = []
+                else:
+                    catalog_counts[w] += 1
+                    try:
+                        msg_obj = getattr(ev, w)
+                        d = msg_obj.to_dict(verbose=True) if hasattr(msg_obj, 'to_dict') else {}
+                    except Exception:
+                        d = {}
+
+                if not isinstance(d, dict):
+                    d = {"value": d}
+                d = _sanitize_for_json(d)
+                d["t"] = round(t, 3)
+
+                if w not in all_data:
+                    all_data[w] = []
+                all_data[w].append(d)
+        except Exception as e:
+            logger.debug("extract_all_signals error for %s: %s", log_path, e)
+
+    # Build catalog with classification
+    duration_sec = max(seg_count * 60, 1)
+    catalog = {}
+    for msg_type, count in catalog_counts.items():
+        freq_hz = round(count / duration_sec, 2)
+        avg_per_seg = count / max(seg_count, 1)
+        kind = "snapshot" if avg_per_seg <= 2 else "numeric"
+        catalog[msg_type] = {
+            "count": count,
+            "fields": catalog_fields.get(msg_type, []),
+            "freq_hz": freq_hz,
+            "kind": kind,
+        }
+
+    # Downsample numeric types that exceed max_samples
+    for msg_type, samples in all_data.items():
+        if len(samples) > max_samples:
+            stride = len(samples) / max_samples
+            all_data[msg_type] = [samples[int(i * stride)] for i in range(max_samples)]
+
+    total_samples = sum(len(v) for v in all_data.values())
+    logger.info("Extracted %d total signal samples across %d types from %d segments",
+                total_samples, len(catalog), seg_count)
+
+    return {"catalog": catalog, "data": all_data}
+
+
 def extract_dashboard_telemetry(seg_log_pairs: list) -> list:
     """Extract dashboard telemetry from rlog/qlog files at ~5Hz.
 

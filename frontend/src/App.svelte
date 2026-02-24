@@ -8,9 +8,10 @@
   import TileManager from './lib/pages/TileManager.svelte'
   import SettingsPage from './lib/pages/SettingsPage.svelte'
   import DashboardPage from './lib/pages/DashboardPage.svelte'
+  import SignalBrowserPage from './lib/pages/SignalBrowserPage.svelte'
 
   let error = $state(null)
-  let page = $state('routes')  // 'routes' | 'tiles' | 'settings' | 'dashboard'
+  let page = $state('routes')  // 'routes' | 'tiles' | 'settings' | 'dashboard' | 'signals'
 
   function parseRoutePath() {
     // URL: /{dongleId}/{localId}/{start?}/{end?}
@@ -24,6 +25,7 @@
     if (parts[0] === 'tiles') return 'tiles'
     if (parts[0] === 'settings') return 'settings'
     if (parts[0] === 'dashboard') return 'dashboard'
+    if (parts[0] === 'signals') return 'signals'
     return 'routes'
   }
 
@@ -120,7 +122,9 @@
   </DeviceHeader>
 
   <main class="flex-1 flex flex-col">
-    {#if error}
+    {#if page === 'signals'}
+      <SignalBrowserPage />
+    {:else if error}
       <div class="flex items-center justify-center h-64">
         <div class="text-center">
           <p class="text-engage-red text-lg mb-2">Connection Error</p>

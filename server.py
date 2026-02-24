@@ -23,6 +23,9 @@ from handlers import (
     handle_connectdata,
     handle_dashboard_telemetry,
     handle_dashboard_ws,
+    handle_signal_catalog,
+    handle_signal_data,
+    handle_signal_all,
     handle_device_get,
     handle_device_location,
     handle_device_stats,
@@ -238,6 +241,11 @@ def create_app(data_dir: str, static_dir: str) -> web.Application:
     # Dashboard telemetry (replay REST + live WebSocket)
     app.router.add_get("/v1/dashboard/telemetry/{routeName}/{segments}", handle_dashboard_telemetry)
     app.router.add_get("/ws/dashboard", handle_dashboard_ws)
+
+    # Signal browser (catalog + data extraction)
+    app.router.add_get("/v1/route/{routeName}/signals/catalog", handle_signal_catalog)
+    app.router.add_get("/v1/route/{routeName}/signals/data/{msgType}/{segments}", handle_signal_data)
+    app.router.add_get("/v1/route/{routeName}/signals/all/{segments}", handle_signal_all)
 
     # Media file serving
     app.router.add_get("/connectdata/{path:.*}", handle_connectdata)

@@ -255,6 +255,30 @@ export async function fetchAllEventsWithProgress(route, onProgress) {
   return results.flat()
 }
 
+// ── Signal browser ───────────────────────────────────────────
+
+export async function fetchSignalCatalog(routeName, segments = null) {
+  let url = `/v1/route/${routeId(routeName)}/signals/catalog`
+  if (segments) url += `?segments=${segments}`
+  const res = await fetch(url)
+  if (!res.ok) throw new Error(`fetchSignalCatalog: ${res.status}`)
+  return res.json()
+}
+
+export async function fetchSignalData(routeName, msgType, segments) {
+  const url = `/v1/route/${routeId(routeName)}/signals/data/${msgType}/${segments}`
+  const res = await fetch(url)
+  if (!res.ok) throw new Error(`fetchSignalData: ${res.status}`)
+  return res.json()
+}
+
+export async function fetchSignalAll(routeName, segments) {
+  const url = `/v1/route/${routeId(routeName)}/signals/all/${segments}`
+  const res = await fetch(url)
+  if (!res.ok) throw new Error(`fetchSignalAll: ${res.status}`)
+  return res.json()
+}
+
 // ── Dashboard telemetry ──────────────────────────────────────
 
 export async function fetchDashboardTelemetry(routeName, segments) {
