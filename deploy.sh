@@ -27,11 +27,11 @@ scp -r "$LOCAL_DIR/handlers" "$HOST:$REMOTE_DIR/"
 # Copy built frontend
 scp -r "$LOCAL_DIR/static" "$HOST:$REMOTE_DIR/"
 
-# Restart via transient systemd user service
+# Restart server
 echo "Restarting server..."
-ssh "$HOST" "systemctl --user stop connect-on-device 2>/dev/null; systemctl --user reset-failed connect-on-device 2>/dev/null; pkill -9 -f 'python.*server.py' 2>/dev/null; sleep 1; systemd-run --user --unit=connect-on-device --description='Connect on Device' --working-directory=$REMOTE_DIR --property=Restart=always --property=RestartSec=3 /usr/local/venv/bin/python -u server.py"
+ssh "$HOST" "$REMOTE_DIR/setup_service.sh"
 
 sleep 2
-ssh "$HOST" "systemctl --user status connect-on-device --no-pager" || true
+ssh "$HOST" "pgrep -fa 'python.*server.py'" || echo "WARNING: server not running"
 echo ""
 echo "Deployed and running at http://$HOST:8082/"
