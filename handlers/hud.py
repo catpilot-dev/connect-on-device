@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import subprocess
 import time
 from collections import OrderedDict
 from pathlib import Path
@@ -31,6 +32,60 @@ PYTHON_BIN = "/usr/local/venv/bin/python"
 OPENPILOT_DIR = Path("/data/openpilot")
 REPLAY_BIN = OPENPILOT_DIR / "tools/replay/replay"
 DRM_RAYLIB_PATH = Path("/data/pip_packages/raylib")
+
+
+DRM_RAYLIB_PATH_STR = "/data/pip_packages"
+
+
+def _is_ui_running() -> bool:
+    """Check if the production openpilot UI process is running."""
+    result = subprocess.run(["pgrep", "-f", "selfdrive.ui.ui"],
+                            capture_output=True)
+    return result.returncode == 0
+
+
+def _start_production_ui():
+    """Start the production openpilot UI process."""
+    ui_env = os.environ.copy()
+    ui_env["PYTHONPATH"] = f"{OPENPILOT_DIR}:{DRM_RAYLIB_PATH_STR}"
+    ui_env["PATH"] = "/usr/local/venv/bin:/usr/local/bin:/usr/bin:/bin"
+    ui_env["HOME"] = os.environ.get("HOME", "/root")
+    try:
+        subprocess.Popen(
+            [str(PYTHON_BIN), "-m", "selfdrive.ui.ui"],
+            cwd=str(OPENPILOT_DIR),
+            env=ui_env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        logger.info("Production UI started")
+    except Exception as e:
+        logger.error("Failed to start production UI: %s", e)
+
+
+async def _ensure_production_ui(max_retries: int = 3, delay: float = 2.0):
+    """Verify production UI is running after HUD cleanup; retry if not.
+
+    Called after cancel/stop to guarantee the C3 display is restored.
+    """
+    loop = asyncio.get_event_loop()
+    for attempt in range(max_retries):
+        await asyncio.sleep(delay)
+        running = await loop.run_in_executor(None, _is_ui_running)
+        if running:
+            logger.info("Production UI verified running (attempt %d)", attempt + 1)
+            return
+        logger.warning("Production UI not running (attempt %d/%d), restarting...",
+                        attempt + 1, max_retries)
+        await loop.run_in_executor(None, _start_production_ui)
+    # Final check
+    await asyncio.sleep(delay)
+    running = await loop.run_in_executor(None, _is_ui_running)
+    if running:
+        logger.info("Production UI restored after retries")
+    else:
+        logger.error("Failed to restore production UI after %d retries", max_retries)
 
 
 async def _ensure_replay_binary():
@@ -436,14 +491,25 @@ async def handle_hud_cancel(request: web.Request) -> web.Response:
     fullname = route["fullname"] if route else route_name
     task = _hud_prerender_tasks.get(fullname)
     if not task:
+        # No active task — still verify UI is running (may have been orphaned)
+        asyncio.create_task(_ensure_production_ui(max_retries=1, delay=1.0))
         return web.json_response({"status": "idle"})
 
+    was_drm = task.get("mode") == "drm"
     proc = task.get("proc")
     if proc and proc.returncode is None:
         try:
             proc.terminate()
         except Exception:
             pass
+        # Wait for process to exit so its finally block can run
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=10)
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except Exception:
+                pass
         logger.info("HUD render cancelled for %s", fullname)
 
     # Clean up status file and cached output
@@ -458,6 +524,11 @@ async def handle_hud_cancel(request: web.Request) -> web.Response:
         pass
 
     del _hud_prerender_tasks[fullname]
+
+    # Verify production UI is restored (non-blocking — runs in background)
+    if was_drm:
+        asyncio.create_task(_ensure_production_ui())
+
     return web.json_response({"status": "cancelled"})
 
 
@@ -534,6 +605,8 @@ async def handle_hud_stream_stop(request: web.Request) -> web.Response:
     mgr: HudStreamManager = request.app.get("stream_manager")
     if mgr:
         await mgr.stop()
+        # Verify production UI is restored after stream cleanup
+        asyncio.create_task(_ensure_production_ui())
     return web.json_response({"status": "idle"})
 
 

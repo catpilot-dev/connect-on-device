@@ -64,6 +64,11 @@
     }).addTo(map)
 
     drawPath()
+
+    // Firefox settles CSS grid layout later than Chromium — staggered invalidateSize
+    for (const delay of [100, 300, 600]) {
+      setTimeout(() => map?.invalidateSize(), delay)
+    }
   })
 
   function drawPath() {
@@ -174,7 +179,17 @@
     }
   })
 
+  // ResizeObserver — invalidateSize when container dimensions change (CSS grid settling, etc.)
+  let resizeObserver = null
+  $effect(() => {
+    if (!mapContainer || !map) return
+    resizeObserver = new ResizeObserver(() => map?.invalidateSize())
+    resizeObserver.observe(mapContainer)
+    return () => resizeObserver?.disconnect()
+  })
+
   onDestroy(() => {
+    resizeObserver?.disconnect()
     if (map) {
       map.remove()
       map = null
@@ -188,10 +203,10 @@
   }
 </style>
 
-<div class="card overflow-hidden relative">
+<div class="overflow-hidden relative md:h-full">
   <div
     bind:this={mapContainer}
-    class="aspect-video w-full"
+    class="aspect-video md:!aspect-auto md:h-full w-full"
     style="min-height: 200px"
   ></div>
 </div>

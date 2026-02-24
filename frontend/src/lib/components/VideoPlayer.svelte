@@ -30,6 +30,8 @@
     onDurationChange,
     onPlay,
     onPause,
+    onHudStream,
+    onHudDownload,
   } = $props()
 
   let videoEl = $state(null)
@@ -324,7 +326,7 @@
   }
 </script>
 
-<div class="relative w-full">
+<div class="relative w-full group">
   <!-- HLS video element — hidden when HUD video is active -->
   <video
     bind:this={videoEl}
@@ -367,6 +369,42 @@
   {#if !files?.qcameras?.some(u => u)}
     <div class="absolute inset-0 flex items-center justify-center bg-surface-900">
       <p class="text-surface-400 text-sm">No video available</p>
+    </div>
+  {/if}
+
+  <!-- Hover overlay: HUD stream + download icons -->
+  {#if !frozen && !showingHud && (onHudStream || onHudDownload)}
+    <div class="absolute bottom-0 left-0 right-0 flex items-center justify-center gap-3 py-2
+      bg-gradient-to-t from-black/60 to-transparent
+      opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none">
+      {#if onHudStream}
+        <button
+          class="pointer-events-auto w-8 h-8 flex items-center justify-center rounded-full bg-white/20 hover:bg-white/40 backdrop-blur-sm transition-colors"
+          title="HUD Live Stream"
+          onclick={onHudStream}
+        >
+          <!-- Play/monitor icon -->
+          <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <rect x="2" y="3" width="20" height="14" rx="2"/>
+            <path d="M8 21h8M12 17v4"/>
+            <polygon points="10,7 10,13 15,10" fill="currentColor" stroke="none"/>
+          </svg>
+        </button>
+      {/if}
+      {#if onHudDownload}
+        <button
+          class="pointer-events-auto w-8 h-8 flex items-center justify-center rounded-full bg-white/20 hover:bg-white/40 backdrop-blur-sm transition-colors"
+          title="Download HUD Video"
+          onclick={onHudDownload}
+        >
+          <!-- Download icon -->
+          <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/>
+            <line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+        </button>
+      {/if}
     </div>
   {/if}
 </div>

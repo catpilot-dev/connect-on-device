@@ -210,7 +210,7 @@
 
 <div class="h-dvh flex flex-col bg-surface-900 text-surface-100">
   <!-- Header -->
-  <header class="flex items-center gap-3 px-4 py-2 border-b border-surface-700/50 bg-surface-800 shrink-0">
+  <header class="flex items-center gap-3 py-2 px-4 border-b border-surface-700/50 bg-surface-800 shrink-0 mx-auto max-w-6xl w-full">
     <a href={backUrl} class="btn-ghost text-sm flex items-center gap-1">
       <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
         <path d="M15 19l-7-7 7-7"/>
@@ -251,7 +251,7 @@
   </header>
 
   <!-- Main content -->
-  <div class="flex flex-1 min-h-0">
+  <div class="flex flex-1 min-h-0 mx-auto max-w-6xl w-full">
     <!-- Sidebar -->
     <aside class="w-60 shrink-0 border-r border-surface-700/50 overflow-y-auto bg-surface-850">
       {#if loading}
