@@ -598,15 +598,6 @@
     </button>
     {#if route}
       <span class="text-sm text-surface-100 font-medium">{formatDate(route.create_time)} {selectionTimeRange}</span>
-      <button class="btn-ghost text-xs ml-auto" onclick={() => {
-        const d = route.dongle_id
-        const lid = route.local_id
-        let url = `/signals/${d}/${lid}`
-        if (selectionStart > 0 || selectionEnd > 0) url += `/${Math.round(selectionStart)}/${Math.round(selectionEnd)}`
-        window.open(url, '_blank')
-      }}>
-        Signals
-      </button>
     {/if}
   </div>
 
@@ -849,7 +840,16 @@
                   </div>
                 {/if}
               </div>
-              <div class="px-4 border-t border-surface-700/50 py-3 mt-auto">
+              <div class="px-4 border-t border-surface-700/50 py-3 mt-auto space-y-3">
+                <button class="w-full text-left text-sm text-engage-blue hover:underline" onclick={() => {
+                  const d = route.dongle_id
+                  const lid = route.local_id
+                  let url = `/signals/${d}/${lid}`
+                  if (selectionStart > 0 || selectionEnd > 0) url += `/${Math.round(selectionStart)}/${Math.round(selectionEnd)}`
+                  window.open(url, 'signals', 'width=900,height=700')
+                }}>
+                  Logs & Signals
+                </button>
                 <RouteActions {route} onEnrich={reEnrich} enrichBusy={reEnriching || enriching} />
               </div>
             </div>

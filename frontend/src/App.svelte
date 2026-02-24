@@ -89,61 +89,63 @@
   }
 </script>
 
-<div class="min-h-dvh flex flex-col">
-  <DeviceHeader>
-    {#snippet nav()}
-      <div class="flex items-center gap-1">
-        <button
-          class="px-3 py-1.5 text-sm rounded transition-colors {page === 'routes' && !$selectedRoute ? 'bg-surface-700 text-surface-50' : 'text-surface-400 hover:text-surface-200'}"
-          onclick={showRoutes}
-        >
-          Routes
-        </button>
-        <button
-          class="px-3 py-1.5 text-sm rounded transition-colors {page === 'tiles' ? 'bg-surface-700 text-surface-50' : 'text-surface-400 hover:text-surface-200'}"
-          onclick={showTiles}
-        >
-          Map Tiles
-        </button>
-        <button
-          class="px-3 py-1.5 text-sm rounded transition-colors {page === 'dashboard' ? 'bg-surface-700 text-surface-50' : 'text-surface-400 hover:text-surface-200'}"
-          onclick={showDashboard}
-        >
-          Dashboard
-        </button>
-        <button
-          class="px-3 py-1.5 text-sm rounded transition-colors {page === 'settings' ? 'bg-surface-700 text-surface-50' : 'text-surface-400 hover:text-surface-200'}"
-          onclick={showSettings}
-        >
-          Settings
-        </button>
-      </div>
-    {/snippet}
-  </DeviceHeader>
-
-  <main class="flex-1 flex flex-col">
-    {#if page === 'signals'}
-      <SignalBrowserPage />
-    {:else if error}
-      <div class="flex items-center justify-center h-64">
-        <div class="text-center">
-          <p class="text-engage-red text-lg mb-2">Connection Error</p>
-          <p class="text-surface-400 text-sm">{error}</p>
-          <button class="btn-ghost mt-4" onclick={() => location.reload()}>
-            Retry
+{#if page === 'signals'}
+  <SignalBrowserPage />
+{:else}
+  <div class="min-h-dvh flex flex-col">
+    <DeviceHeader>
+      {#snippet nav()}
+        <div class="flex items-center gap-1">
+          <button
+            class="px-3 py-1.5 text-sm rounded transition-colors {page === 'routes' && !$selectedRoute ? 'bg-surface-700 text-surface-50' : 'text-surface-400 hover:text-surface-200'}"
+            onclick={showRoutes}
+          >
+            Routes
+          </button>
+          <button
+            class="px-3 py-1.5 text-sm rounded transition-colors {page === 'tiles' ? 'bg-surface-700 text-surface-50' : 'text-surface-400 hover:text-surface-200'}"
+            onclick={showTiles}
+          >
+            Map Tiles
+          </button>
+          <button
+            class="px-3 py-1.5 text-sm rounded transition-colors {page === 'dashboard' ? 'bg-surface-700 text-surface-50' : 'text-surface-400 hover:text-surface-200'}"
+            onclick={showDashboard}
+          >
+            Dashboard
+          </button>
+          <button
+            class="px-3 py-1.5 text-sm rounded transition-colors {page === 'settings' ? 'bg-surface-700 text-surface-50' : 'text-surface-400 hover:text-surface-200'}"
+            onclick={showSettings}
+          >
+            Settings
           </button>
         </div>
-      </div>
-    {:else if page === 'dashboard'}
-      <DashboardPage />
-    {:else if page === 'settings'}
-      <SettingsPage />
-    {:else if page === 'tiles'}
-      <TileManager />
-    {:else if $selectedRoute}
-      <RouteDetailPage />
-    {:else}
-      <RouteListPage />
-    {/if}
-  </main>
-</div>
+      {/snippet}
+    </DeviceHeader>
+
+    <main class="flex-1 flex flex-col">
+      {#if error}
+        <div class="flex items-center justify-center h-64">
+          <div class="text-center">
+            <p class="text-engage-red text-lg mb-2">Connection Error</p>
+            <p class="text-surface-400 text-sm">{error}</p>
+            <button class="btn-ghost mt-4" onclick={() => location.reload()}>
+              Retry
+            </button>
+          </div>
+        </div>
+      {:else if page === 'dashboard'}
+        <DashboardPage />
+      {:else if page === 'settings'}
+        <SettingsPage />
+      {:else if page === 'tiles'}
+        <TileManager />
+      {:else if $selectedRoute}
+        <RouteDetailPage />
+      {:else}
+        <RouteListPage />
+      {/if}
+    </main>
+  </div>
+{/if}

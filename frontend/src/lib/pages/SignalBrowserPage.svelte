@@ -201,9 +201,6 @@
   const currentSegment = $derived(Math.floor(currentTime / 60))
   const effectiveEnd = $derived(selectionEnd > 0 ? selectionEnd : duration)
   const scrubRange = $derived(effectiveEnd - selectionStart)
-  const backUrl = $derived(selectionStart > 0 || selectionEnd > 0
-    ? `/${params?.dongleId}/${params?.localId}/${selectionStart}/${selectionEnd}`
-    : `/${params?.dongleId}/${params?.localId}`)
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
@@ -211,22 +208,18 @@
 <div class="h-dvh flex flex-col bg-surface-900 text-surface-100">
   <!-- Header -->
   <header class="flex items-center gap-3 py-2 px-4 border-b border-surface-700/50 bg-surface-800 shrink-0 mx-auto max-w-6xl w-full">
-    <a href={backUrl} class="btn-ghost text-sm flex items-center gap-1">
-      <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-        <path d="M15 19l-7-7 7-7"/>
-      </svg>
-      Back
-    </a>
-    <span class="text-sm text-surface-400">Signals</span>
+    <span class="text-sm text-surface-400">Logs & Signals</span>
 
-    <!-- Time info: selStart | playhead | selEnd  Seg N — always visible -->
-    <span class="text-xs font-mono tabular-nums text-surface-500">{formatVideoTime(selectionStart)}</span>
-    <span class="text-xs font-mono tabular-nums text-surface-100 font-semibold">{formatVideoTime(currentTime)}</span>
-    <span class="text-xs font-mono tabular-nums text-surface-500">{formatVideoTime(effectiveEnd)}</span>
-    <span class="text-xs text-surface-400">Seg {currentSegment}</span>
+    <!-- Time info: selStart | playhead | selEnd  Seg N — center aligned -->
+    <div class="flex-1 flex items-center justify-center gap-3">
+      <span class="text-xs font-mono tabular-nums text-surface-500">{formatVideoTime(selectionStart)}</span>
+      <span class="text-xs font-mono tabular-nums text-surface-100 font-semibold">{formatVideoTime(currentTime)}</span>
+      <span class="text-xs font-mono tabular-nums text-surface-500">{formatVideoTime(effectiveEnd)}</span>
+      <span class="text-xs text-surface-400">Seg {currentSegment}</span>
+    </div>
 
-    <!-- Playback controls OR loading spinner (right-aligned) — always visible -->
-    <div class="ml-auto flex items-center gap-2">
+    <!-- Playback controls OR loading spinner (right-aligned) -->
+    <div class="flex items-center gap-2">
       {#if loading}
         <div class="w-4 h-4 border-2 border-engage-green border-t-transparent rounded-full animate-spin"></div>
         <span class="text-xs text-surface-400">Loading signals...</span>
