@@ -45,7 +45,7 @@
   let swLoading = $state(true)
   let swError = $state(null)
   let swChecking = $state(false)
-  let swDownloading = $state(false)
+  let swInstallPhase = $state(null)  // null | 'downloading' | 'installing' | 'rebooting'
   let swChecked = $state(false)
 
   // Device state
@@ -74,7 +74,6 @@
       if (!sw.UpdaterState || sw.UpdaterState === 'idle') {
         swPoll.stop()
         if (swChecking) { swChecking = false; swChecked = true }
-        if (swDownloading) swDownloading = false
       }
     } catch { /* ignore */ }
   }, 2000)
@@ -169,7 +168,6 @@
       if (sw.UpdaterFetchAvailable) swChecked = true
       if (sw.UpdaterState && sw.UpdaterState !== 'idle') {
         if (sw.UpdaterState === 'checking') swChecking = true
-        else swDownloading = true
         swPoll.start()
       }
     } catch (e) {
@@ -193,25 +191,55 @@
     }
   }
 
-  async function handleSwUpdate() {
-    swDownloading = true
+  async function handleSwInstall() {
     swError = null
     try {
+      // Already downloaded — skip to install
+      if (sw.UpdateAvailable) {
+        swInstallPhase = 'installing'
+        await softwareInstall()
+        swInstallPhase = 'rebooting'
+        waitForReboot()
+        return
+      }
+      // Download first
+      swInstallPhase = 'downloading'
       await softwareDownload()
-      swPoll.start()
+      const installPoll = createPoll(async () => {
+        try {
+          sw = await fetchSoftware()
+          if (sw.UpdateAvailable) {
+            installPoll.stop()
+            swInstallPhase = 'installing'
+            await softwareInstall()
+            swInstallPhase = 'rebooting'
+            waitForReboot()
+          } else if (!sw.UpdaterState || sw.UpdaterState === 'idle') {
+            installPoll.stop()
+            swInstallPhase = null
+            if (sw.UpdateFailedCount > 0) swError = 'Update failed'
+          }
+        } catch { /* ignore poll errors */ }
+      }, 2000)
+      installPoll.start()
     } catch (e) {
       swError = e.message
-      swDownloading = false
+      swInstallPhase = null
     }
   }
 
-  async function handleSwReboot() {
-    if (!confirm('Reboot to apply update?')) return
-    try {
-      await softwareInstall()
-    } catch (e) {
-      swError = e.message
-    }
+  function waitForReboot() {
+    // Poll until server comes back after reboot, then refresh state
+    const rebootPoll = setInterval(async () => {
+      try {
+        const fresh = await fetchSoftware()
+        // Server is back — update complete
+        clearInterval(rebootPoll)
+        sw = fresh
+        swInstallPhase = null
+        swChecked = true
+      } catch { /* still rebooting */ }
+    }, 3000)
   }
 
   async function handleSwBranch(branch) {
@@ -920,29 +948,22 @@
             </div>
           {/if}
           <div class="pt-3 border-t border-surface-700 grid grid-cols-2 gap-2">
-            {#if swDownloading}
+            {#if swInstallPhase}
               <button class="text-sm py-2 rounded-lg bg-surface-700 text-surface-400 flex items-center justify-center gap-2" disabled>
                 <Spinner />
-                Updating
+                {swInstallPhase === 'downloading' ? 'Downloading' : swInstallPhase === 'installing' ? 'Installing' : swInstallPhase === 'rebooting' ? 'Rebooting' : 'Installing'}
               </button>
             {:else if swChecking}
               <button class="text-sm py-2 rounded-lg bg-surface-700 text-surface-400 flex items-center justify-center gap-2" disabled>
                 <Spinner />
                 Checking
               </button>
-            {:else if sw.UpdateAvailable}
+            {:else if sw.UpdateAvailable || sw.UpdaterFetchAvailable}
               <button
                 class="text-sm py-2 rounded-lg bg-engage-green/15 text-engage-green hover:bg-engage-green/25 transition-colors"
-                onclick={handleSwReboot}
+                onclick={handleSwInstall}
               >
-                Reboot
-              </button>
-            {:else if sw.UpdaterFetchAvailable}
-              <button
-                class="text-sm py-2 rounded-lg bg-engage-green/15 text-engage-green hover:bg-engage-green/25 transition-colors"
-                onclick={handleSwUpdate}
-              >
-                Update
+                Install
               </button>
             {:else if sw.UpdateFailedCount > 0}
               <button
