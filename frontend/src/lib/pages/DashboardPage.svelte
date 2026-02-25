@@ -8,7 +8,10 @@
   import SparklineWidget from '../components/dashboard/SparklineWidget.svelte'
   import SparklineMultiWidget from '../components/dashboard/SparklineMultiWidget.svelte'
   import WidgetPicker from '../components/dashboard/WidgetPicker.svelte'
+  import SortableGrid from '../components/dashboard/SortableGrid.svelte'
   import { WIDGET_REGISTRY, DEFAULT_LAYOUT, STORAGE_KEY, loadLayout, saveLayout } from '../components/dashboard/registry.js'
+
+  let { isOnroad = false } = $props()
 
   const HISTORY_SIZE = 300  // 60s at 5Hz
 
@@ -95,10 +98,15 @@
   <!-- Header row -->
   <div class="flex items-center justify-between flex-wrap gap-3">
     <div class="flex items-center gap-2">
-      <h2 class="text-sm font-medium text-surface-200">Live Dashboard</h2>
+      <h2 class="text-sm font-medium text-surface-200">{isOnroad ? 'Live Dashboard' : 'Dashboard'}</h2>
       <div class="flex items-center gap-1.5 text-sm">
-        <div class="w-2 h-2 rounded-full {liveConnected ? 'bg-engage-green' : 'bg-engage-red'}"></div>
-        <span class="text-surface-400">{liveConnected ? 'Connected' : 'Disconnected'}</span>
+        {#if isOnroad}
+          <div class="w-2 h-2 rounded-full {liveConnected ? 'bg-engage-green' : 'bg-engage-red'}"></div>
+          <span class="text-surface-400">{liveConnected ? 'Live' : 'Connecting...'}</span>
+        {:else}
+          <div class="w-2 h-2 rounded-full bg-surface-500"></div>
+          <span class="text-surface-400">Offline</span>
+        {/if}
       </div>
     </div>
 
@@ -114,7 +122,11 @@
   </div>
 
   <!-- Widget grid -->
-  <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+  <SortableGrid
+    items={layout}
+    onReorder={(reordered) => { layout = reordered; saveLayout(layout) }}
+    class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3"
+  >
     {#each layout as widgetId (widgetId)}
       {@const def = getWidgetDef(widgetId)}
       {#if def}
@@ -162,7 +174,7 @@
         </WidgetCard>
       {/if}
     {/each}
-  </div>
+  </SortableGrid>
 
   {#if layout.length === 0}
     <div class="flex flex-col items-center justify-center h-48 text-surface-500">

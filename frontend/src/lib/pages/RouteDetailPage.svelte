@@ -12,13 +12,15 @@
   import RouteActions from '../components/RouteActions.svelte'
   import { Tabs } from 'bits-ui'
   import WidgetCard from '../components/dashboard/WidgetCard.svelte'
+  import SortableGrid from '../components/dashboard/SortableGrid.svelte'
   import GaugeWidget from '../components/dashboard/GaugeWidget.svelte'
   import SteeringWidget from '../components/dashboard/SteeringWidget.svelte'
   import GasBrakeWidget from '../components/dashboard/GasBrakeWidget.svelte'
   import EngagementWidget from '../components/dashboard/EngagementWidget.svelte'
   import SparklineWidget from '../components/dashboard/SparklineWidget.svelte'
   import SparklineMultiWidget from '../components/dashboard/SparklineMultiWidget.svelte'
-  import { WIDGET_REGISTRY, loadLayout } from '../components/dashboard/registry.js'
+  import { WIDGET_REGISTRY, loadLayout, saveLayout } from '../components/dashboard/registry.js'
+  import WidgetPicker from '../components/dashboard/WidgetPicker.svelte'
 
   let route = $state(null)
   let files = $state(null)
@@ -453,7 +455,20 @@
   let dashTotalSegs = $state(0)
   let dashStarted = $state(false)    // has progressive loading been kicked off?
   let dashError = $state(null)
-  const dashLayout = $derived(loadLayout())
+  let dashLayout = $state(loadLayout())
+  let showWidgetPicker = $state(false)
+
+  function dashRemoveWidget(id) {
+    dashLayout = dashLayout.filter(w => w !== id)
+    saveLayout(dashLayout)
+  }
+
+  function dashAddWidget(id) {
+    if (!dashLayout.includes(id)) {
+      dashLayout = [...dashLayout, id]
+      saveLayout(dashLayout)
+    }
+  }
 
   // Flattened sorted samples from all loaded segments
   const dashSamples = $derived.by(() => {
@@ -974,11 +989,15 @@
               {:else if dashError}
                 <p class="text-sm text-red-400 text-center py-4">{dashError}</p>
               {:else if dashSamples && dashSamples.length > 0}
-                <div class="grid grid-cols-2 gap-2 [&>*]:min-w-0">
+                <SortableGrid
+                  items={dashLayout}
+                  onReorder={(reordered) => { dashLayout = reordered; saveLayout(dashLayout) }}
+                  class="grid grid-cols-2 gap-2 [&>*]:min-w-0"
+                >
                   {#each dashLayout as widgetId (widgetId)}
                     {@const def = getWidgetDef(widgetId)}
                     {#if def}
-                      <WidgetCard label={def.label}>
+                      <WidgetCard label={def.label} onremove={() => dashRemoveWidget(widgetId)}>
                         {#if def.type === 'gauge'}
                           <GaugeWidget
                             value={dashTelemetry[def.fields[0]] ?? 0}
@@ -1024,12 +1043,21 @@
                       </WidgetCard>
                     {/if}
                   {/each}
-                </div>
+                </SortableGrid>
                 {#if dashLoadingCount > 0 && dashTotalSegs > 1}
                   <p class="text-xs text-surface-400 text-center mt-2">
                     Loading {dashLoadedSegs.size}/{dashTotalSegs} segments...
                   </p>
                 {/if}
+                <button
+                  class="mt-2 w-full btn-ghost text-xs text-surface-400 py-1.5"
+                  onclick={() => showWidgetPicker = true}
+                >
+                  <svg class="w-3.5 h-3.5 inline-block mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path d="M12 4v16m-8-8h16" />
+                  </svg>
+                  Add Widget
+                </button>
               {:else if dashSamples}
                 <p class="text-sm text-surface-500 text-center py-4">No telemetry data available</p>
               {/if}
@@ -1097,6 +1125,15 @@
     </div>
   {/if}
 </div>
+
+{#if showWidgetPicker}
+  <WidgetPicker
+    registry={WIDGET_REGISTRY}
+    activeIds={dashLayout}
+    onpick={dashAddWidget}
+    onclose={() => showWidgetPicker = false}
+  />
+{/if}
 
 <style>
   .fullscreen-container,

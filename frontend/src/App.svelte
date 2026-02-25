@@ -137,7 +137,7 @@
           </div>
         </div>
       {:else if page === 'dashboard'}
-        <DashboardPage />
+        <DashboardPage {isOnroad} />
       {:else if page === 'settings'}
         <SettingsPage {isOnroad} />
       {:else if isOnroad}
