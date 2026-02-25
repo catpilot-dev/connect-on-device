@@ -616,7 +616,7 @@
   }
 </script>
 
-<div class="mx-auto max-w-6xl px-4 py-4">
+<div class="mx-auto w-[90%] min-w-[80%] max-w-screen-2xl px-4 py-4">
   <!-- Back button -->
   <div class="flex items-center gap-3 mb-3">
     <button class="btn-ghost -ml-2 text-sm" onclick={goBack}>
@@ -640,7 +640,7 @@
       <p class="text-surface-400">{error}</p>
     </div>
   {:else if route}
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+    <div class="grid grid-cols-1 md:grid-cols-[2fr_1fr] gap-4">
       <!-- Video player + controls -->
       <div class="space-y-2" data-video-container>
         {#if enriching}
