@@ -217,7 +217,7 @@
   // ── HD (fcamera) playback ────────────────────────────────
   const maxSegment = $derived(files?.qcameras ? files.qcameras.length - 1 : 0)
 
-  function loadHdSegment(seg, seekOffset = 0) {
+  function loadHdSegment(seg, seekOffset = 0, autoPlay = false) {
     if (!hdVideoEl || !route || !hdSource) return
     if (seg < 0 || seg > maxSegment) return
 
@@ -227,6 +227,7 @@
     hdVideoEl.load()
     hdVideoEl.addEventListener('loadedmetadata', () => {
       if (seekOffset > 0) hdVideoEl.currentTime = seekOffset
+      if (autoPlay) hdVideoEl.play().catch(() => {})
     }, { once: true })
     hdVideoEl.addEventListener('error', () => {
       console.warn('HD segment load error:', hdSource, seg)
@@ -242,10 +243,17 @@
 
   function handleHdEnded() {
     if (!showingHd) return
+    // Check if selectionEnd falls on this segment boundary — let parent loop back
+    const segEndTime = (hdSegment + 1) * 60
+    if (selectionEnd > 0 && segEndTime >= selectionEnd) {
+      // Parent's handleTimeUpdate will seek back to selectionStart
+      onTimeUpdate?.(segEndTime)
+      return
+    }
     // Auto-advance to next segment
     const nextSeg = hdSegment + 1
     if (nextSeg <= maxSegment) {
-      loadHdSegment(nextSeg, 0)
+      loadHdSegment(nextSeg, 0, true)
     } else {
       isPlaying = false
       onPause?.()
@@ -373,7 +381,8 @@
       const seg = Math.floor(time / 60)
       const offset = time % 60
       if (seg !== hdSegment) {
-        loadHdSegment(seg, offset)
+        const wasPlaying = !hdVideoEl.paused
+        loadHdSegment(seg, offset, wasPlaying)
       } else {
         hdVideoEl.currentTime = offset
       }
