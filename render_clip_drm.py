@@ -195,6 +195,7 @@ def main():
     parser.add_argument("--op-version", default="")
     parser.add_argument("--op-branch", default="")
     parser.add_argument("--op-commit", default="")
+    parser.add_argument("--car-fingerprint", default="")
     args = parser.parse_args()
 
     duration = args.end - args.start
@@ -421,35 +422,27 @@ def main():
                 post_cmd.extend(["-vf", f"fps={args.fps}"])
                 post_cmd.extend(["-t", f"{duration:.2f}"])
 
-                # MP4 metadata — embed route info for identification
-                route_display = args.route_name.replace("|", "/")
-                date_display = args.route_date.replace("--", " ").replace("-", "/", 2).replace("/", "-", 2) if args.route_date else ""
+                # MP4 metadata — Discord #driving-feedback format
                 seg_start = int(args.start) // 60
                 seg_end = (int(args.end) - 1) // 60
+                route_display = f"{args.dongle_id}/{args.local_id}/{seg_start}/{seg_end}"
+                short_commit = args.op_commit[:7] if args.op_commit else ""
 
-                meta_title = f"HUD {date_display}" if date_display else f"HUD {route_display}"
-                meta_desc_parts = [
-                    f"dongle_id: {args.dongle_id}",
-                    f"local_id: {args.local_id}",
-                    f"route: {route_display}",
-                ]
-                if date_display:
-                    meta_desc_parts.append(f"date: {date_display}")
-                meta_desc_parts.extend([
-                    f"segment: {seg_start}" if seg_start == seg_end else f"segments: {seg_start}-{seg_end}",
-                    f"range: {int(args.start)}s-{int(args.end)}s",
-                ])
-                if args.op_version:
-                    meta_desc_parts.append(f"openpilot: {args.op_version}")
-                if args.op_branch:
-                    meta_desc_parts.append(f"branch: {args.op_branch}")
-                if args.op_commit:
-                    meta_desc_parts.append(f"commit: {args.op_commit}")
+                meta_comment = "\n".join(filter(None, [
+                    f"Route: {route_display}",
+                    f"Fingerprint: {args.car_fingerprint}" if args.car_fingerprint else None,
+                    f"Branch: {args.op_branch}" if args.op_branch else None,
+                    f"Version: {args.op_version}" if args.op_version else None,
+                    f"Commit: {short_commit}" if short_commit else None,
+                ]))
+
+                meta_title = f"openpilot {args.op_version} HUD" if args.op_version else "openpilot HUD"
+                meta_artist = f"openpilot ({args.car_fingerprint})" if args.car_fingerprint else f"openpilot ({args.dongle_id})"
 
                 post_cmd.extend([
                     "-metadata", f"title={meta_title}",
-                    "-metadata", f"comment={'; '.join(meta_desc_parts)}",
-                    "-metadata", f"artist=openpilot HUD ({args.dongle_id})",
+                    "-metadata", f"comment={meta_comment}",
+                    "-metadata", f"artist={meta_artist}",
                     "-metadata", "encoder=connect_on_device render_clip_drm",
                     "-c:v", "libx264",
                     "-preset", "ultrafast",

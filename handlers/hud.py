@@ -426,6 +426,7 @@ async def handle_hud_prerender(request: web.Request) -> web.Response:
         op_version = route.get("version", "")
         op_branch = route.get("git_branch", "")
         op_commit = route.get("git_commit", "")
+        car_fingerprint = route.get("platform", "")
 
         cmd = [
             python_bin, script,
@@ -440,6 +441,7 @@ async def handle_hud_prerender(request: web.Request) -> web.Response:
             "--op-version", op_version,
             "--op-branch", op_branch,
             "--op-commit", op_commit,
+            "--car-fingerprint", car_fingerprint,
             "--output", output,
             "--status-file", status_file,
         ]
