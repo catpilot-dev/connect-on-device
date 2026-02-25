@@ -503,7 +503,7 @@
 
   <!-- Hover overlay: HUD stream + download icons -->
   {#if !frozen && !showingHud && (onHudStream || onHudDownload)}
-    <div class="absolute bottom-0 left-0 right-0 flex items-center justify-center gap-3 py-2
+    <div class="absolute bottom-0 left-0 right-0 hidden sm:flex items-center justify-center gap-3 py-2
       bg-gradient-to-t from-black/60 to-transparent
       opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none">
       {#if onHudStream}

@@ -143,6 +143,14 @@
 
   function onFullscreenChange() {
     isFullscreen = !!document.fullscreenElement
+    // Auto-rotate to landscape on mobile when entering fullscreen
+    try {
+      if (isFullscreen) {
+        screen.orientation?.lock('landscape').catch(() => {})
+      } else {
+        screen.orientation?.unlock()
+      }
+    } catch {}
   }
 
   onMount(async () => {
@@ -701,12 +709,12 @@
           {/if}
         {/if}
 
-        <div class="overflow-hidden" class:fullscreen-video={isFullscreen}
+        <div class="relative overflow-hidden" class:fullscreen-video={isFullscreen}
           class:rounded-xl={!hudLiveUrl && !isFullscreen}
           class:hud-corners={!!hudLiveUrl}
           class:recording-border-static={dlRendering && dlPhase !== 'recording'}
           class:recording-border-blink={dlRendering && dlPhase === 'recording'}
-          style={!hudMode && engagementColor && !isFullscreen ? `border: 8px solid ${engagementColor}` : ''}>
+          style={!hudMode && engagementColor ? `border: ${isFullscreen ? '6px' : '8px'} solid ${engagementColor}` : ''}>
           <VideoPlayer
             bind:this={videoPlayer}
             {route}
@@ -724,13 +732,34 @@
             onHudStream={!enriching && !hudMode ? handleHudStream : undefined}
             onHudDownload={!enriching && !hudMode ? handleHudDownload : undefined}
           />
+          {#if isFullscreen && !enriching}
+            <!-- Floating controls overlay in fullscreen -->
+            <div class="fullscreen-controls">
+              {#if !hudMode}
+                <VideoControls
+                  {route}
+                  {currentTime}
+                  {duration}
+                  startTime={route.start_time}
+                  onSeek={handleSeek}
+                  onToggle={handleToggle}
+                  onRate={handleRate}
+                  onScreenshot={handleScreenshot}
+                  onStepFrame={handleStepFrame}
+                  onMuteToggle={handleMuteToggle}
+                  onSourceChange={handleSourceChange}
+                  {isPlaying}
+                  {isMuted}
+                  {screenshotBusy}
+                  {hdSource}
+                  {sources}
+                />
+              {/if}
+            </div>
+          {/if}
         </div>
 
-        {#if isFullscreen && engagementColor}
-          <div class="h-1 w-full transition-colors duration-300" style="background: {engagementColor}"></div>
-        {/if}
-
-        {#if !enriching}
+        {#if !isFullscreen && !enriching}
           {#if hudMode === 'stream'}
             <!-- HUD Stream active panel -->
             <div class="flex items-center justify-between h-8 px-2">
@@ -1079,11 +1108,24 @@
   .fullscreen-video {
     flex: 1;
     min-height: 0;
+    border-radius: 0 !important;
   }
-  .fullscreen-video :global(> div) {
+  .fullscreen-video :global(> div:not(.fullscreen-controls)) {
     /* Override the fixed aspect-ratio so video fills available space */
     aspect-ratio: unset !important;
     height: 100%;
+  }
+  .fullscreen-controls {
+    position: absolute;
+    bottom: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: fit-content;
+    max-width: 90%;
+    padding: 4px 12px;
+    background: rgba(0,0,0,0.8);
+    border-radius: 8px;
+    z-index: 10;
   }
   .hud-corners {
     border-radius: 4.22% / 8.44%;
