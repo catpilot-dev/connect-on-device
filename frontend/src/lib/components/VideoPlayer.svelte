@@ -16,7 +16,7 @@
    * 3. Direct .ts fallback (single segment for any remaining edge cases)
    */
 
-  /** @type {{ route: object, files: object, hudLiveUrl?: string|null, hdSource?: string|null, selectionStart?: number, selectionEnd?: number, currentTime?: number, duration?: number, onTimeUpdate?: (t: number) => void, onDurationChange?: (d: number) => void, onPlay?: () => void, onPause?: () => void, onSourceFail?: () => void }} */
+  /** @type {{ route: object, files: object, hudLiveUrl?: string|null, hdSource?: string|null, selectionStart?: number, selectionEnd?: number, currentTime?: number, duration?: number, onTimeUpdate?: (t: number) => void, onDurationChange?: (d: number) => void, onPlay?: () => void, onPause?: () => void }} */
   let {
     route,
     files,
@@ -33,7 +33,6 @@
     onPause,
     onHudStream,
     onHudDownload,
-    onSourceFail,
   } = $props()
 
   let videoEl = $state(null)
@@ -48,11 +47,10 @@
 
   // HD (fcamera) state
   let hdSegment = $state(-1)          // currently loaded HD segment
-  let hdSupported = $state(null)      // null = untested, true/false after first attempt
 
   // Track which video is active for control methods
   const showingHud = $derived(!!hudLiveUrl)
-  const showingHd = $derived(!!hdSource && !showingHud && hdSupported !== false)
+  const showingHd = $derived(!!hdSource && !showingHud)
   const activeVideo = $derived(showingHud ? hudVideoEl : showingHd ? hdVideoEl : videoEl)
 
   const posterUrl = $derived(route ? spriteUrl(route, 0) : null)
@@ -165,7 +163,9 @@
   }
 
   function handleHlsDurationChange() {
-    if (!videoEl || showingHud || showingHd) return
+    if (!videoEl || showingHud) return
+    // Always set duration from HLS — it knows total route length from manifest.
+    // HD player only loads individual 60s segments and can't determine total duration.
     duration = videoEl.duration
     onDurationChange?.(videoEl.duration)
   }
@@ -217,39 +217,19 @@
   // ── HD (fcamera) playback ────────────────────────────────
   const maxSegment = $derived(files?.qcameras ? files.qcameras.length - 1 : 0)
 
-  /** Check if browser can play HEVC in MP4 container */
-  function canPlayHevc() {
-    const v = document.createElement('video')
-    return !!(v.canPlayType('video/mp4; codecs="hev1.1.6.L93.B0"') ||
-              v.canPlayType('video/mp4; codecs="hvc1.1.6.L93.B0"'))
-  }
-
   function loadHdSegment(seg, seekOffset = 0) {
     if (!hdVideoEl || !route || !hdSource) return
     if (seg < 0 || seg > maxSegment) return
-
-    // Pre-check HEVC support on first attempt
-    if (hdSupported === null) {
-      if (!canPlayHevc()) {
-        hdSupported = false
-        onSourceFail?.()
-        return
-      }
-    }
 
     hdSegment = seg
     const url = cameraUrl(route.local_id, hdSource, seg)
     hdVideoEl.src = url
     hdVideoEl.load()
     hdVideoEl.addEventListener('loadedmetadata', () => {
-      hdSupported = true
       if (seekOffset > 0) hdVideoEl.currentTime = seekOffset
     }, { once: true })
     hdVideoEl.addEventListener('error', () => {
-      if (hdSupported !== true) {
-        hdSupported = false
-        onSourceFail?.()
-      }
+      console.warn('HD segment load error:', hdSource, seg)
     }, { once: true })
   }
 
@@ -293,7 +273,7 @@
     const leaving = !hdSource && !!prevHdSource
     prevHdSource = hdSource
 
-    if ((entering || switching) && hdVideoEl && !showingHud && hdSupported !== false) {
+    if ((entering || switching) && hdVideoEl && !showingHud) {
       // Entering or switching HD source — pause everything, load at same position
       videoEl?.pause()
       userWantsPause = true

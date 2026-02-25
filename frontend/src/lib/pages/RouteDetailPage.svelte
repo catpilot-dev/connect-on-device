@@ -76,6 +76,7 @@
 
   let screenshotBusy = $state(false)
   let isMuted = $state(true)
+  let hevcSupported = $state(null)  // null=checking, true/false
   let hdSource = $state(null)
 
   let noteText = $state('')
@@ -117,8 +118,9 @@
   const durationMs = $derived(route ? getRouteDurationMs(route) : 0)
   const durationMin = $derived(route?.maxqlog != null ? route.maxqlog + 1 : null)
   const bookmarks = $derived(timelineEvents.filter(e => e.type === 'user_flag').map(e => e.route_offset_millis))
+  // HD sources only available when HEVC is supported
   const sources = $derived.by(() => {
-    if (!files) return []
+    if (!files || !hevcSupported) return []
     const s = []
     if (files.cameras?.some(u => u)) s.push({ id: 'fcamera', label: 'Road' })
     if (files.ecameras?.some(u => u)) s.push({ id: 'ecamera', label: 'Wide' })
@@ -126,16 +128,21 @@
     return s
   })
 
-  // Auto-select fcamera on first load if available (falls back to SD via onSourceFail if HEVC unsupported)
+  // Auto-select fcamera when HEVC supported and sources become available
   let autoSourceDone = false
   $effect(() => {
-    if (!autoSourceDone && sources.length > 0 && hdSource === null) {
+    if (!autoSourceDone && hevcSupported && sources.length > 0 && hdSource === null) {
       autoSourceDone = true
       if (sources.some(s => s.id === 'fcamera')) hdSource = 'fcamera'
     }
   })
 
   onMount(async () => {
+    // Check HEVC support once at page level
+    const v = document.createElement('video')
+    hevcSupported = !!(v.canPlayType('video/mp4; codecs="hev1.1.6.L93.B0"') ||
+                       v.canPlayType('video/mp4; codecs="hvc1.1.6.L93.B0"'))
+
     const localId = $selectedRoute
     if (!localId) return
 
@@ -230,15 +237,11 @@
     hdSource = sourceId
   }
 
-  function handleSourceFail() {
-    hdSource = null
-  }
-
   async function handleScreenshot() {
     if (!route || screenshotBusy) return
     screenshotBusy = true
     try {
-      const res = await takeScreenshot(route.local_id, currentTime, hdSource || 'fcamera')
+      const res = await takeScreenshot(route.local_id, currentTime, hdSource || 'qcamera')
       const blob = await res.blob()
       // Extract filename from Content-Disposition header, or build fallback
       const cd = res.headers.get('Content-Disposition') || ''
@@ -678,7 +681,6 @@
             onTimeUpdate={handleTimeUpdate}
             onPlay={handlePlay}
             onPause={handlePause}
-            onSourceFail={handleSourceFail}
             onHudStream={!enriching && !hudMode ? handleHudStream : undefined}
             onHudDownload={!enriching && !hudMode ? handleHudDownload : undefined}
           />

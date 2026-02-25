@@ -31,7 +31,7 @@
   let showSourceMenu = $state(false)
   let playbackRate = $state(1)
 
-  const sourceLabel = $derived(hdSource ? sources.find(s => s.id === hdSource)?.label ?? 'HD' : 'SD')
+  const sourceLabel = $derived(sources.find(s => s.id === hdSource)?.label ?? 'HD')
 
   const speeds = [0.5, 1, 1.5, 2]
   const SKIP_STEP = 5
@@ -74,7 +74,7 @@
     {#if sources.length > 0}
       <div class="relative">
         <button
-          class="btn-ghost text-xs px-1.5 py-0.5 rounded {hdSource ? 'text-engage-green' : 'text-surface-400'}"
+          class="btn-ghost text-xs px-1.5 py-0.5 rounded text-engage-green"
           onclick={() => { showSourceMenu = !showSourceMenu; showSpeedMenu = false }}
           title="Video source"
         >
@@ -88,12 +88,6 @@
             role="menu"
             onclick={(e) => e.stopPropagation()}
           >
-            <button
-              class="block w-full text-left px-4 py-1.5 text-xs hover:bg-surface-700 transition-colors"
-              class:text-engage-blue={!hdSource}
-              role="menuitem"
-              onclick={() => { onSourceChange?.(null); showSourceMenu = false }}
-            >SD</button>
             {#each sources as src}
               <button
                 class="block w-full text-left px-4 py-1.5 text-xs hover:bg-surface-700 transition-colors"
