@@ -265,6 +265,7 @@ def main():
 
             replay_cmd = [
                 REPLAY_BIN, "-c", "1",
+                "--no-hw-decoder",
                 "-s", str(int(begin_at)),
                 "-x", str(REPLAY_SPEED),
                 "--no-loop",
