@@ -560,6 +560,25 @@
     return WIDGET_REGISTRY.find(w => w.id === id)
   }
 
+  // Engagement border color derived from timeline events at current playhead
+  const engagementColor = $derived.by(() => {
+    if (!timelineEvents.length) return null
+    const tMs = currentTime * 1000
+    let engaged = false, overriding = false, alertStatus = 0
+    for (const ev of timelineEvents) {
+      if (ev.end_route_offset_millis == null || ev.end_route_offset_millis <= tMs) continue
+      if (ev.route_offset_millis > tMs) continue
+      if (ev.type === 'engaged') engaged = true
+      else if (ev.type === 'overriding') overriding = true
+      else if (ev.type === 'alert') alertStatus = Math.max(alertStatus, ev.alertStatus ?? 1)
+    }
+    if (alertStatus === 2) return '#C92231'
+    if (overriding) return '#919B95'
+    if (alertStatus >= 1) return '#FE8C34'
+    if (engaged) return '#178644'
+    return '#173349'
+  })
+
   let reEnriching = $state(false)
 
   async function reEnrich() {
@@ -674,7 +693,8 @@
           class:rounded-xl={!hudLiveUrl}
           class:hud-corners={!!hudLiveUrl}
           class:recording-border-static={dlRendering && dlPhase !== 'recording'}
-          class:recording-border-blink={dlRendering && dlPhase === 'recording'}>
+          class:recording-border-blink={dlRendering && dlPhase === 'recording'}
+          style={!hudMode && engagementColor ? `border: 8px solid ${engagementColor}` : ''}>
           <VideoPlayer
             bind:this={videoPlayer}
             {route}
