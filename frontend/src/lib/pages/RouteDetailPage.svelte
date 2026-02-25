@@ -80,6 +80,7 @@
   let isMuted = $state(true)
   let hevcSupported = $state(null)  // null=checking, true/false
   let hdSource = $state(null)
+  let isFullscreen = $state(false)
 
   let noteText = $state('')
   let editingNote = $state(false)
@@ -140,7 +141,14 @@
     }
   })
 
+  function onFullscreenChange() {
+    isFullscreen = !!document.fullscreenElement
+  }
+
   onMount(async () => {
+    document.addEventListener('fullscreenchange', onFullscreenChange)
+    document.addEventListener('webkitfullscreenchange', onFullscreenChange)
+
     // Check HEVC support once at page level
     const v = document.createElement('video')
     hevcSupported = !!(v.canPlayType('video/mp4; codecs="hev1.1.6.L93.B0"') ||
@@ -184,6 +192,8 @@
   })
 
   onDestroy(() => {
+    document.removeEventListener('fullscreenchange', onFullscreenChange)
+    document.removeEventListener('webkitfullscreenchange', onFullscreenChange)
     // Stop HUD stream if active when navigating away
     if (hudPollTimer) { clearInterval(hudPollTimer); hudPollTimer = null }
     if (dlPollTimer) { clearInterval(dlPollTimer); dlPollTimer = null }
@@ -639,7 +649,7 @@
   }
 </script>
 
-<div class="mx-auto w-[90%] min-w-[80%] max-w-screen-2xl px-4 py-4">
+<div class="mx-auto w-full sm:w-[90%] max-w-screen-2xl px-2 sm:px-4 py-2 sm:py-4">
   <!-- Back button -->
   <div class="flex items-center gap-3 mb-3">
     <button class="btn-ghost -ml-2 text-sm" onclick={goBack}>
@@ -663,38 +673,40 @@
       <p class="text-surface-400">{error}</p>
     </div>
   {:else if route}
-    <div class="grid grid-cols-1 md:grid-cols-[2fr_1fr] gap-4">
+    <div class="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-2 sm:gap-4">
       <!-- Video player + controls -->
-      <div class="space-y-2" data-video-container>
-        {#if enriching}
-          <div class="space-y-1">
-            <div class="h-2 bg-surface-700 rounded-full overflow-hidden">
-              <div
-                class="h-full bg-engage-green rounded-full transition-all duration-300"
-                style="width: {(enrichDone / enrichTotal) * 100}%"
-              ></div>
+      <div class:space-y-2={!isFullscreen} class:fullscreen-container={isFullscreen} data-video-container>
+        {#if !isFullscreen}
+          {#if enriching}
+            <div class="space-y-1">
+              <div class="h-2 bg-surface-700 rounded-full overflow-hidden">
+                <div
+                  class="h-full bg-engage-green rounded-full transition-all duration-300"
+                  style="width: {(enrichDone / enrichTotal) * 100}%"
+                ></div>
+              </div>
+              <p class="text-xs text-surface-400 text-center">Enriching segments {enrichDone}/{enrichTotal}</p>
             </div>
-            <p class="text-xs text-surface-400 text-center">Enriching segments {enrichDone}/{enrichTotal}</p>
-          </div>
-        {:else}
-          <VideoTimeline
-            {route}
-            {currentTime}
-            {duration}
-            events={timelineEvents}
-            {durationMs}
-            onSeek={handleSeek}
-            bind:selectionStart
-            bind:selectionEnd
-          />
+          {:else}
+            <VideoTimeline
+              {route}
+              {currentTime}
+              {duration}
+              events={timelineEvents}
+              {durationMs}
+              onSeek={handleSeek}
+              bind:selectionStart
+              bind:selectionEnd
+            />
+          {/if}
         {/if}
 
-        <div class="overflow-hidden"
-          class:rounded-xl={!hudLiveUrl}
+        <div class="overflow-hidden" class:fullscreen-video={isFullscreen}
+          class:rounded-xl={!hudLiveUrl && !isFullscreen}
           class:hud-corners={!!hudLiveUrl}
           class:recording-border-static={dlRendering && dlPhase !== 'recording'}
           class:recording-border-blink={dlRendering && dlPhase === 'recording'}
-          style={!hudMode && engagementColor ? `border: 8px solid ${engagementColor}` : ''}>
+          style={!hudMode && engagementColor && !isFullscreen ? `border: 8px solid ${engagementColor}` : ''}>
           <VideoPlayer
             bind:this={videoPlayer}
             {route}
@@ -713,6 +725,10 @@
             onHudDownload={!enriching && !hudMode ? handleHudDownload : undefined}
           />
         </div>
+
+        {#if isFullscreen && engagementColor}
+          <div class="h-1 w-full transition-colors duration-300" style="background: {engagementColor}"></div>
+        {/if}
 
         {#if !enriching}
           {#if hudMode === 'stream'}
@@ -796,8 +812,8 @@
       </div>
 
       <!-- Tabbed info panel -->
-      <div class="card md:h-full">
-        <Tabs.Root bind:value={activeTab} class="md:h-full md:grid md:grid-rows-[auto_1fr]">
+      <div class="card lg:h-full">
+        <Tabs.Root bind:value={activeTab} class="lg:h-full lg:grid lg:grid-rows-[auto_1fr]">
           <Tabs.List class="flex border-b border-surface-700/50">
             {#each [['map','Map'],['route','Route'],['dashboard','Dashboard'],['note','Note']] as [id, label]}
               <Tabs.Trigger value={id}
@@ -808,7 +824,7 @@
           </Tabs.List>
 
           <!-- Map tab -->
-          <Tabs.Content value="map" class="pt-2 md:h-full md:overflow-hidden">
+          <Tabs.Content value="map" class="pt-2 lg:h-full lg:overflow-hidden">
             <RouteMap
               {coords}
               events={timelineEvents}
@@ -824,7 +840,7 @@
 
           <!-- Route tab -->
           <Tabs.Content value="route" class="pt-2">
-            <div class="flex flex-col md:h-full pt-1">
+            <div class="flex flex-col lg:h-full pt-1">
               <div class="px-4 grid grid-cols-2 gap-2 text-sm">
                 {#if route.platform}
                   <div>
@@ -1052,6 +1068,23 @@
 </div>
 
 <style>
+  .fullscreen-container {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    height: 100dvh; /* dynamic viewport height — excludes mobile browser chrome */
+    background: black;
+    gap: 0;
+  }
+  .fullscreen-video {
+    flex: 1;
+    min-height: 0;
+  }
+  .fullscreen-video :global(> div) {
+    /* Override the fixed aspect-ratio so video fills available space */
+    aspect-ratio: unset !important;
+    height: 100%;
+  }
   .hud-corners {
     border-radius: 4.22% / 8.44%;
   }
