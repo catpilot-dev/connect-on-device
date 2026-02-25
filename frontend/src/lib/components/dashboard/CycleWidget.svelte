@@ -2,7 +2,7 @@
   import { onMount } from 'svelte'
   import { fetchParams, setParam } from '../../api.js'
 
-  let { paramKey = '', values = [], labels = [], unit = '' } = $props()
+  let { paramKey = '', values = [], labels = [], colors = [], unit = '' } = $props()
 
   let idx = $state(0)
   let saving = $state(false)
@@ -10,6 +10,7 @@
   const displayLabels = $derived(labels.length ? labels : values.map(String))
   const displayText = $derived(displayLabels[idx] ?? '?')
   const cqi = $derived(Math.min(50, 120 / displayText.length))
+  const color = $derived(colors[idx] ?? '#e2e8f0')
 
   onMount(async () => {
     try {
@@ -39,7 +40,7 @@
   {#if unit}
     <span class="cycle-unit">{unit}</span>
   {/if}
-  <span class="cycle-value" style="font-size: clamp(2rem, {cqi}cqi, 14rem)">
+  <span class="cycle-value" style="font-size: clamp(2rem, {cqi}cqi, 14rem); color: {color}">
     {displayText}
   </span>
 </button>

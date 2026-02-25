@@ -40,10 +40,12 @@ export const WIDGET_REGISTRY = [
   // ── Quick Settings ──
   { id: 'speed_offset', label: 'Speed Offset', category: 'Settings',
     type: 'cycle', paramKey: 'MapdSpeedLimitOffsetPercent',
-    values: ['0', '5', '10', '15'], unit: '%' },
+    values: ['0', '5', '10', '15'], unit: '%',
+    colors: ['#22c55e', '#22c55e', '#eab308', '#ef4444'] },
   { id: 'curve_comfort', label: 'Curve Comfort', category: 'Settings',
     type: 'cycle', paramKey: 'MapdCurveTargetLatAccel',
-    values: ['0', '1', '2', '3'], labels: ['1.5', '2.0', '2.5', '3.0'], unit: 'm/s²' },
+    values: ['0', '1', '2', '3'], labels: ['1.5', '2.0', '2.5', '3.0'], unit: 'm/s²',
+    colors: ['#22c55e', '#22c55e', '#eab308', '#ef4444'] },
 
   // ── Sparkline Charts ──
   { id: 'speed_chart', label: 'Speed Chart', icon: ICONS.chart, category: 'Charts',

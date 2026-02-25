@@ -187,6 +187,7 @@
               paramKey={def.paramKey}
               values={def.values}
               labels={def.labels ?? []}
+              colors={def.colors ?? []}
               unit={def.unit ?? ''}
             />
           {/if}
