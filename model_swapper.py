@@ -7,6 +7,7 @@ Handles two independent model types:
 """
 import shutil
 import json
+import subprocess
 from pathlib import Path
 from enum import Enum
 
@@ -33,7 +34,21 @@ class ModelSwapper:
 
     # Base paths
     BASE_DATA_DIR = Path('/data') if Path('/data').exists() else Path.home() / 'driving_data'
-    ACTIVE_DIR = Path('/data/openpilot/selfdrive/modeld/models')
+    OPENPILOT_DIR = Path('/data/openpilot') if Path('/data/openpilot').exists() else Path.home() / 'openpilot'
+    ACTIVE_DIR = OPENPILOT_DIR / 'selfdrive' / 'modeld' / 'models'
+
+    @staticmethod
+    def get_tinygrad_commit() -> str:
+        """Get current tinygrad_repo commit hash (short)."""
+        tinygrad_dir = ModelSwapper.OPENPILOT_DIR / 'tinygrad_repo'
+        try:
+            result = subprocess.run(
+                ['git', '-C', str(tinygrad_dir), 'rev-parse', '--short', 'HEAD'],
+                capture_output=True, text=True, timeout=5,
+            )
+            return result.stdout.strip() if result.returncode == 0 else ''
+        except Exception:
+            return ''
 
     # Model type configurations
     MODEL_CONFIGS = {
@@ -187,8 +202,19 @@ class ModelSwapper:
                 f"Model '{model_id}' is missing required ONNX files: {', '.join(missing_onnx)}"
             )
 
-        # Check which PKL files are available
-        available_pkl = [f for f in self.pkl_files if (source_dir / f).exists()]
+        # Check tinygrad compatibility for cached PKL files
+        current_tg = self.get_tinygrad_commit()
+        cached_tg = ''
+        tg_file = source_dir / '.tinygrad_commit'
+        if tg_file.exists():
+            cached_tg = tg_file.read_text().strip()
+
+        pkl_compatible = bool(current_tg and cached_tg and current_tg == cached_tg)
+
+        # Only use cached PKL if tinygrad version matches
+        available_pkl = []
+        if pkl_compatible:
+            available_pkl = [f for f in self.pkl_files if (source_dir / f).exists()]
 
         # STEP 3: Copy ONNX and PKL files to selfdrive/modeld/models/
         copied_files = []
@@ -197,25 +223,21 @@ class ModelSwapper:
         for filename in self.onnx_files:
             src = source_dir / filename
             dst = self.ACTIVE_DIR / filename
-
-            # Remove old file/symlink if exists
             if dst.exists() or dst.is_symlink():
                 dst.unlink()
-
-            # Copy the file
             shutil.copy2(src, dst)
             copied_files.append(filename)
 
-        # Copy PKL files if available (otherwise openpilot will compile at boot)
-        for filename in available_pkl:
-            src = source_dir / filename
+        # Remove stale PKL files from runtime dir (force recompile if incompatible)
+        for filename in self.pkl_files:
             dst = self.ACTIVE_DIR / filename
-
-            # Remove old file/symlink if exists
             if dst.exists() or dst.is_symlink():
                 dst.unlink()
 
-            # Copy the file
+        # Copy compatible PKL files if available
+        for filename in available_pkl:
+            src = source_dir / filename
+            dst = self.ACTIVE_DIR / filename
             shutil.copy2(src, dst)
             copied_files.append(filename)
 
@@ -231,6 +253,7 @@ class ModelSwapper:
         active_data = {
             'id': model_id,
             'name': info.get('name', model_id) if info else model_id,
+            'tinygrad': current_tg,
         }
         with open(self.active_model_file, 'w') as f:
             json.dump(active_data, f)
@@ -245,7 +268,15 @@ class ModelSwapper:
             'cached_pkl_files': len(available_pkl),
             'total_pkl_files': len(self.pkl_files),
             'needs_compilation': needs_compilation,
-            'compilation_note': 'openpilot will compile ONNX→PKL on first boot' if needs_compilation else 'using cached PKL files',
+            'compilation_note': (
+                f'PKL cache built by tinygrad {cached_tg}, current is {current_tg} — will recompile'
+                if cached_tg and not pkl_compatible
+                else 'openpilot will compile ONNX→PKL on first boot' if needs_compilation
+                else 'using cached PKL files'
+            ),
+            'tinygrad_commit': current_tg,
+            'pkl_tinygrad': cached_tg,
+            'pkl_compatible': pkl_compatible,
             'requires_reboot': True,
             'reboot_note': 'Reboot required to activate new model',
             'previous_model_cached': cached_count
@@ -286,6 +317,12 @@ class ModelSwapper:
             if active_file.exists() and not active_file.is_symlink() and not cached_file.exists():
                 shutil.copy2(active_file, cached_file)
                 cached_count += 1
+
+        # Record which tinygrad built these PKL files
+        if cached_count > 0:
+            tg_commit = self.get_tinygrad_commit()
+            if tg_commit:
+                (source_dir / '.tinygrad_commit').write_text(tg_commit)
 
         return cached_count
 
