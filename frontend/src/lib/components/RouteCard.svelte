@@ -1,16 +1,11 @@
 <script>
-  import { onMount } from 'svelte'
   import { selectedRoute } from '../stores.js'
   import { formatDate, formatTimeRange, formatDuration, formatDistance, getRouteDurationMs } from '../format.js'
-  import { fetchAllEvents } from '../api.js'
-  import { buildTimelineEvents } from '../derived.js'
   import Filmstrip from './Filmstrip.svelte'
   import EventTimeline from './EventTimeline.svelte'
 
   /** @type {{ route: object }} */
   let { route } = $props()
-
-  let timelineEvents = $state([])
 
   const durationMin = $derived(
     route.maxqlog != null ? route.maxqlog + 1 : null
@@ -18,14 +13,7 @@
   const durationMs = $derived(getRouteDurationMs(route))
 
   const hasEnrichedData = $derived(route.engagement_pct != null)
-
-  onMount(() => {
-    if (hasEnrichedData) {
-      fetchAllEvents(route).then(raw => {
-        timelineEvents = buildTimelineEvents(raw, durationMs)
-      }).catch(() => {})
-    }
-  })
+  const timelineEvents = $derived(route.timeline ?? [])
 
   function handleClick() {
     selectedRoute.set(route.local_id)

@@ -9,7 +9,7 @@ from aiohttp import web
 
 from handler_helpers import get_route_or_404
 from rlog_parser import _generate_coords_json, _generate_events_json
-from route_helpers import _base_url, _clean_route, _resolve_local_id, _route_bookmarks, _route_engagement, _set_route_url
+from route_helpers import _base_url, _clean_route, _resolve_local_id, _route_bookmarks, _route_engagement, _route_timeline_summary, _set_route_url
 from route_store import _route_counter
 from storage_management import DOWNLOAD_FILES, build_download_tar
 
@@ -41,6 +41,11 @@ async def handle_routes_list(request: web.Request) -> web.Response:
         cleaned = _clean_route(r_with_url)
         cleaned["route_counter"] = counter
         cleaned["is_preserved"] = store.is_preserved(r["_local_id"])
+        # Include pre-built timeline for enriched routes (saves N*M HTTP requests)
+        if cleaned.get("engagement_pct") is not None:
+            timeline = _route_timeline_summary(r)
+            if timeline is not None:
+                cleaned["timeline"] = timeline
         route_list.append(cleaned)
         if len(route_list) >= limit:
             break

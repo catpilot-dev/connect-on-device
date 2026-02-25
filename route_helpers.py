@@ -102,3 +102,97 @@ def _route_bookmarks(route: dict) -> list[int]:
         except Exception:
             pass
     return sorted(bookmarks)
+
+
+_OVERRIDING_STATES = {"overriding", "preEnabled"}
+
+
+def _route_timeline_summary(route: dict) -> list[dict] | None:
+    """Build compact timeline spans from cached events.json files.
+
+    Mirrors the buildTimelineEvents() state machine in derived.js.
+    Returns list of timeline span dicts ready for EventTimeline component,
+    or None if no cached events exist (route not yet enriched).
+
+    Each span: {type, route_offset_millis, end_route_offset_millis, [alertStatus]}
+    """
+    all_events = []
+    has_any = False
+    for seg in route.get("_segments", []):
+        events_path = Path(seg["path"]) / "events.json"
+        if not events_path.exists():
+            continue
+        try:
+            all_events.extend(json.loads(events_path.read_text()))
+            has_any = True
+        except Exception:
+            pass
+
+    if not has_any:
+        return None
+
+    all_events.sort(key=lambda e: e.get("route_offset_millis", 0))
+
+    result = []
+    last_engaged = None
+    last_alert = None
+    last_override = None
+
+    for ev in all_events:
+        if ev.get("type") == "user_flag":
+            result.append({"type": "user_flag", "route_offset_millis": ev["route_offset_millis"]})
+            continue
+
+        if ev.get("type") != "state":
+            continue
+
+        data = ev.get("data", {})
+        enabled = data.get("enabled", False)
+        alert_status = data.get("alertStatus", 0)
+        state = data.get("state", "")
+        offset = ev.get("route_offset_millis", 0)
+
+        # Engaged spans
+        if last_engaged and not enabled:
+            result.append({
+                "type": "engaged",
+                "route_offset_millis": last_engaged["route_offset_millis"],
+                "end_route_offset_millis": offset,
+            })
+            last_engaged = None
+        if not last_engaged and enabled:
+            last_engaged = ev
+
+        # Alert spans
+        if last_alert and last_alert.get("data", {}).get("alertStatus") != alert_status:
+            result.append({
+                "type": "alert",
+                "route_offset_millis": last_alert["route_offset_millis"],
+                "end_route_offset_millis": offset,
+                "alertStatus": last_alert["data"]["alertStatus"],
+            })
+            last_alert = None
+        if not last_alert and alert_status != 0:
+            last_alert = ev
+
+        # Override spans
+        if last_override and state not in _OVERRIDING_STATES:
+            result.append({
+                "type": "overriding",
+                "route_offset_millis": last_override["route_offset_millis"],
+                "end_route_offset_millis": offset,
+            })
+            last_override = None
+        if not last_override and state in _OVERRIDING_STATES:
+            last_override = ev
+
+    # Close trailing spans at route end
+    end_ms = (route.get("maxqlog", 0) + 1) * 60_000
+    if last_engaged:
+        result.append({"type": "engaged", "route_offset_millis": last_engaged["route_offset_millis"], "end_route_offset_millis": end_ms})
+    if last_alert:
+        result.append({"type": "alert", "route_offset_millis": last_alert["route_offset_millis"], "end_route_offset_millis": end_ms, "alertStatus": last_alert["data"]["alertStatus"]})
+    if last_override:
+        result.append({"type": "overriding", "route_offset_millis": last_override["route_offset_millis"], "end_route_offset_millis": end_ms})
+
+    return result
