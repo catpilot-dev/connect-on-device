@@ -86,6 +86,7 @@ async def handle_toggles_set(request: web.Request) -> web.Response:
 
 
 BMW_PARAMS = {
+    "LongitudinalPersonality": {"type": "int", "label": "Driving Personality", "default": 2},
     "DccCalibrationMode": {"type": "bool", "label": "DCC Calibration Mode"},
     "LaneCenteringCorrection": {"type": "bool", "label": "Lane Centering Correction"},
     "MapdSpeedLimitControlEnabled": {"type": "bool", "label": "Map Speed Limit Control"},
@@ -186,7 +187,7 @@ async def handle_params_get(request: web.Request) -> web.Response:
         if meta["type"] == "bool":
             result[key] = raw == "1"
         elif meta["type"] == "int":
-            result[key] = int(raw) if raw else 0
+            result[key] = int(raw) if raw else meta.get("default", 0)
         else:
             result[key] = raw
     return web.json_response(result)

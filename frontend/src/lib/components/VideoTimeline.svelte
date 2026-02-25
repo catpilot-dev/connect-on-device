@@ -55,9 +55,18 @@
   const currentSeg = $derived(Math.floor(currentTime / 60))
   const totalSegs = $derived(route?.maxqlog != null ? route.maxqlog + 1 : Math.ceil(duration / 60))
 
-  const filmstripSegs = $derived(
-    Array.from({ length: totalSegs }, (_, i) => i)
-  )
+  const SPRITE_COUNT = 20
+  // Distribute sprites evenly by time across the route, regardless of segment count
+  const filmstripSlots = $derived(() => {
+    if (duration <= 0) return []
+    const step = duration / SPRITE_COUNT
+    return Array.from({ length: SPRITE_COUNT }, (_, i) => {
+      const t = i * step + step / 2  // center of each slot
+      const seg = Math.min(Math.floor(t / 60), totalSegs - 1)
+      const secInSeg = Math.floor(t % 60)
+      return { seg, t: secInSeg }
+    })
+  })
 
   function getTimeFromEvent(e) {
     if (!timelineEl || duration <= 0) return 0
@@ -181,14 +190,14 @@
   >
     <!-- Filmstrip background -->
     <div class="absolute inset-0 flex opacity-40">
-      {#each filmstripSegs as seg}
-        <div class="flex-1 min-w-0 overflow-hidden">
+      {#each filmstripSlots() as slot}
+        <div class="flex-1 min-w-0 overflow-hidden bg-surface-800">
           <img
-            src={spriteUrl(route, seg)}
+            src={spriteUrl(route, slot.seg, slot.t)}
             alt=""
             class="w-full h-full object-cover"
             loading="lazy"
-            onerror={(e) => e.target.style.visibility = 'hidden'}
+            onerror={(e) => e.target.style.display = 'none'}
           />
         </div>
       {/each}

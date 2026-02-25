@@ -4,7 +4,6 @@
   /** @type {{ route: object, maxSegment: number, onclick?: (seg: number) => void }} */
   let { route, maxSegment = 0, onclick } = $props()
 
-
   let container = $state(null)
   let imageCount = $state(4)
 
@@ -18,25 +17,30 @@
     return () => ro.disconnect()
   })
 
-  // Always show imageCount thumbnails, distributed evenly across segments
-  const segments = $derived(() => {
-    const count = maxSegment + 1
-    const step = (count - 1) / (imageCount - 1)
-    return Array.from({ length: imageCount }, (_, i) => Math.min(Math.round(i * step), maxSegment))
+  // Distribute thumbnails evenly across route duration, regardless of segment count
+  const slots = $derived(() => {
+    const totalSegs = maxSegment + 1
+    const duration = totalSegs * 60 // approximate duration in seconds
+    const step = duration / imageCount
+    return Array.from({ length: imageCount }, (_, i) => {
+      const t = i * step + step / 2
+      const seg = Math.min(Math.floor(t / 60), totalSegs - 1)
+      const secInSeg = Math.floor(t % 60)
+      return { seg, t: secInSeg }
+    })
   })
 </script>
 
-<div bind:this={container} class="flex gap-0.5 overflow-hidden rounded-t-lg">
-  {#each segments() as seg}
+<div bind:this={container} class="flex overflow-hidden rounded-t-lg h-10">
+  {#each slots() as slot}
     <button
-      class="flex-1 min-w-0 aspect-[16/9] bg-surface-700 overflow-hidden cursor-pointer hover:opacity-80 transition-opacity relative"
-      onclick={() => onclick?.(seg)}
+      class="flex-1 min-w-0 h-full bg-surface-700 overflow-hidden cursor-pointer hover:opacity-80 transition-opacity"
+      onclick={() => onclick?.(slot.seg)}
     >
-      <span class="absolute inset-0 flex items-center justify-center text-[10px] text-surface-500">{seg}</span>
       <img
-        src={spriteUrl(route, seg)}
-        alt="Segment {seg}"
-        class="w-full h-full object-cover relative"
+        src={spriteUrl(route, slot.seg, slot.t)}
+        alt=""
+        class="w-full h-full object-cover"
         loading="lazy"
         onerror={(e) => e.target.style.display = 'none'}
       />

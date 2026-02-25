@@ -403,29 +403,45 @@ async def handle_connectdata(request: web.Request) -> web.Response:
 
     file_path = store.resolve_segment_path(fullname, seg_int, filename)
 
-    # Generate sprite.jpg on demand from qcamera.ts
-    # Skip to 5s to avoid black camera-init frames; fall back to 1s if too short
-    if not file_path and filename == "sprite.jpg":
-        qcam = store.resolve_segment_path(fullname, seg_int, "qcamera.ts")
-        if qcam:
-            sprite_path = qcam.parent / "sprite.jpg"
-            loop = asyncio.get_event_loop()
-            for seek in ["5", "1", "0"]:
-                try:
-                    proc = await loop.run_in_executor(
-                        None,
-                        lambda s=seek: subprocess.run(
-                            ["ffmpeg", "-y", "-ss", s, "-i", str(qcam),
-                             "-vframes", "1", "-q:v", "5", "-vf", "scale=480:-1",
-                             "-f", "image2", str(sprite_path)],
-                            capture_output=True, timeout=10,
-                        ),
-                    )
-                    if proc.returncode == 0 and sprite_path.exists() and sprite_path.stat().st_size > 1000:
-                        file_path = sprite_path
-                        break
-                except Exception:
-                    pass
+    # Generate sprite on demand from qcamera.ts
+    # ?t=N extracts frame at N seconds into the segment (default: 5s)
+    # Cached as sprite.jpg (default) or sprite_{t}.jpg (custom time)
+    if filename == "sprite.jpg":
+        seek_t = request.query.get("t", "5")
+        try:
+            seek_val = max(0, min(59, int(seek_t)))
+        except ValueError:
+            seek_val = 5
+        cache_name = "sprite.jpg" if seek_val == 5 else f"sprite_{seek_val}.jpg"
+        # For non-default time, check the specific cache file instead
+        if seek_val != 5 or not file_path:
+            qcam = store.resolve_segment_path(fullname, seg_int, "qcamera.ts")
+            if qcam:
+                sprite_path = qcam.parent / cache_name
+                if sprite_path.exists() and sprite_path.stat().st_size > 1000:
+                    file_path = sprite_path
+                else:
+                    loop = asyncio.get_event_loop()
+                    seeks = [str(seek_val)] if seek_val > 0 else ["0"]
+                    if seek_val > 1:
+                        seeks.append("1")
+                    seeks.append("0")
+                    for s in seeks:
+                        try:
+                            proc = await loop.run_in_executor(
+                                None,
+                                lambda s=s: subprocess.run(
+                                    ["ffmpeg", "-y", "-ss", s, "-i", str(qcam),
+                                     "-vframes", "1", "-q:v", "5", "-vf", "scale=480:-1",
+                                     "-f", "image2", str(sprite_path)],
+                                    capture_output=True, timeout=10,
+                                ),
+                            )
+                            if proc.returncode == 0 and sprite_path.exists() and sprite_path.stat().st_size > 1000:
+                                file_path = sprite_path
+                                break
+                        except Exception:
+                            pass
 
     if not file_path:
         raise web.HTTPNotFound()
