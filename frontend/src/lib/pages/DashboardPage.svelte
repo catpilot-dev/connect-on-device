@@ -97,20 +97,17 @@
   })
 </script>
 
-<div class="mx-auto max-w-6xl px-4 py-4 flex flex-col gap-4">
+<div class="mx-auto w-full sm:w-[90%] max-w-screen-2xl px-2 sm:px-4 py-2 sm:py-4 flex flex-col gap-4">
   <!-- Header row -->
   <div class="flex items-center justify-between flex-wrap gap-3">
-    <div class="flex items-center gap-2">
-      <h2 class="text-sm font-medium text-surface-200">{isOnroad ? 'Live Dashboard' : 'Dashboard'}</h2>
-      <div class="flex items-center gap-1.5 text-sm">
-        {#if isOnroad}
-          <div class="w-2 h-2 rounded-full {liveConnected ? 'bg-engage-green' : 'bg-engage-red'}"></div>
-          <span class="text-surface-400">{liveConnected ? 'Live' : 'Connecting...'}</span>
-        {:else}
-          <div class="w-2 h-2 rounded-full bg-surface-500"></div>
-          <span class="text-surface-400">Offline</span>
-        {/if}
-      </div>
+    <div class="flex items-center gap-1.5 text-sm">
+      {#if isOnroad}
+        <div class="w-2 h-2 rounded-full {liveConnected ? 'bg-engage-green' : 'bg-engage-red'}"></div>
+        <span class="text-surface-400">{liveConnected ? 'Live' : 'Connecting...'}</span>
+      {:else}
+        <div class="w-2 h-2 rounded-full bg-surface-500"></div>
+        <span class="text-surface-400">Offline</span>
+      {/if}
     </div>
 
     <button

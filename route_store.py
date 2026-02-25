@@ -134,6 +134,7 @@ class RouteStore:
         self._metadata_path = Path(data_dir) / METADATA_FILE
         self._agnos_version: str | None = None
         self._executor = ThreadPoolExecutor(max_workers=1)
+        self._bg_scanning = False
 
         self._load_metadata()
         self._detect_dongle_id()
@@ -781,12 +782,32 @@ class RouteStore:
         return self._routes
 
     async def async_scan(self, force: bool = False) -> dict:
-        """Non-blocking scan — returns cache if fresh, else runs in thread."""
+        """Non-blocking scan — returns stale cache instantly, refreshes in background.
+
+        Never blocks the caller. If cache is expired, kicks off a background
+        thread scan and returns the (stale) cached data immediately. The next
+        request after the scan completes will see fresh data.
+        """
         if not force and (time.time() - self._last_scan) < CACHE_TTL:
             return self._routes
         import asyncio
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, lambda: self.scan(force=force))
+        if force or not self._routes:
+            # First scan or forced — must wait for data
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(None, lambda: self.scan(force=force))
+        # Stale cache — return immediately, refresh in background
+        if not self._bg_scanning:
+            self._bg_scanning = True
+            loop = asyncio.get_event_loop()
+            loop.run_in_executor(None, self._bg_scan)
+        return self._routes
+
+    def _bg_scan(self):
+        """Background scan worker — updates cache, resets flag."""
+        try:
+            self.scan()
+        finally:
+            self._bg_scanning = False
 
     @property
     def dongle_id(self):

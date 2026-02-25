@@ -10,14 +10,18 @@
     }
     return thresholds[0]?.color ?? '#e2e8f0'
   })
+
+  const displayText = $derived(displayValue.toFixed(decimals))
+  // Scale font to fit: ~50cqi for 2-3 chars, shrink for wider values
+  const cqi = $derived(Math.min(50, 120 / displayText.length))
 </script>
 
 <div class="digits-widget">
   {#if unit}
     <span class="digits-unit">{unit}</span>
   {/if}
-  <span class="digits-value" style="color: {color}">
-    {displayValue.toFixed(decimals)}
+  <span class="digits-value" style="color: {color}; font-size: clamp(2rem, {cqi}cqi, 14rem)">
+    {displayText}
   </span>
 </div>
 
@@ -32,7 +36,6 @@
   .digits-value {
     font-weight: 700;
     font-variant-numeric: tabular-nums;
-    font-size: clamp(3rem, 28cqi, 10rem);
     line-height: 1;
   }
   .digits-unit {
