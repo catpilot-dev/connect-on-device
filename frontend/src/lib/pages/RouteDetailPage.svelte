@@ -111,7 +111,8 @@
 
   let enrichDone = $state(0)
   let enrichTotal = $state(0)
-  const enriching = $derived(enrichTotal > 0 && enrichDone < enrichTotal)
+  let enrichNeeded = $state(false)  // true only when events.json not yet cached on server
+  const enriching = $derived(enrichNeeded && enrichTotal > 0 && enrichDone < enrichTotal)
 
   let videoPlayer = $state(null)
 
@@ -165,12 +166,14 @@
       // Fetch coords and events in background (non-blocking)
       fetchAllCoords(r).then(c => coords = c).catch(() => {})
       enrichTotal = (r.maxqlog ?? 0) + 1
+      enrichNeeded = !r.events_cached
       fetchAllEventsWithProgress(r, (done, total) => {
         enrichDone = done
         enrichTotal = total
       }).then(raw => {
+        enrichNeeded = false
         timelineEvents = buildTimelineEvents(raw, getRouteDurationMs(r))
-      }).catch(() => {})
+      }).catch(() => { enrichNeeded = false })
     } catch (e) {
       error = e.message
     } finally {

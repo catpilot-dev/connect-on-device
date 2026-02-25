@@ -458,10 +458,10 @@
     Your browser does not support video playback.
   </video>
 
-  <!-- HUD live stream video element -->
+  <!-- HUD live stream video element (object-contain: HUD is 2160x1080 vs 1928x1208 container) -->
   <video
     bind:this={hudVideoEl}
-    class="absolute inset-0 w-full h-full object-cover"
+    class="absolute inset-0 w-full h-full object-contain"
     class:hidden={!showingHud}
     muted
     playsinline

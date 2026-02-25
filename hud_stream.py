@@ -289,6 +289,7 @@ class HudStreamManager:
 
             replay_proc = subprocess.Popen(
                 [REPLAY_BIN, "-c", "1",
+                 "--no-hw-decoder",
                  "-s", str(int(max(start_sec, 0))),
                  "-x", str(DRM_REPLAY_SPEED),
                  "--data_dir", self._symlink_dir,

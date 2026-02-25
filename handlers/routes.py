@@ -143,9 +143,17 @@ async def handle_route_get(request: web.Request) -> web.Response:
     # Collect bookmarks from cached events.json (no rlog parsing needed)
     bookmarks = _route_bookmarks(route)
 
+    # Check if all events.json are cached (so frontend skips progress bar)
+    max_seg = route.get("maxqlog", 0)
+    events_cached = all(
+        (store.data_dir / f"{local_id}--{i}" / "events.json").exists()
+        for i in range(max_seg + 1)
+    )
+
     r_with_url = _set_route_url(route, request)
     cleaned = _clean_route(r_with_url)
     cleaned["is_preserved"] = store.is_preserved(local_id)
+    cleaned["events_cached"] = events_cached
     if bookmarks:
         cleaned["bookmarks"] = bookmarks
     return web.json_response(cleaned)
