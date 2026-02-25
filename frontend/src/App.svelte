@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte'
-  import { dongleId, selectedRoute } from './lib/stores.js'
-  import { fetchDevices, fetchIsOnroad } from './lib/api.js'
+  import { dongleId, selectedRoute, isMetric } from './lib/stores.js'
+  import { fetchDevices, fetchIsOnroad, fetchParams } from './lib/api.js'
   import DeviceHeader from './lib/components/DeviceHeader.svelte'
   import RouteListPage from './lib/pages/RouteListPage.svelte'
   import RouteDetailPage from './lib/pages/RouteDetailPage.svelte'
@@ -31,14 +31,20 @@
   }
 
   onMount(async () => {
-    isOnroad = await fetchIsOnroad().catch(() => false)
-    try {
-      const devices = await fetchDevices()
-      if (devices?.length > 0) {
-        dongleId.set(devices[0].dongle_id)
-      }
-    } catch (e) {
-      error = e.message
+    // Fetch all startup data in parallel
+    const [onroadResult, devicesResult, paramsResult] = await Promise.allSettled([
+      fetchIsOnroad(),
+      fetchDevices(),
+      fetchParams(),
+    ])
+    isOnroad = onroadResult.status === 'fulfilled' ? onroadResult.value : false
+    if (devicesResult.status === 'fulfilled' && devicesResult.value?.length > 0) {
+      dongleId.set(devicesResult.value[0].dongle_id)
+    } else if (devicesResult.status === 'rejected') {
+      error = devicesResult.reason?.message ?? 'Connection error'
+    }
+    if (paramsResult.status === 'fulfilled') {
+      isMetric.set(paramsResult.value.IsMetric !== '0')
     }
 
     // Restore state from URL on load
