@@ -1,5 +1,5 @@
 <script>
-  let { sdState = '', sdEnabled = false, cruiseSpeed = 0 } = $props()
+  let { sdState = '', sdEnabled = false, cruiseSpeed = 0, isMetric = true } = $props()
 
   const stateLabel = $derived({
     'preEnabled': 'Pre-Enabled',
@@ -17,7 +17,8 @@
     'disabled': 'bg-surface-600 text-surface-300',
   }[sdState] || 'bg-surface-600 text-surface-300')
 
-  const speedKmh = $derived(cruiseSpeed * 3.6)
+  const displaySpeed = $derived(cruiseSpeed * (isMetric ? 3.6 : 2.237))
+  const speedUnit = $derived(isMetric ? 'km/h' : 'mph')
 </script>
 
 <div class="flex flex-col items-center justify-center h-full min-h-[80px] gap-2">
@@ -29,8 +30,8 @@
   <!-- Cruise setpoint -->
   {#if cruiseSpeed > 0}
     <div class="flex items-baseline gap-1">
-      <span class="text-xl font-bold tabular-nums text-surface-200">{speedKmh.toFixed(0)}</span>
-      <span class="text-xs text-surface-500">km/h set</span>
+      <span class="text-xl font-bold tabular-nums text-surface-200">{displaySpeed.toFixed(0)}</span>
+      <span class="text-xs text-surface-500">{speedUnit} set</span>
     </div>
   {:else}
     <div class="text-sm text-surface-500">No setpoint</div>

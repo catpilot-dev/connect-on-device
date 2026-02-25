@@ -1,6 +1,6 @@
 <script>
   import { onMount, onDestroy } from 'svelte'
-  import { selectedRoute, dongleId } from '../stores.js'
+  import { selectedRoute, dongleId, isMetric } from '../stores.js'
   import { fetchRoute, fetchRouteFiles, fetchAllCoords, fetchAllEventsWithProgress, enrichRoute, startHudStream, stopHudStream, hudStreamStatus, hudStreamUrl, prerenderHud, hudProgress, hudVideoUrl, cancelHudRender, saveNote, takeScreenshot, fetchDashboardTelemetry } from '../api.js'
   import { formatDate, formatDistance, formatDuration, getRouteDurationMs, formatAbsoluteTimeHM } from '../format.js'
   import { buildTimelineEvents } from '../derived.js'
@@ -12,6 +12,7 @@
   import RouteActions from '../components/RouteActions.svelte'
   import { Tabs } from 'bits-ui'
   import WidgetCard from '../components/dashboard/WidgetCard.svelte'
+  import DigitsWidget from '../components/dashboard/DigitsWidget.svelte'
   import SortableGrid from '../components/dashboard/SortableGrid.svelte'
   import GaugeWidget from '../components/dashboard/GaugeWidget.svelte'
   import SteeringWidget from '../components/dashboard/SteeringWidget.svelte'
@@ -19,7 +20,7 @@
   import EngagementWidget from '../components/dashboard/EngagementWidget.svelte'
   import SparklineWidget from '../components/dashboard/SparklineWidget.svelte'
   import SparklineMultiWidget from '../components/dashboard/SparklineMultiWidget.svelte'
-  import { WIDGET_REGISTRY, loadLayout, saveLayout } from '../components/dashboard/registry.js'
+  import { WIDGET_REGISTRY, loadLayout, saveLayout, resolveWidgetDef } from '../components/dashboard/registry.js'
   import WidgetPicker from '../components/dashboard/WidgetPicker.svelte'
 
   let route = $state(null)
@@ -591,7 +592,8 @@
   }
 
   function getWidgetDef(id) {
-    return WIDGET_REGISTRY.find(w => w.id === id)
+    const def = WIDGET_REGISTRY.find(w => w.id === id)
+    return resolveWidgetDef(def, $isMetric)
   }
 
   // Engagement border color derived from timeline events at current playhead
@@ -998,13 +1000,23 @@
                     {@const def = getWidgetDef(widgetId)}
                     {#if def}
                       <WidgetCard label={def.label} onremove={() => dashRemoveWidget(widgetId)}>
-                        {#if def.type === 'gauge'}
+                        {#if def.type === 'digits'}
+                          <DigitsWidget
+                            value={dashTelemetry[def.fields[0]] ?? 0}
+                            unit={def.unit}
+                            thresholds={def.thresholds ?? []}
+                            scale={def.scale ?? 1}
+                            offset={def.offset ?? 0}
+                            decimals={def.decimals ?? 0}
+                          />
+                        {:else if def.type === 'gauge'}
                           <GaugeWidget
                             value={dashTelemetry[def.fields[0]] ?? 0}
                             unit={def.unit}
                             range={def.range}
                             zones={def.zones ?? []}
                             scale={def.scale ?? 1}
+                            offset={def.offset ?? 0}
                             color={def.color ?? '#3b82f6'}
                             history={dashFieldHistory(def.fields[0]).map(h => h.v)}
                           />
@@ -1024,6 +1036,7 @@
                             sdState={dashTelemetry.sdState}
                             sdEnabled={dashTelemetry.sdEnabled}
                             cruiseSpeed={dashTelemetry.cruiseSpeed}
+                            isMetric={$isMetric}
                           />
                         {:else if def.type === 'sparkline'}
                           <SparklineWidget

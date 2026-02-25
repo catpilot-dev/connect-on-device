@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from 'svelte'
   import WidgetCard from '../components/dashboard/WidgetCard.svelte'
   import GaugeWidget from '../components/dashboard/GaugeWidget.svelte'
+  import DigitsWidget from '../components/dashboard/DigitsWidget.svelte'
   import SteeringWidget from '../components/dashboard/SteeringWidget.svelte'
   import GasBrakeWidget from '../components/dashboard/GasBrakeWidget.svelte'
   import EngagementWidget from '../components/dashboard/EngagementWidget.svelte'
@@ -9,7 +10,8 @@
   import SparklineMultiWidget from '../components/dashboard/SparklineMultiWidget.svelte'
   import WidgetPicker from '../components/dashboard/WidgetPicker.svelte'
   import SortableGrid from '../components/dashboard/SortableGrid.svelte'
-  import { WIDGET_REGISTRY, DEFAULT_LAYOUT, STORAGE_KEY, loadLayout, saveLayout } from '../components/dashboard/registry.js'
+  import { isMetric } from '../stores.js'
+  import { WIDGET_REGISTRY, DEFAULT_LAYOUT, STORAGE_KEY, loadLayout, saveLayout, resolveWidgetDef } from '../components/dashboard/registry.js'
 
   let { isOnroad = false } = $props()
 
@@ -56,7 +58,8 @@
   }
 
   function getWidgetDef(id) {
-    return WIDGET_REGISTRY.find(w => w.id === id)
+    const def = WIDGET_REGISTRY.find(w => w.id === id)
+    return resolveWidgetDef(def, $isMetric)
   }
 
   // ── Live WebSocket ──
@@ -131,13 +134,23 @@
       {@const def = getWidgetDef(widgetId)}
       {#if def}
         <WidgetCard label={def.label} onremove={() => removeWidget(widgetId)}>
-          {#if def.type === 'gauge'}
+          {#if def.type === 'digits'}
+            <DigitsWidget
+              value={telemetry[def.fields[0]] ?? 0}
+              unit={def.unit}
+              thresholds={def.thresholds ?? []}
+              scale={def.scale ?? 1}
+              offset={def.offset ?? 0}
+              decimals={def.decimals ?? 0}
+            />
+          {:else if def.type === 'gauge'}
             <GaugeWidget
               value={telemetry[def.fields[0]] ?? 0}
               unit={def.unit}
               range={def.range}
               zones={def.zones ?? []}
               scale={def.scale ?? 1}
+              offset={def.offset ?? 0}
               color={def.color ?? '#3b82f6'}
               history={fieldHistory(def.fields[0]).map(h => h.v)}
             />
@@ -157,6 +170,7 @@
               sdState={telemetry.sdState}
               sdEnabled={telemetry.sdEnabled}
               cruiseSpeed={telemetry.cruiseSpeed}
+              isMetric={$isMetric}
             />
           {:else if def.type === 'sparkline'}
             <SparklineWidget

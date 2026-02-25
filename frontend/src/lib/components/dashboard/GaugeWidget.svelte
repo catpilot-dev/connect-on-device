@@ -1,7 +1,7 @@
 <script>
-  let { value = 0, unit = '', range = [0, 100], zones = [], scale = 1, history = [], color = '#3b82f6' } = $props()
+  let { value = 0, unit = '', range = [0, 100], zones = [], scale = 1, offset = 0, history = [], color = '#3b82f6' } = $props()
 
-  const displayValue = $derived(value * scale)
+  const displayValue = $derived(value * scale + offset)
   const pct = $derived(range[1] > range[0] ? Math.max(0, Math.min(1, (displayValue - range[0]) / (range[1] - range[0]))) : 0)
 
   const zoneColor = $derived(() => {
@@ -20,7 +20,7 @@
     const h = 20, w = 100
     return data.map((v, i) => {
       const x = (i / Math.max(data.length - 1, 1)) * w
-      const y = h - ((v * scale - min) / (max - min || 1)) * h
+      const y = h - ((v * scale + offset - min) / (max - min || 1)) * h
       return `${x.toFixed(1)},${y.toFixed(1)}`
     }).join(' ')
   })
