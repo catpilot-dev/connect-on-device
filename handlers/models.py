@@ -16,7 +16,7 @@ PYTHON_BIN = "/usr/local/venv/bin/python"
 
 MODELS_BASE = Path("/data/models")
 SWAPPER_SCRIPT = Path(__file__).parent.parent / "model_swapper.py"
-DOWNLOAD_SCRIPT = Path(__file__).parent.parent / "download_openpilot_models.py"
+DOWNLOAD_SCRIPT = Path(__file__).parent.parent / "model_download.py"
 
 _model_download_task = None  # track background download {proc, model_id, type, status}
 
@@ -170,7 +170,7 @@ async def handle_models_check_updates(request: web.Request) -> web.Response:
     """POST /v1/models/check-updates — update registry then check for new models."""
     if not DOWNLOAD_SCRIPT.exists():
         raise web.HTTPServiceUnavailable(
-            text=json.dumps({"error": "download_openpilot_models.py not found"}))
+            text=json.dumps({"error": "model_download.py not found"}))
 
     loop = asyncio.get_event_loop()
 
@@ -225,7 +225,7 @@ async def handle_models_download(request: web.Request) -> web.Response:
 
     if not DOWNLOAD_SCRIPT.exists():
         raise web.HTTPServiceUnavailable(
-            text=json.dumps({"error": "download_openpilot_models.py not found"}))
+            text=json.dumps({"error": "model_download.py not found"}))
 
     # Check if already downloading
     if _model_download_task:
