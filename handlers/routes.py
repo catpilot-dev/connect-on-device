@@ -8,7 +8,6 @@ from pathlib import Path
 from aiohttp import web
 
 from handler_helpers import get_route_or_404
-from handlers.hud import _handle_hud_frame
 from rlog_parser import _generate_coords_json, _generate_events_json
 from route_helpers import _base_url, _clean_route, _resolve_local_id, _route_bookmarks, _route_engagement, _set_route_url
 from route_store import _route_counter
@@ -364,17 +363,12 @@ async def handle_connectdata(request: web.Request) -> web.Response:
     allowed = {"qcamera.ts", "fcamera.hevc", "ecamera.hevc", "dcamera.hevc",
                "rlog.zst", "rlog", "qlog.zst", "qlog", "sprite.jpg"}
     derived = {"coords.json", "events.json"}
-    if filename not in allowed and filename not in derived and filename != "hud":
+    if filename not in allowed and filename not in derived:
         raise web.HTTPForbidden(text="File not allowed")
 
     fullname = f"{dongle_id}/{route_date}"
     store = request.app["store"]
     seg_int = int(segment)
-
-    # HUD overlay frame: render from rlog snapshots
-    if filename == "hud":
-        t_ms = int(request.query.get("t", "0"))
-        return await _handle_hud_frame(request, store, fullname, seg_int, t_ms)
 
     # Derived files: generate from rlog on demand, cache to disk
     if filename in derived:
