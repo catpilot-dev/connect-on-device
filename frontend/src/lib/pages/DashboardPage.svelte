@@ -8,6 +8,7 @@
   import EngagementWidget from '../components/dashboard/EngagementWidget.svelte'
   import SparklineWidget from '../components/dashboard/SparklineWidget.svelte'
   import SparklineMultiWidget from '../components/dashboard/SparklineMultiWidget.svelte'
+  import CycleWidget from '../components/dashboard/CycleWidget.svelte'
   import WidgetPicker from '../components/dashboard/WidgetPicker.svelte'
   import SortableGrid from '../components/dashboard/SortableGrid.svelte'
   import { isMetric } from '../stores.js'
@@ -180,6 +181,13 @@
               histories={multiFieldHistories(def.fields)}
               colors={def.colors ?? []}
               labels={def.labels ?? []}
+            />
+          {:else if def.type === 'cycle'}
+            <CycleWidget
+              paramKey={def.paramKey}
+              values={def.values}
+              labels={def.labels ?? []}
+              unit={def.unit ?? ''}
             />
           {/if}
         </WidgetCard>

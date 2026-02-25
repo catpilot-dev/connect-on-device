@@ -763,21 +763,25 @@ class RouteStore:
             info["segments"].sort(key=lambda s: s["number"])
 
         self._raw = dict(raw)
-        self._quick_enrich_new()
+        onroad = self._is_onroad()
+        if not onroad:
+            self._quick_enrich_new()
         self._rebuild_routes()
         self._last_scan = time.time()
 
-        logger.info("Scanned %d routes, %d total segments (%d in metadata.json)",
+        logger.info("Scanned %d routes, %d total segments (%d in metadata.json)%s",
                      len(self._routes),
                      sum(len(r["_segments"]) for r in self._routes.values()),
-                     len(self._metadata))
+                     len(self._metadata),
+                     " [onroad, skipped enrichment/cleanup]" if onroad else "")
 
-        # Run storage cleanup if space is low
-        cleanup_result = run_cleanup(self)
-        if cleanup_result["deleted"]:
-            logger.info("Storage cleanup: freed %d routes, now %.1f%% free",
-                        len(cleanup_result["deleted"]), cleanup_result["free_pct"])
-            self._rebuild_routes()
+        # Run storage cleanup if space is low (skip while driving)
+        if not onroad:
+            cleanup_result = run_cleanup(self)
+            if cleanup_result["deleted"]:
+                logger.info("Storage cleanup: freed %d routes, now %.1f%% free",
+                            len(cleanup_result["deleted"]), cleanup_result["free_pct"])
+                self._rebuild_routes()
 
         return self._routes
 
@@ -787,8 +791,14 @@ class RouteStore:
         Never blocks the caller. If cache is expired, kicks off a background
         thread scan and returns the (stale) cached data immediately. The next
         request after the scan completes will see fresh data.
+        Skips scan entirely while driving — dashboard only needs live telemetry,
+        not route listings. This avoids 6s of I/O competing with real-time data.
         """
         if not force and (time.time() - self._last_scan) < CACHE_TTL:
+            return self._routes
+        # While driving, skip all scans — route data doesn't change and
+        # the CPU/IO should be reserved for real-time dashboard telemetry
+        if not force and self._is_onroad():
             return self._routes
         import asyncio
         if force or not self._routes:

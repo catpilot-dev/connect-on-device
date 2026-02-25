@@ -37,6 +37,14 @@ export const WIDGET_REGISTRY = [
   { id: 'engagement', label: 'Engagement', icon: ICONS.shield, category: 'Controls',
     fields: ['sdState', 'sdEnabled', 'cruiseSpeed'], type: 'engagement_badge' },
 
+  // ── Quick Settings ──
+  { id: 'speed_offset', label: 'Speed Offset', category: 'Settings',
+    type: 'cycle', paramKey: 'MapdSpeedLimitOffsetPercent',
+    values: ['0', '5', '10', '15'], unit: '%' },
+  { id: 'curve_comfort', label: 'Curve Comfort', category: 'Settings',
+    type: 'cycle', paramKey: 'MapdCurveTargetLatAccel',
+    values: ['0', '1', '2', '3'], labels: ['1.5', '2.0', '2.5', '3.0'], unit: 'm/s²' },
+
   // ── Sparkline Charts ──
   { id: 'speed_chart', label: 'Speed Chart', icon: ICONS.chart, category: 'Charts',
     fields: ['vEgo'], type: 'sparkline', scale: 3.6, color: '#3b82f6' },
