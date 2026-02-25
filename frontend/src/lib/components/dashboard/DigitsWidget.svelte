@@ -13,13 +13,17 @@
 </script>
 
 <div class="digits-widget">
+  {#if unit}
+    <span class="digits-unit">{unit}</span>
+  {/if}
   <span class="digits-value" style="color: {color}">
-    {displayValue.toFixed(decimals)}<span class="digits-unit">{unit}</span>
+    {displayValue.toFixed(decimals)}
   </span>
 </div>
 
 <style>
   .digits-widget {
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -32,9 +36,10 @@
     line-height: 1;
   }
   .digits-unit {
-    font-size: 0.3em;
-    color: var(--color-surface-500);
-    margin-left: 2px;
-    vertical-align: super;
+    position: absolute;
+    top: 4px;
+    right: 6px;
+    font-size: 0.75rem;
+    color: var(--color-surface-600);
   }
 </style>

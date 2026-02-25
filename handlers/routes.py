@@ -19,7 +19,7 @@ logger = logging.getLogger("connect")
 async def handle_routes_list(request: web.Request) -> web.Response:
     """GET /v1/devices/{dongleId}/routes — paginated route list"""
     store = request.app["store"]
-    routes = store.scan()
+    routes = await store.async_scan()
 
     limit = int(request.query.get("limit", 25))
     # Support both counter-based and timestamp-based pagination cursors
@@ -56,7 +56,7 @@ async def handle_routes_list(request: web.Request) -> web.Response:
 async def handle_routes_segments(request: web.Request) -> web.Response:
     """GET /v1/devices/{dongleId}/routes_segments — route with segment data"""
     store = request.app["store"]
-    routes = store.scan()
+    routes = await store.async_scan()
 
     route_str = request.query.get("route_str", "")
     limit = int(request.query.get("limit", 100))
@@ -68,7 +68,7 @@ async def handle_routes_segments(request: web.Request) -> web.Response:
             loop = asyncio.get_event_loop()
             enriched = await loop.run_in_executor(None, store.ensure_enriched, local_id)
             if enriched:
-                routes = store.scan()
+                routes = await store.async_scan()
 
     sorted_routes = sorted(routes.values(),
                            key=lambda r: _route_counter(r.get("_local_id", "")),
@@ -101,7 +101,7 @@ async def handle_routes_segments(request: web.Request) -> web.Response:
 async def handle_preserved_routes(request: web.Request) -> web.Response:
     """GET /v1/devices/{dongleId}/routes/preserved — return preserved routes"""
     store = request.app["store"]
-    routes = store.scan()
+    routes = await store.async_scan()
     preserved = []
     for r in sorted(routes.values(),
                     key=lambda r: _route_counter(r.get("_local_id", "")),

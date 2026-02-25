@@ -69,21 +69,21 @@ def _device_dict(store) -> dict:
 async def handle_devices(request: web.Request) -> web.Response:
     """GET /v1/me/devices/ — list devices (use cached scan, rescan only if stale)"""
     store = request.app["store"]
-    store.scan()
+    await store.async_scan()
     return web.json_response([_device_dict(store)])
 
 
 async def handle_device_get(request: web.Request) -> web.Response:
     """GET /v1.1/devices/{dongleId}/ — single device"""
     store = request.app["store"]
-    store.scan()
+    await store.async_scan()
     return web.json_response(_device_dict(store))
 
 
 async def handle_device_stats(request: web.Request) -> web.Response:
     """GET /v1.1/devices/{dongleId}/stats — driving statistics with engagement"""
     store = request.app["store"]
-    routes = store.scan()
+    routes = await store.async_scan()
 
     week_ago = time.time() - 7 * 86400
 
@@ -121,7 +121,7 @@ async def handle_device_stats(request: web.Request) -> web.Response:
 async def handle_device_location(request: web.Request) -> web.Response:
     """GET /v1/devices/{dongleId}/location — last known GPS"""
     store = request.app["store"]
-    routes = store.scan()
+    routes = await store.async_scan()
 
     # Find most recent route with GPS (sort by route counter, not create_time)
     for r in sorted(routes.values(), key=lambda x: _route_counter(x.get("_local_id", "")), reverse=True):

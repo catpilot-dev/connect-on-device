@@ -780,6 +780,14 @@ class RouteStore:
 
         return self._routes
 
+    async def async_scan(self, force: bool = False) -> dict:
+        """Non-blocking scan — returns cache if fresh, else runs in thread."""
+        if not force and (time.time() - self._last_scan) < CACHE_TTL:
+            return self._routes
+        import asyncio
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, lambda: self.scan(force=force))
+
     @property
     def dongle_id(self):
         return self._dongle_id
