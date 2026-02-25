@@ -103,7 +103,7 @@
 
     {#if onScreenshot}
       <button
-        class="btn-ghost p-1.5 disabled:opacity-30"
+        class="hidden sm:inline-flex btn-ghost p-1.5 disabled:opacity-30"
         onclick={onScreenshot}
         disabled={isPlaying || screenshotBusy}
         aria-label="Screenshot"
@@ -137,9 +137,9 @@
         </svg>
       </button>
 
-      <!-- Time - Seg -->
+      <!-- Time (+ Seg on sm+) -->
       <span class="text-xs font-mono tabular-nums text-surface-200 px-0.5 truncate">
-        <span title="GPS local time">{timeDisplay}</span><span class="text-surface-500 mx-0.5">-</span><span title="Segment">{currentSeg}</span>
+        <span title="GPS local time">{timeDisplay}</span><span class="hidden sm:inline text-surface-500 mx-0.5">-</span><span class="hidden sm:inline" title="Segment">{currentSeg}</span>
       </span>
 
       <!-- Skip forward +5s -->
@@ -173,36 +173,39 @@
         {/if}
       </button>
 
-      <!-- Frame back -1f -->
-      <button
-        class="btn-ghost p-1 text-engage-blue disabled:opacity-30"
-        onclick={() => onStepFrame?.(-1)}
-        disabled={isPlaying}
-        aria-label="Previous frame"
-        title="-1 frame"
-      >
-        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path d="M1 4v6h6"/>
-          <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
-        </svg>
-      </button>
+      <!-- Frame controls: hidden on mobile -->
+      <div class="hidden sm:flex items-center gap-0.5">
+        <!-- Frame back -1f -->
+        <button
+          class="btn-ghost p-1 text-engage-blue disabled:opacity-30"
+          onclick={() => onStepFrame?.(-1)}
+          disabled={isPlaying}
+          aria-label="Previous frame"
+          title="-1 frame"
+        >
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path d="M1 4v6h6"/>
+            <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+          </svg>
+        </button>
 
-      <!-- Frame -->
-      <span class="text-xs font-mono tabular-nums px-0.5 text-engage-blue" class:opacity-30={isPlaying} title="Frame (0-19)">{currentFrame}</span>
+        <!-- Frame -->
+        <span class="text-xs font-mono tabular-nums px-0.5 text-engage-blue" class:opacity-30={isPlaying} title="Frame (0-19)">{currentFrame}</span>
 
-      <!-- Frame forward +1f -->
-      <button
-        class="btn-ghost p-1 text-engage-blue disabled:opacity-30"
-        onclick={() => onStepFrame?.(1)}
-        disabled={isPlaying}
-        aria-label="Next frame"
-        title="+1 frame"
-      >
-        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path d="M23 4v6h-6"/>
-          <path d="M20.49 15a9 9 0 1 1-2.13-9.36L23 10"/>
-        </svg>
-      </button>
+        <!-- Frame forward +1f -->
+        <button
+          class="btn-ghost p-1 text-engage-blue disabled:opacity-30"
+          onclick={() => onStepFrame?.(1)}
+          disabled={isPlaying}
+          aria-label="Next frame"
+          title="+1 frame"
+        >
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path d="M23 4v6h-6"/>
+            <path d="M20.49 15a9 9 0 1 1-2.13-9.36L23 10"/>
+          </svg>
+        </button>
+      </div>
 
     </div>
   </div>
