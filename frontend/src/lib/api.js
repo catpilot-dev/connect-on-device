@@ -88,11 +88,11 @@ export async function saveNote(routeName, note) {
   return res.json()
 }
 
-export async function takeScreenshot(routeName, timeSec) {
+export async function takeScreenshot(routeName, timeSec, camera = 'fcamera') {
   const res = await fetch(`/v1/route/${routeId(routeName)}/screenshot`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ time: timeSec }),
+    body: JSON.stringify({ time: timeSec, camera }),
   })
   if (!res.ok) throw new Error(`screenshot: ${res.status}`)
   return res  // Raw response for blob download
@@ -101,6 +101,11 @@ export async function takeScreenshot(routeName, timeSec) {
 /** Build GET URL for a fcamera frame at the given time (opens as JPEG in browser) */
 export function frameUrl(routeName, timeSec) {
   return `/v1/route/${routeId(routeName)}/frame?t=${timeSec.toFixed(2)}`
+}
+
+/** Build URL for HD camera MP4 (HEVC muxed to container) for a specific segment */
+export function cameraUrl(routeName, cameraType, segment) {
+  return `/v1/route/${routeId(routeName)}/camera/${cameraType}/${segment}`
 }
 
 /** Build download URL with file type and segment selection */
@@ -409,6 +414,15 @@ export async function removeSshKeys() {
   const res = await fetch('/v1/ssh-keys', { method: 'DELETE' })
   if (!res.ok) throw new Error(`removeSshKeys: ${res.status}`)
   return res.json()
+}
+
+// ── Device state ──────────────────────────────────────────
+
+export async function fetchIsOnroad() {
+  const res = await fetch('/v1/device/isOnroad')
+  if (!res.ok) return false
+  const data = await res.json()
+  return data.isOnroad === true
 }
 
 // ── BMW params ─────────────────────────────────────────────

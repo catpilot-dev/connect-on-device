@@ -49,6 +49,7 @@ from handlers import (
     handle_params_set,
     handle_lateral_delay,
     handle_device_info,
+    handle_device_is_onroad,
     handle_device_reboot,
     handle_device_poweroff,
     handle_device_language,
@@ -72,6 +73,7 @@ from handlers import (
     handle_route_unpreserve,
     handle_routes_list,
     handle_routes_segments,
+    handle_camera_segment,
     handle_frame,
     handle_screenshot,
     handle_share_signature,
@@ -162,6 +164,7 @@ def create_app(data_dir: str, static_dir: str) -> web.Application:
     app.router.add_post("/v1/route/{routeName}/enrich", handle_route_enrich)
     app.router.add_post("/v1/route/{routeName}/screenshot", handle_screenshot)
     app.router.add_get("/v1/route/{routeName}/frame", handle_frame)
+    app.router.add_get("/v1/route/{routeName}/camera/{camera_type}/{segment}", handle_camera_segment)
 
     # HUD video rendering (pre-render to MP4)
     app.router.add_post("/v1/route/{routeName}/hud/prerender", handle_hud_prerender)
@@ -195,6 +198,7 @@ def create_app(data_dir: str, static_dir: str) -> web.Application:
 
     # Device panel
     app.router.add_get("/v1/device", handle_device_info)
+    app.router.add_get("/v1/device/isOnroad", handle_device_is_onroad)
     app.router.add_post("/v1/device/reboot", handle_device_reboot)
     app.router.add_post("/v1/device/poweroff", handle_device_poweroff)
     app.router.add_post("/v1/device/language", handle_device_language)

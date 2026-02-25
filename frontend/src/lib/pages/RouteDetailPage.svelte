@@ -76,6 +76,7 @@
 
   let screenshotBusy = $state(false)
   let isMuted = $state(true)
+  let hdSource = $state(null)
 
   let noteText = $state('')
   let editingNote = $state(false)
@@ -116,6 +117,23 @@
   const durationMs = $derived(route ? getRouteDurationMs(route) : 0)
   const durationMin = $derived(route?.maxqlog != null ? route.maxqlog + 1 : null)
   const bookmarks = $derived(timelineEvents.filter(e => e.type === 'user_flag').map(e => e.route_offset_millis))
+  const sources = $derived.by(() => {
+    if (!files) return []
+    const s = []
+    if (files.cameras?.some(u => u)) s.push({ id: 'fcamera', label: 'Road' })
+    if (files.ecameras?.some(u => u)) s.push({ id: 'ecamera', label: 'Wide' })
+    if (files.dcameras?.some(u => u)) s.push({ id: 'dcamera', label: 'Driver' })
+    return s
+  })
+
+  // Auto-select fcamera on first load if available (falls back to SD via onSourceFail if HEVC unsupported)
+  let autoSourceDone = false
+  $effect(() => {
+    if (!autoSourceDone && sources.length > 0 && hdSource === null) {
+      autoSourceDone = true
+      if (sources.some(s => s.id === 'fcamera')) hdSource = 'fcamera'
+    }
+  })
 
   onMount(async () => {
     const localId = $selectedRoute
@@ -208,11 +226,19 @@
     isMuted = videoPlayer?.toggleMute() ?? !isMuted
   }
 
+  function handleSourceChange(sourceId) {
+    hdSource = sourceId
+  }
+
+  function handleSourceFail() {
+    hdSource = null
+  }
+
   async function handleScreenshot() {
     if (!route || screenshotBusy) return
     screenshotBusy = true
     try {
-      const res = await takeScreenshot(route.local_id, currentTime)
+      const res = await takeScreenshot(route.local_id, currentTime, hdSource || 'fcamera')
       const blob = await res.blob()
       // Extract filename from Content-Disposition header, or build fallback
       const cd = res.headers.get('Content-Disposition') || ''
@@ -643,6 +669,7 @@
             {route}
             {files}
             {hudLiveUrl}
+            {hdSource}
             frozen={dlRendering}
             {selectionStart}
             {selectionEnd}
@@ -651,6 +678,7 @@
             onTimeUpdate={handleTimeUpdate}
             onPlay={handlePlay}
             onPause={handlePause}
+            onSourceFail={handleSourceFail}
             onHudStream={!enriching && !hudMode ? handleHudStream : undefined}
             onHudDownload={!enriching && !hudMode ? handleHudDownload : undefined}
           />
@@ -726,9 +754,12 @@
               onScreenshot={handleScreenshot}
               onStepFrame={handleStepFrame}
               onMuteToggle={handleMuteToggle}
+              onSourceChange={handleSourceChange}
               {isPlaying}
               {isMuted}
               {screenshotBusy}
+              {hdSource}
+              {sources}
             />
           {/if}
         {/if}

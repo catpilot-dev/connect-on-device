@@ -1,7 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte'
   import Hls from 'hls.js'
-  import { hudUrl, spriteUrl } from '../api.js'
+  import { hudUrl, spriteUrl, cameraUrl } from '../api.js'
 
   /**
    * Cross-browser HLS video player with HUD live stream support.
@@ -16,11 +16,12 @@
    * 3. Direct .ts fallback (single segment for any remaining edge cases)
    */
 
-  /** @type {{ route: object, files: object, hudLiveUrl?: string|null, selectionStart?: number, selectionEnd?: number, currentTime?: number, duration?: number, onTimeUpdate?: (t: number) => void, onDurationChange?: (d: number) => void, onPlay?: () => void, onPause?: () => void }} */
+  /** @type {{ route: object, files: object, hudLiveUrl?: string|null, hdSource?: string|null, selectionStart?: number, selectionEnd?: number, currentTime?: number, duration?: number, onTimeUpdate?: (t: number) => void, onDurationChange?: (d: number) => void, onPlay?: () => void, onPause?: () => void, onSourceFail?: () => void }} */
   let {
     route,
     files,
     hudLiveUrl = null,
+    hdSource = null,
     frozen = false,
     selectionStart = 0,
     selectionEnd = 0,
@@ -32,10 +33,12 @@
     onPause,
     onHudStream,
     onHudDownload,
+    onSourceFail,
   } = $props()
 
   let videoEl = $state(null)
   let hudVideoEl = $state(null)
+  let hdVideoEl = $state(null)
   let hls = null
   let hudHls = null
   let manifestUrl = null
@@ -43,9 +46,14 @@
   let isMuted = $state(true)
   let userWantsPause = false  // Guard against HLS spurious play events after seek
 
+  // HD (fcamera) state
+  let hdSegment = $state(-1)          // currently loaded HD segment
+  let hdSupported = $state(null)      // null = untested, true/false after first attempt
+
   // Track which video is active for control methods
   const showingHud = $derived(!!hudLiveUrl)
-  const activeVideo = $derived(showingHud ? hudVideoEl : videoEl)
+  const showingHd = $derived(!!hdSource && !showingHud && hdSupported !== false)
+  const activeVideo = $derived(showingHud ? hudVideoEl : showingHd ? hdVideoEl : videoEl)
 
   const posterUrl = $derived(route ? spriteUrl(route, 0) : null)
 
@@ -151,19 +159,19 @@
 
   // ── HLS video event handlers ──────────────────────────────
   function handleHlsTimeUpdate() {
-    if (!videoEl || showingHud) return
+    if (!videoEl || showingHud || showingHd) return
     currentTime = videoEl.currentTime
     onTimeUpdate?.(videoEl.currentTime)
   }
 
   function handleHlsDurationChange() {
-    if (!videoEl || showingHud) return
+    if (!videoEl || showingHud || showingHd) return
     duration = videoEl.duration
     onDurationChange?.(videoEl.duration)
   }
 
   function handleHlsPlay() {
-    if (showingHud) return
+    if (showingHud || showingHd) return
     if (frozen) { videoEl?.pause(); return }
     // HLS.js fires spurious play events after seeking across segments.
     // If user explicitly paused, suppress the auto-play.
@@ -173,7 +181,7 @@
   }
 
   function handleHlsPause() {
-    if (showingHud) return
+    if (showingHud || showingHd) return
     isPlaying = false
     onPause?.()
   }
@@ -205,6 +213,110 @@
       hudHls = null
     }
   }
+
+  // ── HD (fcamera) playback ────────────────────────────────
+  const maxSegment = $derived(files?.qcameras ? files.qcameras.length - 1 : 0)
+
+  /** Check if browser can play HEVC in MP4 container */
+  function canPlayHevc() {
+    const v = document.createElement('video')
+    return !!(v.canPlayType('video/mp4; codecs="hev1.1.6.L93.B0"') ||
+              v.canPlayType('video/mp4; codecs="hvc1.1.6.L93.B0"'))
+  }
+
+  function loadHdSegment(seg, seekOffset = 0) {
+    if (!hdVideoEl || !route || !hdSource) return
+    if (seg < 0 || seg > maxSegment) return
+
+    // Pre-check HEVC support on first attempt
+    if (hdSupported === null) {
+      if (!canPlayHevc()) {
+        hdSupported = false
+        onSourceFail?.()
+        return
+      }
+    }
+
+    hdSegment = seg
+    const url = cameraUrl(route.local_id, hdSource, seg)
+    hdVideoEl.src = url
+    hdVideoEl.load()
+    hdVideoEl.addEventListener('loadedmetadata', () => {
+      hdSupported = true
+      if (seekOffset > 0) hdVideoEl.currentTime = seekOffset
+    }, { once: true })
+    hdVideoEl.addEventListener('error', () => {
+      if (hdSupported !== true) {
+        hdSupported = false
+        onSourceFail?.()
+      }
+    }, { once: true })
+  }
+
+  function handleHdTimeUpdate() {
+    if (!hdVideoEl || !showingHd) return
+    const t = hdSegment * 60 + hdVideoEl.currentTime
+    currentTime = t
+    onTimeUpdate?.(t)
+  }
+
+  function handleHdEnded() {
+    if (!showingHd) return
+    // Auto-advance to next segment
+    const nextSeg = hdSegment + 1
+    if (nextSeg <= maxSegment) {
+      loadHdSegment(nextSeg, 0)
+    } else {
+      isPlaying = false
+      onPause?.()
+    }
+  }
+
+  function handleHdPlay() {
+    if (!showingHd) return
+    if (frozen) { hdVideoEl?.pause(); return }
+    isPlaying = true
+    onPlay?.()
+  }
+
+  function handleHdPause() {
+    if (!showingHd) return
+    isPlaying = false
+    onPause?.()
+  }
+
+  // Track previous hdSource to detect transitions (avoids $effect re-trigger on currentTime)
+  let prevHdSource = null
+  $effect(() => {
+    const entering = !!hdSource && !prevHdSource
+    const switching = !!hdSource && !!prevHdSource && hdSource !== prevHdSource
+    const leaving = !hdSource && !!prevHdSource
+    prevHdSource = hdSource
+
+    if ((entering || switching) && hdVideoEl && !showingHud && hdSupported !== false) {
+      // Entering or switching HD source — pause everything, load at same position
+      videoEl?.pause()
+      userWantsPause = true
+      isPlaying = false
+      onPause?.()
+      const seg = Math.floor(currentTime / 60)
+      const offset = currentTime % 60
+      loadHdSegment(seg, offset)
+    } else if (leaving && hdVideoEl) {
+      // Leaving HD mode — pause everything, restore HLS at same position
+      hdVideoEl.pause()
+      hdVideoEl.removeAttribute('src')
+      hdVideoEl.load()
+      hdSegment = -1
+      userWantsPause = true
+      isPlaying = false
+      onPause?.()
+      if (videoEl) {
+        videoEl.pause()
+        videoEl.currentTime = currentTime
+      }
+    }
+  })
 
   // ── Swap logic: react to hudLiveUrl changes ───────────────
   $effect(() => {
@@ -277,6 +389,16 @@
       // Live stream — seeking not supported, ignore
       return
     }
+    if (showingHd && hdVideoEl) {
+      const seg = Math.floor(time / 60)
+      const offset = time % 60
+      if (seg !== hdSegment) {
+        loadHdSegment(seg, offset)
+      } else {
+        hdVideoEl.currentTime = offset
+      }
+      return
+    }
     if (videoEl) {
       const wasPlaying = !videoEl.paused
       userWantsPause = false  // Seeking implies user wants playback
@@ -326,17 +448,17 @@
   }
 </script>
 
-<div class="relative w-full group">
-  <!-- HLS video element — hidden when HUD video is active -->
+<div class="relative w-full group bg-black" style="aspect-ratio: 1928/1208; contain: strict">
+  <!-- HLS video element (qcamera) -->
   <video
     bind:this={videoEl}
-    class="w-full block"
+    class="absolute inset-0 w-full h-full object-cover"
+    class:invisible={showingHd}
     class:hidden={showingHud}
     muted
     playsinline
     webkit-playsinline
     x5-video-player-type="h5"
-    poster={posterUrl}
     preload="auto"
     ontimeupdate={handleHlsTimeUpdate}
     ondurationchange={handleHlsDurationChange}
@@ -347,10 +469,10 @@
     Your browser does not support video playback.
   </video>
 
-  <!-- HUD live stream video element — shown when hudLiveUrl is active -->
+  <!-- HUD live stream video element -->
   <video
     bind:this={hudVideoEl}
-    class="w-full block"
+    class="absolute inset-0 w-full h-full object-cover"
     class:hidden={!showingHud}
     muted
     playsinline
@@ -362,6 +484,23 @@
     onplay={handleHudPlay}
     onpause={handleHudPause}
     onended={handleHudPause}
+  >
+  </video>
+
+  <!-- HD camera video element (fcamera/ecamera/dcamera) -->
+  <video
+    bind:this={hdVideoEl}
+    class="absolute inset-0 w-full h-full object-cover"
+    class:invisible={!showingHd}
+    muted={isMuted}
+    playsinline
+    webkit-playsinline
+    x5-video-player-type="h5"
+    preload="auto"
+    ontimeupdate={handleHdTimeUpdate}
+    onplay={handleHdPlay}
+    onpause={handleHdPause}
+    onended={handleHdEnded}
   >
   </video>
 

@@ -29,38 +29,46 @@ def _decimal_to_dms(decimal):
     return (IFDRational(d), IFDRational(m), IFDRational(int(s * 100), 100))
 
 
+FCAMERA_CACHE_DIR = "/data/connect_on_device/cache"
+
+
+def _mux_fcamera(hevc_path: str) -> str:
+    """Mux raw HEVC bitstream to MP4 container (codec copy, ~1.5s). Returns cached mp4 path."""
+    os.makedirs(FCAMERA_CACHE_DIR, exist_ok=True)
+    path_hash = hashlib.md5(hevc_path.encode()).hexdigest()[:12]
+    mp4_path = os.path.join(FCAMERA_CACHE_DIR, f"fcamera_{path_hash}.mp4")
+
+    if os.path.exists(mp4_path):
+        return mp4_path
+
+    fd, tmp_path = tempfile.mkstemp(suffix='.mp4', dir=FCAMERA_CACHE_DIR)
+    os.close(fd)
+    try:
+        subprocess.run([
+            'ffmpeg', '-y', '-hide_banner', '-loglevel', 'error',
+            '-framerate', '20', '-i', hevc_path,
+            '-c', 'copy', '-movflags', '+faststart', tmp_path,
+        ], check=True, timeout=60)
+        os.rename(tmp_path, mp4_path)
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise
+
+    return mp4_path
+
+
 def _extract_frame(hevc_path: str, offset: float) -> bytes:
     """Extract a single JPEG frame from fcamera.hevc at the given offset.
 
     Raw HEVC lacks container timestamps so cv2 seeking is broken.
     Strategy: mux to mp4 (codec copy, ~1.5s one-time) then cv2 seeks in the
-    container.  Cached mp4 is stored in /tmp to avoid writing to route data.
+    container.  Cached mp4 is stored under FCAMERA_CACHE_DIR.
     Runs in executor thread.
     """
     import cv2
-    import subprocess
-    import hashlib
 
-    # Build a stable cache path on /data (tmpfs /tmp is only 150MB, too small for fcamera)
-    cache_dir = "/data/connect_on_device/cache"
-    os.makedirs(cache_dir, exist_ok=True)
-    path_hash = hashlib.md5(hevc_path.encode()).hexdigest()[:12]
-    mp4_path = os.path.join(cache_dir, f"fcamera_{path_hash}.mp4")
-
-    if not os.path.exists(mp4_path):
-        import tempfile
-        fd, tmp_path = tempfile.mkstemp(suffix='.mp4', dir=cache_dir)
-        os.close(fd)
-        try:
-            subprocess.run([
-                'ffmpeg', '-y', '-hide_banner', '-loglevel', 'error',
-                '-framerate', '20', '-i', hevc_path,
-                '-c', 'copy', '-movflags', '+faststart', tmp_path,
-            ], check=True, timeout=60)
-            os.rename(tmp_path, mp4_path)
-        except Exception:
-            os.unlink(tmp_path)
-            raise
+    mp4_path = _mux_fcamera(hevc_path)
 
     cap = cv2.VideoCapture(mp4_path)
     try:
@@ -244,16 +252,18 @@ async def handle_screenshot(request: web.Request) -> web.Response:
     body = await parse_json(request)
 
     t = body.get("time", 0)
+    camera = body.get("camera", "fcamera")
     segment = int(t // 60)
     offset = t % 60
 
     fullname = route["fullname"]
     local_id = route["_local_id"]
 
-    # Find fcamera.hevc (full resolution 1928x1208)
-    fcamera = store.resolve_segment_path(fullname, segment, "fcamera.hevc")
+    # Resolve camera file (fcamera/ecamera/dcamera)
+    cam_filename = CAMERA_TYPES.get(camera, "fcamera.hevc")
+    fcamera = store.resolve_segment_path(fullname, segment, cam_filename)
     if not fcamera:
-        raise web.HTTPNotFound(text=json.dumps({"error": f"No fcamera.hevc for segment {segment}"}))
+        raise web.HTTPNotFound(text=json.dumps({"error": f"No {cam_filename} for segment {segment}"}))
 
     # Extract frame via cached mp4 mux + cv2 seek in thread executor
     loop = asyncio.get_event_loop()
@@ -363,3 +373,65 @@ async def handle_frame(request: web.Request) -> web.Response:
         content_type="image/jpeg",
         headers={"Cache-Control": "public, max-age=86400"},
     )
+
+
+CAMERA_TYPES = {"fcamera": "fcamera.hevc", "ecamera": "ecamera.hevc", "dcamera": "dcamera.hevc"}
+CAMERA_FPS = {"fcamera": 20, "ecamera": 20, "dcamera": 20}
+
+
+def _mux_hevc(hevc_path: str, fps: int = 20) -> str:
+    """Mux raw HEVC bitstream to MP4 container (codec copy). Returns cached mp4 path."""
+    os.makedirs(FCAMERA_CACHE_DIR, exist_ok=True)
+    path_hash = hashlib.md5(hevc_path.encode()).hexdigest()[:12]
+    mp4_path = os.path.join(FCAMERA_CACHE_DIR, f"cam_{path_hash}.mp4")
+
+    if os.path.exists(mp4_path):
+        return mp4_path
+
+    fd, tmp_path = tempfile.mkstemp(suffix='.mp4', dir=FCAMERA_CACHE_DIR)
+    os.close(fd)
+    try:
+        subprocess.run([
+            'ffmpeg', '-y', '-hide_banner', '-loglevel', 'error',
+            '-framerate', str(fps), '-i', hevc_path,
+            '-c', 'copy', '-movflags', '+faststart', tmp_path,
+        ], check=True, timeout=60)
+        os.rename(tmp_path, mp4_path)
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise
+
+    return mp4_path
+
+
+async def handle_camera_segment(request: web.Request) -> web.Response:
+    """GET /v1/route/{routeName}/camera/{camera_type}/{segment} — serve HEVC camera as MP4.
+
+    Muxes the raw .hevc bitstream into an MP4 container (codec copy, no
+    re-encoding, ~1.5s one-time cost).  The result is cached on disk.
+    Supports: fcamera (road), ecamera (wide), dcamera (driver).
+    """
+    route_name, route, store = get_route_or_404(request)
+    camera_type = request.match_info["camera_type"]
+    segment = int(request.match_info["segment"])
+
+    if camera_type not in CAMERA_TYPES:
+        raise web.HTTPBadRequest(text=json.dumps({"error": f"Unknown camera: {camera_type}"}))
+
+    filename = CAMERA_TYPES[camera_type]
+    hevc_path = store.resolve_segment_path(route["fullname"], segment, filename)
+    if not hevc_path:
+        raise web.HTTPNotFound(text=json.dumps({"error": f"No {filename} for segment {segment}"}))
+
+    fps = CAMERA_FPS.get(camera_type, 20)
+    loop = asyncio.get_event_loop()
+    try:
+        mp4_path = await loop.run_in_executor(store._executor, _mux_hevc, str(hevc_path), fps)
+    except Exception as e:
+        raise web.HTTPInternalServerError(text=json.dumps({"error": f"Muxing failed: {e}"}))
+
+    return web.FileResponse(mp4_path, headers={
+        "Content-Type": "video/mp4",
+        "Cache-Control": "public, max-age=86400",
+    })

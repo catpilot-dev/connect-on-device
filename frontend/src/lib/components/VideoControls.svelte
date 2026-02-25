@@ -19,13 +19,19 @@
     onScreenshot,
     onStepFrame,
     onMuteToggle,
+    onSourceChange,
     isPlaying = false,
     isMuted = true,
     screenshotBusy = false,
+    hdSource = null,
+    sources = [],
   } = $props()
 
   let showSpeedMenu = $state(false)
+  let showSourceMenu = $state(false)
   let playbackRate = $state(1)
+
+  const sourceLabel = $derived(hdSource ? sources.find(s => s.id === hdSource)?.label ?? 'HD' : 'SD')
 
   const speeds = [0.5, 1, 1.5, 2]
   const SKIP_STEP = 5
@@ -63,6 +69,64 @@
 </script>
 
 <div class="flex items-center h-8 gap-1">
+  <!-- Left group: source selector + screenshot -->
+  <div class="flex items-center gap-0.5 shrink-0">
+    {#if sources.length > 0}
+      <div class="relative">
+        <button
+          class="btn-ghost text-xs px-1.5 py-0.5 rounded {hdSource ? 'text-engage-green' : 'text-surface-400'}"
+          onclick={() => { showSourceMenu = !showSourceMenu; showSpeedMenu = false }}
+          title="Video source"
+        >
+          {sourceLabel}
+        </button>
+        {#if showSourceMenu}
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <!-- svelte-ignore a11y_interactive_supports_focus -->
+          <div
+            class="absolute bottom-full left-0 mb-1 bg-surface-800 border border-surface-700 rounded-xl shadow-xl py-1 z-20 min-w-[5rem]"
+            role="menu"
+            onclick={(e) => e.stopPropagation()}
+          >
+            <button
+              class="block w-full text-left px-4 py-1.5 text-xs hover:bg-surface-700 transition-colors"
+              class:text-engage-blue={!hdSource}
+              role="menuitem"
+              onclick={() => { onSourceChange?.(null); showSourceMenu = false }}
+            >SD</button>
+            {#each sources as src}
+              <button
+                class="block w-full text-left px-4 py-1.5 text-xs hover:bg-surface-700 transition-colors"
+                class:text-engage-blue={hdSource === src.id}
+                role="menuitem"
+                onclick={() => { onSourceChange?.(src.id); showSourceMenu = false }}
+              >{src.label}</button>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    {/if}
+
+    {#if onScreenshot}
+      <button
+        class="btn-ghost p-1.5 disabled:opacity-30"
+        onclick={onScreenshot}
+        disabled={isPlaying || screenshotBusy}
+        aria-label="Screenshot"
+        title="Screenshot"
+      >
+        {#if screenshotBusy}
+          <div class="w-4 h-4 border-2 border-surface-300 border-t-transparent rounded-full animate-spin"></div>
+        {:else}
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/>
+            <circle cx="12" cy="13" r="4"/>
+          </svg>
+        {/if}
+      </button>
+    {/if}
+  </div>
+
   <!-- Center group: -5s {Time}-{Seg} +5s | Play/Pause | -1f {Frame} +1f -->
   <div class="flex-1 min-w-0 flex items-center justify-center">
     <div class="flex items-center gap-0.5 sm:gap-1">
@@ -145,6 +209,7 @@
           <path d="M20.49 15a9 9 0 1 1-2.13-9.36L23 10"/>
         </svg>
       </button>
+
     </div>
   </div>
 
@@ -171,31 +236,11 @@
       {/if}
     </button>
 
-    <!-- Screenshot -->
-    {#if onScreenshot}
-      <button
-        class="btn-ghost p-1.5 disabled:opacity-30"
-        onclick={onScreenshot}
-        disabled={isPlaying || screenshotBusy}
-        aria-label="Screenshot"
-        title="Screenshot"
-      >
-        {#if screenshotBusy}
-          <div class="w-4 h-4 border-2 border-surface-300 border-t-transparent rounded-full animate-spin"></div>
-        {:else}
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-            <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/>
-            <circle cx="12" cy="13" r="4"/>
-          </svg>
-        {/if}
-      </button>
-    {/if}
-
     <!-- Speed selector -->
     <div class="relative">
       <button
         class="btn-ghost text-xs px-2 py-1"
-        onclick={() => showSpeedMenu = !showSpeedMenu}
+        onclick={() => { showSpeedMenu = !showSpeedMenu; showSourceMenu = false }}
         title="Playback speed"
       >
         {playbackRate}x
@@ -237,8 +282,8 @@
 </div>
 
 <!-- Close menus on outside click -->
-{#if showSpeedMenu}
+{#if showSpeedMenu || showSourceMenu}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="fixed inset-0 z-10" onclick={() => { showSpeedMenu = false }}></div>
+  <div class="fixed inset-0 z-10" onclick={() => { showSpeedMenu = false; showSourceMenu = false }}></div>
 {/if}

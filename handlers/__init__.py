@@ -11,6 +11,7 @@ from .auth import (
     handle_device_location,
     handle_storage,
     handle_device_info,
+    handle_device_is_onroad,
     handle_device_reboot,
     handle_device_poweroff,
     handle_device_language,
@@ -36,6 +37,7 @@ from .routes import (
 from .media import (
     handle_screenshot,
     handle_frame,
+    handle_camera_segment,
 )
 
 from .hud import (
