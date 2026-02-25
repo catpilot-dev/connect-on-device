@@ -1,12 +1,12 @@
 <script>
   import { onMount, onDestroy } from 'svelte'
-  import { Select, ToggleGroup } from 'bits-ui'
+  import { Select } from 'bits-ui'
   import CollapsibleCard from '../components/CollapsibleCard.svelte'
   import Spinner from '../components/Spinner.svelte'
   import ChevronIcon from '../components/ChevronIcon.svelte'
   import Toggle from '../components/Toggle.svelte'
   import { createPoll } from '../utils/poll.js'
-  import { fetchParams, setParam, fetchModels, swapModel, checkModelUpdates, downloadModel,
+  import { fetchParams, setParam, fetchModels, fetchModelsActive, swapModel, checkModelUpdates, downloadModel,
     fetchSoftware, softwareCheck, softwareDownload, softwareInstall, softwareBranch, softwareUninstall,
     fetchLateralDelay, fetchDeviceInfo, deviceReboot, devicePoweroff, deviceSetLanguage,
     fetchToggles, setToggle, fetchStorage, mapdCheckUpdate, mapdUpdate,
@@ -25,17 +25,19 @@
   let devExpanded = $state(false)
   let togglesExpanded = $state(false)
   let devTogglesExpanded = $state(false)
-  let sectionExpanded = $state({ 'Driving': true, 'Speed Limits': true })
+  let sectionExpanded = $state({ 'Driving': true })
   let mapdExpanded = $state(false)
   let swExpanded = $state(false)
   let modelsExpanded = $state(false)
 
   // Model state
+  let activeModelName = $state('')  // lightweight, loaded eagerly
   let models = $state(null)
   let modelsLoading = $state(true)
   let modelsError = $state(null)
   let swapping = $state(null)
   let swapResult = $state(null)
+  let swapRebooting = $state(false)
   let updates = $state(null)
   let checking = $state(false)
   let downloading = $state(null)
@@ -106,15 +108,10 @@
     {
       title: 'Driving',
       items: [
-{ key: 'LaneCenteringCorrection', label: 'Lane Centering Correction', desc: 'Apply learned steering offset for better centering', type: 'bool' },
-      ],
-    },
-    {
-      title: 'Speed Limits',
-      items: [
-        { key: 'MapdSpeedLimitControlEnabled', label: 'Map Speed Limit Control', desc: 'Automatically limit speed based on OSM map data', type: 'bool' },
-        { key: 'MapdSpeedLimitOffsetPercent', label: 'Speed Limit Offset', desc: 'Percentage above the posted speed limit', type: 'int', options: [0, 5, 10, 15], dependsOn: 'MapdSpeedLimitControlEnabled' },
-        { key: 'MapdCurveTargetLatAccel', label: 'Curve Comfort', desc: 'Target lateral acceleration in curves (m/s²). Lower = gentler, higher = sportier.', type: 'choice', options: ['1.5', '2.0', '2.5', '3.0'], dependsOn: 'MapdSpeedLimitControlEnabled' },
+        { key: 'MapdSpeedLimitControlEnabled', label: 'Map Speed Control', desc: 'Automatically limit speed based on OSM map data', type: 'bool' },
+        { key: 'MapdSpeedLimitOffsetPercent', label: 'Speed Offset', desc: 'Percentage above the posted speed limit', type: 'pills', options: [0, 5, 10, 15], suffix: '%', dependsOn: 'MapdSpeedLimitControlEnabled' },
+        { key: 'MapdCurveTargetLatAccel', label: 'Curve Comfort', desc: 'Target lateral acceleration in curves (m/s²)', type: 'pills', options: ['1.5', '2.0', '2.5', '3.0'], dependsOn: 'MapdSpeedLimitControlEnabled' },
+        { key: 'LaneCenteringCorrection', label: 'Lane Centering in Curves', desc: 'Apply lane offset for better centering', type: 'bool' },
       ],
     },
   ]
@@ -126,10 +123,12 @@
   let storageColor = $derived(storage ? storageLevel(storage.percent_free) : 'ok')
 
   onMount(async () => {
+    fetchLateralDelay().then(d => { latDelay = d }).catch(() => {})
+    fetchSoftware().then(d => { sw = d; swLoading = false }).catch(() => { swLoading = false })
+    fetchModelsActive().then(d => { activeModelName = d.active_driving_name || '' }).catch(() => {})
     try {
       params = await fetchParams()
       if (params.MapdVersion) mapdVersion = params.MapdVersion
-      fetchLateralDelay().then(d => { latDelay = d }).catch(() => {})
     } catch (e) {
       error = e.message
     } finally {
@@ -355,13 +354,13 @@
   }
 
   async function handlePersonality(value) {
-    if (value === toggles?.LongitudinalPersonality) return
-    const prev = toggles.LongitudinalPersonality
-    toggles.LongitudinalPersonality = value
+    if (value === params?.LongitudinalPersonality) return
+    const prev = params.LongitudinalPersonality
+    params.LongitudinalPersonality = value
     try {
-      await setToggle('LongitudinalPersonality', value)
+      await setParam('LongitudinalPersonality', value)
     } catch (e) {
-      toggles.LongitudinalPersonality = prev
+      params.LongitudinalPersonality = prev
       error = e.message
     }
   }
@@ -562,202 +561,24 @@
       </div>
     {/if}
 
-    <!-- Device Section (collapsed by default, lazy loaded) -->
-    <CollapsibleCard title="Device" metadata={dev?.DongleId || ''} bind:open={devExpanded} onOpenChange={onDevOpen}>
-      {#if !dev}
-        <div class="space-y-3 animate-pulse">
-          <div class="h-4 bg-surface-700 rounded w-48"></div>
-          <div class="h-4 bg-surface-700 rounded w-32"></div>
-        </div>
-      {:else}
-        <div class="space-y-3">
-          <div class="flex items-center justify-between">
-            <span class="text-sm text-surface-400">Dongle ID</span>
-            <span class="text-sm text-surface-100 font-mono">{dev.DongleId || '--'}</span>
-          </div>
-          <div class="flex items-center justify-between">
-            <span class="text-sm text-surface-400">Serial</span>
-            <span class="text-sm text-surface-100 font-mono">{dev.HardwareSerial || '--'}</span>
-          </div>
-          {#if storage}
-            <div class="flex items-center justify-between gap-3">
-              <span class="text-sm text-surface-400">Storage</span>
-              <div class="flex items-center gap-2">
-                <div class="w-24 h-1.5 rounded-full bg-surface-700 overflow-hidden">
-                  <div
-                    class="h-full rounded-full transition-all duration-500"
-                    class:bg-engage-green={storageColor === 'ok'}
-                    class:bg-engage-orange={storageColor === 'warning'}
-                    class:bg-engage-red={storageColor === 'critical'}
-                    style="width: {storagePct}%"
-                  ></div>
-                </div>
-                <span class="text-xs text-surface-400 whitespace-nowrap">
-                  {formatBytes(storage.used)} / {formatBytes(storage.total)}
-                </span>
-              </div>
-            </div>
-          {/if}
-          <div class="flex items-center justify-between">
-            <span class="text-sm text-surface-400">Language</span>
-            <Select.Root
-              type="single"
-              value={dev.LanguageSetting || 'main_en'}
-              onValueChange={handleLanguage}
-              items={LANGUAGES}
-            >
-              <Select.Trigger
-                class="flex items-center gap-2 rounded-lg px-3 py-1.5 bg-surface-700 border border-surface-600 hover:border-surface-500 transition-colors"
-              >
-                <span class="text-sm text-surface-100">{LANGUAGES.find(l => l.value === (dev.LanguageSetting || 'main_en'))?.label || dev.LanguageSetting}</span>
-                <ChevronIcon class="!w-3.5 !h-3.5 text-surface-400" />
-              </Select.Trigger>
-              <Select.Content
-                class="z-50 rounded-lg bg-surface-700 border border-surface-600 shadow-xl py-1 max-h-64 overflow-y-auto max-w-[calc(100vw-2rem)]"
-                sideOffset={4}
-              >
-                {#each LANGUAGES as lang}
-                  <Select.Item
-                    value={lang.value}
-                    label={lang.label}
-                    class="px-3 py-2 text-sm cursor-pointer transition-colors
-                      data-[highlighted]:bg-surface-600 data-[selected]:text-engage-blue"
-                  >
-                    {lang.label}
-                  </Select.Item>
-                {/each}
-              </Select.Content>
-            </Select.Root>
-          </div>
-          <div class="pt-3  grid grid-cols-2 gap-2">
-            <button
-              class="text-sm py-2 rounded-lg bg-surface-700 text-surface-200 hover:bg-surface-600 transition-colors"
-              onclick={handleReboot}
-            >
-              Reboot
-            </button>
-            <button
-              class="text-sm py-2 rounded-lg bg-engage-red/15 text-engage-red hover:bg-engage-red/25 transition-colors"
-              onclick={handlePoweroff}
-            >
-              Power Off
-            </button>
-          </div>
-        </div>
-      {/if}
-    </CollapsibleCard>
-
-    <!-- Toggles Section (collapsed by default, lazy loaded) -->
-    <CollapsibleCard title="Toggles" bind:open={togglesExpanded} onOpenChange={onTogglesOpen}>
-      {#if !toggles}
-        <div class="space-y-3 animate-pulse">
-          <div class="h-4 bg-surface-700 rounded w-48"></div>
-          <div class="h-4 bg-surface-700 rounded w-32"></div>
-        </div>
-      {:else}
-        <div class="space-y-4">
-          {#each TOGGLE_DEFS as t}
-            <div class="flex items-center justify-between gap-3">
-              <div class="text-sm text-surface-100">{t.label}</div>
-              <Toggle
-                checked={toggles[t.key]}
-                disabled={toggling === t.key}
-                label={t.label}
-                onCheckedChange={() => handleToggle(t.key)}
-              />
-            </div>
-          {/each}
-          <div class="pt-3 ">
-            <div class="text-sm text-surface-100 mb-2">Driving Personality</div>
-            <ToggleGroup.Root
-              type="single"
-              value={String(toggles.LongitudinalPersonality)}
-              onValueChange={(v) => { if (v) handlePersonality(Number(v)) }}
-              class="grid grid-cols-3 gap-1 rounded-lg bg-surface-700 p-1"
-            >
-              {#each PERSONALITIES as p}
-                <ToggleGroup.Item
-                  value={String(p.value)}
-                  class="text-xs py-1.5 rounded-md transition-colors
-                    data-[state=on]:bg-engage-blue data-[state=on]:text-white
-                    data-[state=off]:text-surface-300 data-[state=off]:hover:text-surface-100"
-                >
-                  {p.label}
-                </ToggleGroup.Item>
-              {/each}
-            </ToggleGroup.Root>
-          </div>
-        </div>
-      {/if}
-    </CollapsibleCard>
-
-    <!-- Developer Section (collapsed by default, lazy loaded) -->
-    <CollapsibleCard title="Developer" bind:open={devTogglesExpanded} onOpenChange={onDevTogglesOpen}>
-      {#if !toggles}
-        <div class="space-y-3 animate-pulse">
-          <div class="h-4 bg-surface-700 rounded w-48"></div>
-          <div class="h-4 bg-surface-700 rounded w-32"></div>
-        </div>
-      {:else}
-        <div class="space-y-4">
-          {#each DEV_DEFS as t}
-            <div class="flex items-center justify-between gap-3">
-              <div class="text-sm text-surface-100">{t.label}</div>
-              <Toggle
-                checked={toggles[t.key]}
-                disabled={toggling === t.key}
-                label={t.label}
-                onCheckedChange={() => handleToggle(t.key)}
-              />
-            </div>
-            <!-- SSH Keys — right after Enable SSH toggle -->
-            {#if t.key === 'SshEnabled' && sshKeys}
-              <div class="flex items-center justify-between gap-3">
-                <div class="text-sm text-surface-100">SSH Keys</div>
-                <div class="flex items-center gap-2 shrink-0">
-                  {#if sshKeys.has_keys}
-                    <span class="text-sm text-surface-300">{sshKeys.username}</span>
-                  {/if}
-                  {#if sshError}
-                    <span class="text-xs text-engage-red">{sshError}</span>
-                  {/if}
-                  {#if sshLoading}
-                    <button class="px-3 py-1.5 text-xs rounded-lg bg-surface-700 text-surface-400" disabled>
-                      <Spinner class="w-3 h-3 inline" />
-                    </button>
-                  {:else if sshKeys.has_keys}
-                    <button
-                      class="px-3 py-1.5 text-xs rounded-lg bg-engage-red/15 text-engage-red hover:bg-engage-red/25 transition-colors"
-                      onclick={async () => {
-                        sshLoading = true; sshError = null
-                        try { sshKeys = await removeSshKeys() } catch (e) { sshError = e.message }
-                        sshLoading = false
-                      }}
-                    >REMOVE</button>
-                  {:else}
-                    <button
-                      class="px-3 py-1.5 text-xs rounded-lg bg-engage-blue/15 text-engage-blue hover:bg-engage-blue/25 transition-colors"
-                      onclick={async () => {
-                        const username = prompt('Enter your GitHub username')
-                        if (!username) return
-                        sshLoading = true; sshError = null
-                        try { sshKeys = await setSshKeys(username) } catch (e) { sshError = e.message }
-                        sshLoading = false
-                      }}
-                    >ADD</button>
-                  {/if}
-                </div>
-              </div>
-            {/if}
-          {/each}
-        </div>
-      {/if}
-    </CollapsibleCard>
-
     {#each SECTIONS as section}
       <CollapsibleCard title={section.title} bind:open={sectionExpanded[section.title]}>
         <div class="space-y-4">
-          {#each section.items as item}
+          {#if section.title === 'Driving' && 'LongitudinalPersonality' in params}
+            <div class="flex items-center gap-2">
+              <div class="text-sm text-surface-100">Personality</div>
+              <div class="flex-1"></div>
+              {#each PERSONALITIES as p}
+                <button
+                  class="px-2.5 py-1 text-xs rounded-full transition-colors {params.LongitudinalPersonality === p.value ? 'bg-engage-blue/20 text-engage-blue border border-engage-blue/40' : 'bg-surface-700 text-surface-300 border border-surface-600 hover:border-surface-500'}"
+                  onclick={() => handlePersonality(p.value)}
+                >
+                  {p.label}
+                </button>
+              {/each}
+            </div>
+          {/if}
+          {#each section.items.filter(i => i.key in params) as item}
             {#if item.type === 'bool'}
               <div class="flex items-center justify-between gap-4">
                 <div>
@@ -771,55 +592,25 @@
                   onCheckedChange={() => toggle(item.key)}
                 />
               </div>
-            {:else if item.type === 'int'}
+            {:else if item.type === 'pills'}
               {@const disabled = item.dependsOn ? !params[item.dependsOn] : false}
-              <div class={disabled ? 'opacity-40' : ''}>
-                <div class="text-sm text-surface-100">{item.label}</div>
-                <div class="text-xs text-surface-500 mt-0.5 mb-2">{item.desc}</div>
-                <ToggleGroup.Root
-                  type="single"
-                  value={String(params[item.key])}
-                  onValueChange={(v) => { if (v) setOffset(item.key, Number(v)) }}
-                  {disabled}
-                  class="flex gap-2"
-                >
-                  {#each item.options as opt}
-                    <ToggleGroup.Item
-                      value={String(opt)}
-                      disabled={saving === item.key}
-                      class="px-3 py-1.5 text-sm rounded-lg transition-colors
-                        data-[state=on]:bg-engage-blue data-[state=on]:text-white
-                        data-[state=off]:bg-surface-700 data-[state=off]:text-surface-300 data-[state=off]:hover:bg-surface-600"
-                    >
-                      {opt}%
-                    </ToggleGroup.Item>
-                  {/each}
-                </ToggleGroup.Root>
-              </div>
-            {:else if item.type === 'choice'}
-              {@const disabled = item.dependsOn ? !params[item.dependsOn] : false}
-              <div class={disabled ? 'opacity-40' : ''}>
-                <div class="text-sm text-surface-100">{item.label}</div>
-                <div class="text-xs text-surface-500 mt-0.5 mb-2">{item.desc}</div>
-                <ToggleGroup.Root
-                  type="single"
-                  value={String(params[item.key])}
-                  onValueChange={(v) => { if (v) setOffset(item.key, Number(v)) }}
-                  {disabled}
-                  class="flex gap-2"
-                >
-                  {#each item.options as opt, i}
-                    <ToggleGroup.Item
-                      value={String(i)}
-                      disabled={saving === item.key}
-                      class="px-3 py-1.5 text-sm rounded-lg transition-colors
-                        data-[state=on]:bg-engage-blue data-[state=on]:text-white
-                        data-[state=off]:bg-surface-700 data-[state=off]:text-surface-300 data-[state=off]:hover:bg-surface-600"
-                    >
-                      {opt}
-                    </ToggleGroup.Item>
-                  {/each}
-                </ToggleGroup.Root>
+              <div class="{disabled ? 'opacity-40 pointer-events-none' : ''}">
+                <div class="flex items-center gap-2">
+                  <div class="text-sm text-surface-100">{item.label}</div>
+                  <div class="flex-1"></div>
+                {#each item.options as opt, i}
+                  {@const val = String(typeof opt === 'string' ? i : opt)}
+                  {@const active = String(params[item.key]) === val}
+                  <button
+                    class="px-2.5 py-1 text-xs rounded-full transition-colors {active ? 'bg-engage-blue/20 text-engage-blue border border-engage-blue/40' : 'bg-surface-700 text-surface-300 border border-surface-600 hover:border-surface-500'}"
+                    {disabled}
+                    onclick={() => setOffset(item.key, typeof opt === 'string' ? i : opt)}
+                  >
+                    {opt}{item.suffix || ''}
+                  </button>
+                {/each}
+                </div>
+                {#if item.desc}<div class="text-xs text-surface-500 mt-0.5">{item.desc}</div>{/if}
               </div>
             {/if}
           {/each}
@@ -1044,7 +835,7 @@
     </CollapsibleCard>
 
     <!-- Models Section -->
-    <CollapsibleCard title="Models" metadata={activeDriving?.name ?? ''} bind:open={modelsExpanded} onOpenChange={onModelsOpen}>
+    <CollapsibleCard title="Models" metadata={activeDriving?.name ?? activeModelName} bind:open={modelsExpanded} onOpenChange={onModelsOpen}>
       {#if modelsLoading}
         <div class="space-y-3 animate-pulse">
           <div class="h-10 bg-surface-700 rounded-lg"></div>
@@ -1055,9 +846,18 @@
         <button class="btn-ghost text-xs" onclick={() => { modelsError = null; loadModels() }}>Retry</button>
       {:else if models}
         {#if swapResult}
-          <div class="rounded-lg px-3 py-2 text-sm mb-3 {swapResult.includes('failed') ? 'bg-engage-red/10 text-engage-red' : 'bg-engage-green/10 text-engage-green'}">
-            {swapResult}
-            <button class="ml-2 opacity-60 hover:opacity-100" onclick={() => { swapResult = null }}>x</button>
+          <div class="rounded-lg px-3 py-2 text-sm mb-3 flex items-center justify-between gap-2 {swapResult.includes('failed') ? 'bg-engage-red/10 text-engage-red' : 'bg-engage-green/10 text-engage-green'}">
+            <span>{swapResult}</span>
+            <div class="flex items-center gap-1 shrink-0">
+              {#if !swapResult.includes('failed')}
+                <button
+                  class="px-2.5 py-1 text-xs rounded-lg transition-colors {swapRebooting ? 'bg-surface-700 text-surface-400' : 'bg-engage-green/20 hover:bg-engage-green/30'}"
+                  disabled={swapRebooting}
+                  onclick={() => { swapRebooting = true; deviceReboot().catch(() => {}) }}
+                >{swapRebooting ? 'Rebooting...' : 'Reboot'}</button>
+              {/if}
+              <button class="px-1 opacity-60 hover:opacity-100" onclick={() => { swapResult = null }}>x</button>
+            </div>
           </div>
         {/if}
 
@@ -1073,18 +873,18 @@
               <Select.Trigger
                 class="w-full flex items-center justify-between rounded-lg px-3 py-2.5 bg-surface-700 border border-surface-600 hover:border-surface-500 transition-colors text-left"
               >
-                <div class="flex items-center gap-2 min-w-0">
-                  <span class="text-xs text-surface-400 font-medium uppercase shrink-0">Driving</span>
-                  <span class="text-sm text-surface-100 truncate">{activeDriving?.name ?? '...'}</span>
+                <span class="text-xs text-surface-400 font-medium shrink-0">Driving</span>
+                <div class="flex items-center gap-3">
+                  <span class="text-sm text-surface-100">{activeDriving?.name ?? '...'}</span>
                   {#if activeDriving?.date}
-                    <span class="text-xs text-surface-500 shrink-0">{activeDriving.date}</span>
+                    <span class="text-xs text-surface-500">{activeDriving.date}</span>
+                  {/if}
+                  {#if swapping}
+                    <Spinner class="w-4 h-4 text-surface-400 shrink-0" />
+                  {:else}
+                    <ChevronIcon class="text-surface-400 shrink-0" />
                   {/if}
                 </div>
-                {#if swapping}
-                  <Spinner class="w-4 h-4 text-surface-400 shrink-0" />
-                {:else}
-                  <ChevronIcon class="text-surface-400 shrink-0" />
-                {/if}
               </Select.Trigger>
               <Select.Content
                 class="z-50 rounded-lg bg-surface-700 border border-surface-600 shadow-xl py-1 max-h-64 overflow-y-auto"
@@ -1130,14 +930,14 @@
                 <Select.Trigger
                   class="w-full flex items-center justify-between rounded-lg px-3 py-2.5 bg-surface-700 border border-surface-600 hover:border-surface-500 transition-colors text-left"
                 >
-                  <div class="flex items-center gap-2 min-w-0">
-                    <span class="text-xs text-surface-400 font-medium uppercase shrink-0">DM</span>
-                    <span class="text-sm text-surface-100 truncate">{activeDm?.name ?? '...'}</span>
+                  <span class="text-xs text-surface-400 font-medium uppercase shrink-0">DM</span>
+                  <div class="flex items-center gap-3">
+                    <span class="text-sm text-surface-100">{activeDm?.name ?? '...'}</span>
                     {#if activeDm?.date}
-                      <span class="text-xs text-surface-500 shrink-0">{activeDm.date}</span>
+                      <span class="text-xs text-surface-500">{activeDm.date}</span>
                     {/if}
+                    <ChevronIcon class="text-surface-400 shrink-0" />
                   </div>
-                  <ChevronIcon class="text-surface-400 shrink-0" />
                 </Select.Trigger>
                 <Select.Content
                   class="z-50 rounded-lg bg-surface-700 border border-surface-600 shadow-xl py-1 max-h-64 overflow-y-auto max-w-[calc(100vw-2rem)]"
@@ -1244,6 +1044,178 @@
               {/if}
             {/if}
           {/if}
+        </div>
+      {/if}
+    </CollapsibleCard>
+
+    <!-- Toggles Section (collapsed by default, lazy loaded) -->
+    <CollapsibleCard title="Toggles" bind:open={togglesExpanded} onOpenChange={onTogglesOpen}>
+      {#if !toggles}
+        <div class="space-y-3 animate-pulse">
+          <div class="h-4 bg-surface-700 rounded w-48"></div>
+          <div class="h-4 bg-surface-700 rounded w-32"></div>
+        </div>
+      {:else}
+        <div class="space-y-4">
+          {#each TOGGLE_DEFS as t}
+            <div class="flex items-center justify-between gap-3">
+              <div class="text-sm text-surface-100">{t.label}</div>
+              <Toggle
+                checked={toggles[t.key]}
+                disabled={toggling === t.key}
+                label={t.label}
+                onCheckedChange={() => handleToggle(t.key)}
+              />
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </CollapsibleCard>
+
+    <!-- Device Section (collapsed by default, lazy loaded) -->
+    <CollapsibleCard title="Device" metadata={dev?.DongleId || ''} bind:open={devExpanded} onOpenChange={onDevOpen}>
+      {#if !dev}
+        <div class="space-y-3 animate-pulse">
+          <div class="h-4 bg-surface-700 rounded w-48"></div>
+          <div class="h-4 bg-surface-700 rounded w-32"></div>
+        </div>
+      {:else}
+        <div class="space-y-3">
+          <div class="flex items-center justify-between">
+            <span class="text-sm text-surface-400">Dongle ID</span>
+            <span class="text-sm text-surface-100 font-mono">{dev.DongleId || '--'}</span>
+          </div>
+          <div class="flex items-center justify-between">
+            <span class="text-sm text-surface-400">Serial</span>
+            <span class="text-sm text-surface-100 font-mono">{dev.HardwareSerial || '--'}</span>
+          </div>
+          {#if storage}
+            <div class="flex items-center justify-between gap-3">
+              <span class="text-sm text-surface-400">Storage</span>
+              <div class="flex items-center gap-2">
+                <div class="w-24 h-1.5 rounded-full bg-surface-700 overflow-hidden">
+                  <div
+                    class="h-full rounded-full transition-all duration-500"
+                    class:bg-engage-green={storageColor === 'ok'}
+                    class:bg-engage-orange={storageColor === 'warning'}
+                    class:bg-engage-red={storageColor === 'critical'}
+                    style="width: {storagePct}%"
+                  ></div>
+                </div>
+                <span class="text-xs text-surface-400 whitespace-nowrap">
+                  {formatBytes(storage.used)} / {formatBytes(storage.total)}
+                </span>
+              </div>
+            </div>
+          {/if}
+          <div class="flex items-center justify-between">
+            <span class="text-sm text-surface-400">Language</span>
+            <Select.Root
+              type="single"
+              value={dev.LanguageSetting || 'main_en'}
+              onValueChange={handleLanguage}
+              items={LANGUAGES}
+            >
+              <Select.Trigger
+                class="flex items-center gap-2 rounded-lg px-3 py-1.5 bg-surface-700 border border-surface-600 hover:border-surface-500 transition-colors"
+              >
+                <span class="text-sm text-surface-100">{LANGUAGES.find(l => l.value === (dev.LanguageSetting || 'main_en'))?.label || dev.LanguageSetting}</span>
+                <ChevronIcon class="!w-3.5 !h-3.5 text-surface-400" />
+              </Select.Trigger>
+              <Select.Content
+                class="z-50 rounded-lg bg-surface-700 border border-surface-600 shadow-xl py-1 max-h-64 overflow-y-auto max-w-[calc(100vw-2rem)]"
+                sideOffset={4}
+              >
+                {#each LANGUAGES as lang}
+                  <Select.Item
+                    value={lang.value}
+                    label={lang.label}
+                    class="px-3 py-2 text-sm cursor-pointer transition-colors
+                      data-[highlighted]:bg-surface-600 data-[selected]:text-engage-blue"
+                  >
+                    {lang.label}
+                  </Select.Item>
+                {/each}
+              </Select.Content>
+            </Select.Root>
+          </div>
+          <div class="pt-3  grid grid-cols-2 gap-2">
+            <button
+              class="text-sm py-2 rounded-lg bg-surface-700 text-surface-200 hover:bg-surface-600 transition-colors"
+              onclick={handleReboot}
+            >
+              Reboot
+            </button>
+            <button
+              class="text-sm py-2 rounded-lg bg-engage-red/15 text-engage-red hover:bg-engage-red/25 transition-colors"
+              onclick={handlePoweroff}
+            >
+              Power Off
+            </button>
+          </div>
+        </div>
+      {/if}
+    </CollapsibleCard>
+
+    <!-- Developer Section (collapsed by default, lazy loaded) -->
+    <CollapsibleCard title="Developer" bind:open={devTogglesExpanded} onOpenChange={onDevTogglesOpen}>
+      {#if !toggles}
+        <div class="space-y-3 animate-pulse">
+          <div class="h-4 bg-surface-700 rounded w-48"></div>
+          <div class="h-4 bg-surface-700 rounded w-32"></div>
+        </div>
+      {:else}
+        <div class="space-y-4">
+          {#each DEV_DEFS as t}
+            <div class="flex items-center justify-between gap-3">
+              <div class="text-sm text-surface-100">{t.label}</div>
+              <Toggle
+                checked={toggles[t.key]}
+                disabled={toggling === t.key}
+                label={t.label}
+                onCheckedChange={() => handleToggle(t.key)}
+              />
+            </div>
+            <!-- SSH Keys — right after Enable SSH toggle -->
+            {#if t.key === 'SshEnabled' && sshKeys}
+              <div class="flex items-center justify-between gap-3">
+                <div class="text-sm text-surface-100">SSH Keys</div>
+                <div class="flex items-center gap-2 shrink-0">
+                  {#if sshKeys.has_keys}
+                    <span class="text-sm text-surface-300">{sshKeys.username}</span>
+                  {/if}
+                  {#if sshError}
+                    <span class="text-xs text-engage-red">{sshError}</span>
+                  {/if}
+                  {#if sshLoading}
+                    <button class="px-3 py-1.5 text-xs rounded-lg bg-surface-700 text-surface-400" disabled>
+                      <Spinner class="w-3 h-3 inline" />
+                    </button>
+                  {:else if sshKeys.has_keys}
+                    <button
+                      class="px-3 py-1.5 text-xs rounded-lg bg-engage-red/15 text-engage-red hover:bg-engage-red/25 transition-colors"
+                      onclick={async () => {
+                        sshLoading = true; sshError = null
+                        try { sshKeys = await removeSshKeys() } catch (e) { sshError = e.message }
+                        sshLoading = false
+                      }}
+                    >REMOVE</button>
+                  {:else}
+                    <button
+                      class="px-3 py-1.5 text-xs rounded-lg bg-engage-blue/15 text-engage-blue hover:bg-engage-blue/25 transition-colors"
+                      onclick={async () => {
+                        const username = prompt('Enter your GitHub username')
+                        if (!username) return
+                        sshLoading = true; sshError = null
+                        try { sshKeys = await setSshKeys(username) } catch (e) { sshError = e.message }
+                        sshLoading = false
+                      }}
+                    >ADD</button>
+                  {/if}
+                </div>
+              </div>
+            {/if}
+          {/each}
         </div>
       {/if}
     </CollapsibleCard>

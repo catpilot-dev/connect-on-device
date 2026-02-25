@@ -219,9 +219,21 @@ class ModelSwapper:
             shutil.copy2(src, dst)
             copied_files.append(filename)
 
-        # STEP 4: Update active model tracker
+        # STEP 4: Update active model tracker (JSON: id + name for fast UI reads)
+        info = None
+        info_file = source_dir / 'model_info.json'
+        if info_file.exists():
+            try:
+                with open(info_file) as f:
+                    info = json.load(f)
+            except Exception:
+                pass
+        active_data = {
+            'id': model_id,
+            'name': info.get('name', model_id) if info else model_id,
+        }
         with open(self.active_model_file, 'w') as f:
-            f.write(model_id)
+            json.dump(active_data, f)
 
         needs_compilation = len(available_pkl) < len(self.pkl_files)
 
@@ -298,8 +310,12 @@ class ModelSwapper:
     def get_active_model(self) -> str:
         """Get currently active model ID from file tracker"""
         if self.active_model_file.exists():
-            with open(self.active_model_file, 'r') as f:
-                return f.read().strip()
+            raw = self.active_model_file.read_text().strip()
+            try:
+                data = json.loads(raw)
+                return data.get('id', raw)
+            except (json.JSONDecodeError, AttributeError):
+                return raw
         return 'unknown'
 
     def delete_model(self, model_id: str) -> dict:

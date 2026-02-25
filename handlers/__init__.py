@@ -78,6 +78,7 @@ from .mapd import (
 )
 
 from .models import (
+    handle_models_active,
     handle_models_list,
     handle_models_swap,
     handle_models_check_updates,

@@ -40,6 +40,7 @@ from handlers import (
     handle_hud_video,
     handle_hud_ws,
     handle_me,
+    handle_models_active,
     handle_models_check_updates,
     handle_models_download,
     handle_models_list,
@@ -211,6 +212,7 @@ def create_app(data_dir: str, static_dir: str) -> web.Application:
     app.router.add_post("/v1/software/uninstall", handle_software_uninstall)
 
     # Model management
+    app.router.add_get("/v1/models/active", handle_models_active)
     app.router.add_get("/v1/models", handle_models_list)
     app.router.add_post("/v1/models/swap", handle_models_swap)
     app.router.add_post("/v1/models/check-updates", handle_models_check_updates)

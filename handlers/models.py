@@ -32,6 +32,22 @@ def _read_model_info(model_dir: Path) -> dict | None:
     return None
 
 
+def _read_active_model(model_type: str) -> dict:
+    """Read active model file. Returns {'id': ..., 'name': ...}. Handles JSON and plain text."""
+    try:
+        raw = (MODELS_BASE / f"active_{model_type}_model").read_text().strip()
+    except Exception:
+        return {"id": "", "name": ""}
+    try:
+        data = json.loads(raw)
+        return {"id": data.get("id", raw), "name": data.get("name", data.get("id", raw))}
+    except (json.JSONDecodeError, AttributeError):
+        # Legacy plain text format — id only, need to look up name
+        info = _read_model_info(MODELS_BASE / model_type / raw)
+        name = info.get("name", raw) if info else raw
+        return {"id": raw, "name": name}
+
+
 def _list_installed_models(model_type: str) -> list[dict]:
     """List installed models of given type by reading filesystem directly."""
     type_dir = MODELS_BASE / model_type
@@ -69,6 +85,16 @@ def _list_installed_models(model_type: str) -> list[dict]:
     return models
 
 
+async def handle_models_active(request: web.Request) -> web.Response:
+    """GET /v1/models/active — lightweight: just active model IDs and names."""
+    result = {}
+    for model_type in ("driving", "dm"):
+        active = _read_active_model(model_type)
+        result[f"active_{model_type}"] = active["id"]
+        result[f"active_{model_type}_name"] = active["name"]
+    return web.json_response(result)
+
+
 async def handle_models_list(request: web.Request) -> web.Response:
     """GET /v1/models — list installed models and active model IDs."""
     loop = asyncio.get_event_loop()
@@ -76,16 +102,8 @@ async def handle_models_list(request: web.Request) -> web.Response:
     dm = await loop.run_in_executor(None, _list_installed_models, "dm")
 
     # Read active model IDs
-    active_driving = ""
-    active_dm = ""
-    try:
-        active_driving = (MODELS_BASE / "active_driving_model").read_text().strip()
-    except Exception:
-        pass
-    try:
-        active_dm = (MODELS_BASE / "active_dm_model").read_text().strip()
-    except Exception:
-        pass
+    active_driving = _read_active_model("driving")["id"]
+    active_dm = _read_active_model("dm")["id"]
 
     # Include download task status if active
     download_status = None

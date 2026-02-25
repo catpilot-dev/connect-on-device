@@ -195,9 +195,10 @@ export function hudUrl(route, segment, offsetMs) {
   return connectdataUrl(route, segment, `hud?t=${Math.round(offsetMs)}`)
 }
 
-/** Sprite thumbnail URL for a segment */
-export function spriteUrl(route, segment) {
-  return connectdataUrl(route, segment, 'sprite.jpg')
+/** Sprite thumbnail URL for a segment, optionally at a specific second */
+export function spriteUrl(route, segment, timeSec) {
+  const url = connectdataUrl(route, segment, 'sprite.jpg')
+  return timeSec != null ? `${url}?t=${timeSec}` : url
 }
 
 // ── Derived data (coords, events) ───────────────────────────
@@ -433,6 +434,12 @@ export async function setParam(key, value) {
 export async function fetchModels() {
   const res = await fetch('/v1/models')
   if (!res.ok) throw new Error(`fetchModels: ${res.status}`)
+  return res.json()
+}
+
+export async function fetchModelsActive() {
+  const res = await fetch('/v1/models/active')
+  if (!res.ok) throw new Error(`fetchModelsActive: ${res.status}`)
   return res.json()
 }
 
