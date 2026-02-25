@@ -359,8 +359,9 @@
 
   // Freeze: pause video immediately when frozen prop is set
   $effect(() => {
-    if (frozen && videoEl && !videoEl.paused) {
-      videoEl.pause()
+    if (frozen) {
+      if (videoEl && !videoEl.paused) videoEl.pause()
+      if (hdVideoEl && !hdVideoEl.paused) hdVideoEl.pause()
     }
   })
 
@@ -437,7 +438,7 @@
   }
 </script>
 
-<div class="relative w-full group bg-black" style="aspect-ratio: 1928/1208; contain: strict">
+<div class="relative w-full group bg-black" style="aspect-ratio: {showingHud ? '2160/1080' : '1928/1208'}; contain: strict">
   <!-- HLS video element (qcamera) -->
   <video
     bind:this={videoEl}
@@ -458,10 +459,10 @@
     Your browser does not support video playback.
   </video>
 
-  <!-- HUD live stream video element (object-contain: HUD is 2160x1080 vs 1928x1208 container) -->
+  <!-- HUD live stream video element -->
   <video
     bind:this={hudVideoEl}
-    class="absolute inset-0 w-full h-full object-contain"
+    class="absolute inset-0 w-full h-full object-cover"
     class:hidden={!showingHud}
     muted
     playsinline

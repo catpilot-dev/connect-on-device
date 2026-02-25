@@ -53,6 +53,7 @@ DRM_RAYLIB_PATH = "/data/pip_packages"
 RECORD_FPS = 2
 REPLAY_SPEED = 0.2
 SPEEDUP_FACTOR = 1.0 / REPLAY_SPEED  # 5x
+HLS_DIR = "/tmp/hud_live"
 SECONDS_TO_WARM = 2
 
 
@@ -284,12 +285,21 @@ def main():
                                 stdout=subprocess.DEVNULL,
                                 stderr=open("/tmp/hud_replay_drm.log", "w"))
 
-            # Build UI environment for DRM RECORD mode
-            # Use RECORD_FPS (2) for capture — matches GPU readback capability.
-            # args.fps (20) is the desired output fps, applied via frame duplication in post.
+            # Build UI environment for DRM RECORD+HLS mode
+            # HLS output enables live preview in the browser during recording.
+            # All segments kept (list_size=9999) for concatenation into MP4 afterward.
+            import shutil
+            if os.path.exists(HLS_DIR):
+                shutil.rmtree(HLS_DIR)
+            os.makedirs(HLS_DIR, exist_ok=True)
+
+            hls_m3u8 = os.path.join(HLS_DIR, "stream.m3u8")
             ui_env = {
                 "RECORD": "1",
-                "RECORD_OUTPUT": raw_output,
+                "RECORD_HLS": "1",
+                "RECORD_OUTPUT": hls_m3u8,
+                "RECORD_HLS_TIME": "2",
+                "RECORD_HLS_LIST_SIZE": "9999",
                 "FPS": str(RECORD_FPS),
                 "BIG": "1",  # Force 2160x1080 layout
                 "PYTHONPATH": f"{OPENPILOT_DIR}:{DRM_RAYLIB_PATH}",
@@ -375,6 +385,16 @@ def main():
                     ui_proc.wait()
 
             print(f"UI exited (code {ui_proc.returncode})", file=sys.stderr)
+
+            # Concatenate HLS segments into raw MP4 for post-processing
+            hls_m3u8 = os.path.join(HLS_DIR, "stream.m3u8")
+            if os.path.isfile(hls_m3u8):
+                write_status(args.status_file, {"status": "rendering", "elapsed_sec": round(duration, 1),
+                                                "total_sec": duration, "phase": "concatenating"})
+                concat_cmd = ["ffmpeg", "-y", "-allowed_extensions", "ALL",
+                              "-i", hls_m3u8, "-c", "copy", raw_output]
+                subprocess.run(concat_cmd, stdout=subprocess.DEVNULL,
+                               stderr=open("/tmp/hud_concat_drm.log", "w"))
 
             # Post-process: trim warmup + speed up from 0.2x to real-time
             # Raw recording: 2fps at 0.2x speed → needs 5x speedup to play at real-time.
@@ -483,6 +503,7 @@ def main():
             shutil.rmtree(f"/data/params/{prefix}", ignore_errors=True)
             if os.path.isfile(raw_output):
                 os.unlink(raw_output)
+            shutil.rmtree(HLS_DIR, ignore_errors=True)
         except Exception:
             pass
 

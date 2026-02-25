@@ -37,7 +37,9 @@
   let hudPollTimer = null
   let hudTickTimer = null
   let hudStartTime = 0  // currentTime when stream was started
-  const hudLiveUrl = $derived(hudStreaming ? hudStreamUrl() : null)
+  const hudLiveUrl = $derived(
+    hudStreaming || (dlRendering && dlPhase === 'recording') ? hudStreamUrl() : null
+  )
   // HUD download (pre-render to MP4)
   let dlRendering = $state(false)
   let dlReady = $state(false)
@@ -364,7 +366,8 @@
 
       dlTotal = res.total_sec || (end - start)
 
-      // Seek video to render start (frozen=dlRendering keeps it paused)
+      // Seek video to render start and freeze (static red border during preparation)
+      currentTime = start
       videoPlayer?.seek(start)
 
       // Poll for progress — seek video preview to follow render position
@@ -378,11 +381,9 @@
           dlTotalFrames = p.total_frames || dlTotalFrames
           dlRemainingSec = p.remaining_sec ?? dlRemainingSec
 
-          // Sync video preview to current render position (frozen prop keeps it paused)
+          // Update playhead to follow render position
           if (p.elapsed_sec != null && p.status === 'rendering') {
-            const renderPos = dlRenderStart + (p.elapsed_sec || 0)
-            currentTime = renderPos
-            videoPlayer?.seek(renderPos)
+            currentTime = dlRenderStart + (p.elapsed_sec || 0)
           }
 
           if (p.status === 'complete') {
@@ -669,7 +670,11 @@
           />
         {/if}
 
-        <div class="rounded-xl overflow-hidden" class:recording-border={dlRendering}>
+        <div class="overflow-hidden"
+          class:rounded-xl={!hudLiveUrl}
+          class:hud-corners={!!hudLiveUrl}
+          class:recording-border-static={dlRendering && dlPhase !== 'recording'}
+          class:recording-border-blink={dlRendering && dlPhase === 'recording'}>
           <VideoPlayer
             bind:this={videoPlayer}
             {route}
@@ -734,7 +739,7 @@
                 </div>
               </div>
             {:else if dlReady}
-              <div class="flex items-center justify-between h-8 px-2">
+              <div class="flex items-center justify-end gap-2 h-8 px-2">
                 <button class="btn-sm bg-engage-green text-black font-medium px-3 py-1 rounded text-xs disabled:opacity-50 disabled:cursor-not-allowed"
                   onclick={openDownload} disabled={dlDownloading}>
                   {#if dlDownloading}Downloading...{:else}Download MP4{/if}
@@ -1027,9 +1032,15 @@
 </div>
 
 <style>
-  .recording-border {
+  .hud-corners {
+    border-radius: 4.22% / 8.44%;
+  }
+  .recording-border-static {
+    border: 2px solid #ef4444;
+  }
+  .recording-border-blink {
     border: 2px solid transparent;
-    animation: recording-blink 1s ease-in-out infinite;
+    animation: recording-blink 4s ease-in-out infinite;
   }
   @keyframes recording-blink {
     0%, 100% { border-color: transparent; }
