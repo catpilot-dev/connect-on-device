@@ -102,6 +102,9 @@
   <SignalBrowserPage />
 {:else if page === 'tiles'}
   <TileManager />
+{:else if isOnroad && page === 'dashboard'}
+  <!-- Fullscreen dashboard while driving — no header, no chrome -->
+  <DashboardPage {isOnroad} />
 {:else}
   <div class="min-h-dvh flex flex-col">
     <DeviceHeader>

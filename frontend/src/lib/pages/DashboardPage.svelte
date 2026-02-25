@@ -98,17 +98,13 @@
   })
 </script>
 
-<div class="mx-auto w-full sm:w-[90%] max-w-screen-2xl px-2 sm:px-4 py-2 sm:py-4 flex flex-col gap-4">
-  <!-- Header row -->
+<div class="{isOnroad ? 'w-full px-2 py-1' : 'mx-auto w-full sm:w-[90%] max-w-screen-2xl px-2 sm:px-4 py-2 sm:py-4'} flex flex-col gap-3">
+  {#if !isOnroad}
+  <!-- Header row (offroad only) -->
   <div class="flex items-center justify-between flex-wrap gap-3">
     <div class="flex items-center gap-1.5 text-sm">
-      {#if isOnroad}
-        <div class="w-2 h-2 rounded-full {liveConnected ? 'bg-engage-green' : 'bg-engage-red'}"></div>
-        <span class="text-surface-400">{liveConnected ? 'Live' : 'Connecting...'}</span>
-      {:else}
-        <div class="w-2 h-2 rounded-full bg-surface-500"></div>
-        <span class="text-surface-400">Offline</span>
-      {/if}
+      <div class="w-2 h-2 rounded-full bg-surface-500"></div>
+      <span class="text-surface-400">Offline</span>
     </div>
 
     <button
@@ -121,6 +117,7 @@
       Add Widget
     </button>
   </div>
+  {/if}
 
   <!-- Widget grid -->
   <SortableGrid
@@ -196,7 +193,7 @@
     {/each}
   </SortableGrid>
 
-  {#if layout.length === 0}
+  {#if layout.length === 0 && !isOnroad}
     <div class="flex flex-col items-center justify-center h-48 text-surface-500">
       <p class="text-lg mb-2">No widgets added</p>
       <button class="btn-ghost" onclick={() => showPicker = true}>
