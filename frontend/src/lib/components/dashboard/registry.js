@@ -38,6 +38,10 @@ export const WIDGET_REGISTRY = [
     fields: ['sdState', 'sdEnabled', 'cruiseSpeed'], type: 'engagement_badge' },
 
   // ── Quick Settings ──
+  { id: 'personality', label: 'Personality', category: 'Settings',
+    type: 'cycle', paramKey: 'LongitudinalPersonality',
+    values: ['2', '1', '0'], labels: ['Relaxed', 'Standard', 'Aggressive'],
+    colors: ['#3b82f6', '#22c55e', '#eab308'] },
   { id: 'speed_offset', label: 'Speed Offset', category: 'Settings',
     type: 'cycle', paramKey: 'MapdSpeedLimitOffsetPercent',
     values: ['0', '5', '10', '15'], unit: '%',
