@@ -14,6 +14,7 @@
   import { getTileSource, setTileSource, TILE_SOURCES } from '../tileSource.js'
   import { formatBytes, storageLevel } from '../format.js'
 
+  let { isOnroad = false } = $props()
   let params = $state({})
   let loading = $state(true)
   let error = $state(null)
@@ -639,6 +640,7 @@
     {/each}
 
     <!-- Mapd & Maps -->
+    {#if !isOnroad}
     <CollapsibleCard
       title="Mapd & Maps"
       metadata={mapdVersion || ''}
@@ -715,7 +717,9 @@
         </div>
       </div>
     </CollapsibleCard>
+    {/if}
 
+    {#if !isOnroad}
     <!-- Software Section (collapsed by default) -->
     <CollapsibleCard
       title="Software"
@@ -833,6 +837,7 @@
         </div>
       {/if}
     </CollapsibleCard>
+    {/if}
 
     <!-- Models Section -->
     <CollapsibleCard title="Models" metadata={activeDriving?.name ?? activeModelName} bind:open={modelsExpanded} onOpenChange={onModelsOpen}>

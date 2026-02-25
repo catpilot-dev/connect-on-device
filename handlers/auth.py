@@ -155,6 +155,12 @@ async def handle_device_info(request: web.Request) -> web.Response:
     return web.json_response(result)
 
 
+async def handle_device_is_onroad(request: web.Request) -> web.Response:
+    """GET /v1/device/isOnroad — check if vehicle is currently driving."""
+    val = read_param("IsOnroad")
+    return web.json_response({"isOnroad": val == "1"})
+
+
 async def handle_device_reboot(request: web.Request) -> web.Response:
     """POST /v1/device/reboot — trigger device reboot."""
     try:

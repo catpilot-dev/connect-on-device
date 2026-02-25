@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte'
   import { dongleId, selectedRoute } from './lib/stores.js'
-  import { fetchDevices } from './lib/api.js'
+  import { fetchDevices, fetchIsOnroad } from './lib/api.js'
   import DeviceHeader from './lib/components/DeviceHeader.svelte'
   import RouteListPage from './lib/pages/RouteListPage.svelte'
   import RouteDetailPage from './lib/pages/RouteDetailPage.svelte'
@@ -11,6 +11,7 @@
   import SignalBrowserPage from './lib/pages/SignalBrowserPage.svelte'
 
   let error = $state(null)
+  let isOnroad = $state(false)
   function parsePage() {
     const parts = location.pathname.split('/').filter(Boolean)
     if (parts[0] === 'tiles') return 'tiles'
@@ -30,6 +31,7 @@
   }
 
   onMount(async () => {
+    isOnroad = await fetchIsOnroad().catch(() => false)
     try {
       const devices = await fetchDevices()
       if (devices?.length > 0) {
@@ -40,7 +42,7 @@
     }
 
     // Restore state from URL on load
-    page = parsePage()
+    page = isOnroad ? 'dashboard' : parsePage()
     const initialRoute = parseRoutePath()
     if (initialRoute) selectedRoute.set(initialRoute)
 
@@ -55,7 +57,13 @@
     })
 
     window.addEventListener('popstate', () => {
-      page = parsePage()
+      const p = parsePage()
+      if (isOnroad && (p === 'routes')) {
+        page = 'dashboard'
+        history.replaceState(null, '', '/dashboard')
+        return
+      }
+      page = p
       const route = parseRoutePath()
       lastRoute = route
       selectedRoute.set(route)
@@ -65,6 +73,7 @@
   })
 
   function showRoutes() {
+    if (isOnroad) return
     page = 'routes'
     selectedRoute.set(null)
     history.pushState(null, '', '/')
@@ -92,12 +101,14 @@
     <DeviceHeader>
       {#snippet nav()}
         <div class="flex items-center gap-1">
+          {#if !isOnroad}
           <button
             class="px-3 py-1.5 text-sm rounded transition-colors {page === 'routes' && !$selectedRoute ? 'bg-surface-700 text-surface-50' : 'text-surface-400 hover:text-surface-200'}"
             onclick={showRoutes}
           >
             Routes
           </button>
+          {/if}
           <button
             class="px-3 py-1.5 text-sm rounded transition-colors {page === 'dashboard' ? 'bg-surface-700 text-surface-50' : 'text-surface-400 hover:text-surface-200'}"
             onclick={showDashboard}
@@ -128,7 +139,13 @@
       {:else if page === 'dashboard'}
         <DashboardPage />
       {:else if page === 'settings'}
-        <SettingsPage />
+        <SettingsPage {isOnroad} />
+      {:else if isOnroad}
+        <div class="flex items-center justify-center h-64">
+          <div class="text-center">
+            <p class="text-surface-400 text-lg">Routes unavailable while driving</p>
+          </div>
+        </div>
       {:else if $selectedRoute}
         <RouteDetailPage />
       {:else}
