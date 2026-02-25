@@ -3,5 +3,6 @@ __pycache__/
 node_modules/
 frontend/node_modules/
 frontend/.svelte-kit/
+static/
 test_overlay.png
 reference/
