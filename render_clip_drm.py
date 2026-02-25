@@ -237,6 +237,10 @@ def main():
                                         "total_sec": duration, "phase": "loading params"})
 
         with OpenpilotPrefix(prefix, shared_download_cache=True):
+            # Ensure shm prefix directory exists for msgq socket binding
+            # C++ msgq uses /dev/shm/msgq_{prefix}/ path format
+            os.makedirs(f"/dev/shm/msgq_{prefix}", exist_ok=True)
+
             # Populate CarParams from rlog
             lr = LogReader(rlog_path)
             populate_car_params(lr)
@@ -474,6 +478,7 @@ def main():
             import shutil
             shutil.rmtree(symlink_dir, ignore_errors=True)
             shutil.rmtree(f"/dev/shm/{prefix}", ignore_errors=True)
+            shutil.rmtree(f"/dev/shm/msgq_{prefix}", ignore_errors=True)
             shutil.rmtree(f"/data/params/{prefix}", ignore_errors=True)
             if os.path.isfile(raw_output):
                 os.unlink(raw_output)

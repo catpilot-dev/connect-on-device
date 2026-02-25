@@ -88,15 +88,40 @@ async def _ensure_production_ui(max_retries: int = 3, delay: float = 2.0):
         logger.error("Failed to restore production UI after %d retries", max_retries)
 
 
-async def _ensure_replay_binary():
-    """Check replay binary exists; rebuild from scons cache if missing.
+async def _verify_replay_binary():
+    """Test-run replay binary to verify it's functional.
 
-    Returns True if binary is available, False on build failure.
+    Returns True if healthy, False if broken (crash, missing libs, ABI mismatch).
+    Checks that the binary can run without crashing — a normal exit (code >= 0)
+    is OK; only signal kills (code < 0, e.g. SIGABRT=-6) indicate breakage.
     """
-    if REPLAY_BIN.is_file():
-        return True
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            str(REPLAY_BIN), "--help",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+        if proc.returncode >= 0:
+            return True
+        # Negative return code = killed by signal (e.g. -6 = SIGABRT)
+        logger.warning("Replay binary crashed (signal %d): %s",
+                       -proc.returncode, (stdout.decode()[-200:] if stdout else ""))
+        return False
+    except asyncio.TimeoutError:
+        logger.warning("Replay binary health check timed out")
+        return False
+    except Exception as e:
+        logger.warning("Replay binary health check error: %s", e)
+        return False
 
-    logger.info("Replay binary missing, rebuilding from scons cache...")
+
+async def _rebuild_replay_binary():
+    """Rebuild replay binary from scons cache.
+
+    Returns True on success, False on failure.
+    """
+    logger.info("Rebuilding replay binary from scons cache...")
     proc = await asyncio.create_subprocess_exec(
         "scons", "tools/replay/replay", "-j2",
         cwd=str(OPENPILOT_DIR),
@@ -110,8 +135,25 @@ async def _ensure_replay_binary():
         logger.info("Replay binary rebuilt successfully")
         return True
     else:
-        logger.error("Failed to rebuild replay binary: %s", stdout.decode()[-500:] if stdout else "no output")
+        logger.error("Failed to rebuild replay binary: %s",
+                     stdout.decode()[-500:] if stdout else "no output")
         return False
+
+
+async def _ensure_replay_binary():
+    """Check replay binary exists and is functional; rebuild if needed.
+
+    Returns True if binary is available, False on build failure.
+    """
+    if not REPLAY_BIN.is_file():
+        logger.info("Replay binary missing, rebuilding...")
+        return await _rebuild_replay_binary()
+
+    if not await _verify_replay_binary():
+        logger.info("Replay binary broken, rebuilding...")
+        return await _rebuild_replay_binary()
+
+    return True
 
 # Quality presets for HUD video rendering (Weston/screenshooter mode)
 # speed: replay -x flag (lower = more unique frames per second of route time)

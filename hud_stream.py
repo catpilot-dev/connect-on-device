@@ -83,19 +83,23 @@ def _start_selfdrive_publisher(stop_event: threading.Event):
     On C3 (non-PC), the UI checks for stale selfdriveState and shows a
     full-screen red alert after 5s. Publishing at 20Hz keeps it fresh.
     """
-    if OPENPILOT_DIR not in sys.path:
-        sys.path.insert(0, OPENPILOT_DIR)
-    import cereal.messaging as messaging
-    pm = messaging.PubMaster(['selfdriveState'])
-    while not stop_event.is_set():
-        msg = messaging.new_message('selfdriveState')
-        msg.valid = True
-        ss = msg.selfdriveState
-        ss.enabled = False
-        ss.active = False
-        ss.alertSize = 0  # NONE - no alert overlay
-        pm.send('selfdriveState', msg)
-        stop_event.wait(0.05)  # 20Hz
+    try:
+        if OPENPILOT_DIR not in sys.path:
+            sys.path.insert(0, OPENPILOT_DIR)
+        import cereal.messaging as messaging
+        pm = messaging.PubMaster(['selfdriveState'])
+        while not stop_event.is_set():
+            msg = messaging.new_message('selfdriveState')
+            msg.valid = True
+            ss = msg.selfdriveState
+            ss.enabled = False
+            ss.active = False
+            ss.alertSize = 0  # NONE - no alert overlay
+            pm.send('selfdriveState', msg)
+            stop_event.wait(0.05)  # 20Hz
+    except Exception as e:
+        # "Address already in use" is expected — replay takes over the endpoint
+        logger.info("selfdriveState publisher stopped: %s", e)
 
 
 def _stop_production_ui():
@@ -262,6 +266,11 @@ class HudStreamManager:
             # Copy user params (IsMetric etc.) into isolated prefix
             _copy_user_params(self._prefix)
 
+            # Ensure shm prefix directory exists for msgq socket binding.
+            # C++ msgq uses /dev/shm/msgq_{prefix}/ path format, while
+            # OpenpilotPrefix creates /dev/shm/{prefix}/ — we need both.
+            os.makedirs(f"/dev/shm/msgq_{self._prefix}", exist_ok=True)
+
             # Start selfdriveState publisher to prevent "System Unresponsive"
             self._sd_stop = threading.Event()
             sd_thread = threading.Thread(
@@ -292,14 +301,15 @@ class HudStreamManager:
             self._procs.append(replay_proc)
 
             # Wait for replay to create cereal sockets
-            shm_dir = f"/dev/shm/{self._prefix}"
+            # C++ msgq creates sockets at /dev/shm/msgq_{prefix}/{service}
+            msgq_shm_dir = f"/dev/shm/msgq_{self._prefix}"
             deadline = time.monotonic() + 15
             replay_ready = False
             while time.monotonic() < deadline:
                 if replay_proc.poll() is not None:
                     break
-                if (os.path.isdir(shm_dir) and
-                        os.path.exists(os.path.join(shm_dir, "modelV2"))):
+                if (os.path.isdir(msgq_shm_dir) and
+                        os.path.exists(os.path.join(msgq_shm_dir, "modelV2"))):
                     replay_ready = True
                     break
                 time.sleep(0.3)
@@ -409,6 +419,9 @@ class HudStreamManager:
             # Copy user params (IsMetric etc.) into isolated prefix
             _copy_user_params(self._prefix)
 
+            # Ensure shm prefix directory exists for msgq socket binding
+            os.makedirs(f"/dev/shm/msgq_{self._prefix}", exist_ok=True)
+
             # Environment for child processes
             env = os.environ.copy()
             env["XDG_RUNTIME_DIR"] = XDG_RUNTIME_DIR
@@ -431,14 +444,15 @@ class HudStreamManager:
             self._procs.append(replay_proc)
 
             # Wait for replay to create cereal sockets
-            shm_dir = f"/dev/shm/{self._prefix}"
+            # C++ msgq creates sockets at /dev/shm/msgq_{prefix}/{service}
+            msgq_shm_dir = f"/dev/shm/msgq_{self._prefix}"
             deadline = time.monotonic() + 15
             replay_ready = False
             while time.monotonic() < deadline:
                 if replay_proc.poll() is not None:
                     break
-                if (os.path.isdir(shm_dir) and
-                        os.path.exists(os.path.join(shm_dir, "modelV2"))):
+                if (os.path.isdir(msgq_shm_dir) and
+                        os.path.exists(os.path.join(msgq_shm_dir, "modelV2"))):
                     replay_ready = True
                     break
                 time.sleep(0.3)
@@ -601,6 +615,7 @@ class HudStreamManager:
         # Clean up shared memory and params
         if self._prefix:
             shutil.rmtree(f"/dev/shm/{self._prefix}", ignore_errors=True)
+            shutil.rmtree(f"/dev/shm/msgq_{self._prefix}", ignore_errors=True)
             shutil.rmtree(f"/data/params/{self._prefix}", ignore_errors=True)
             self._prefix = None
 
