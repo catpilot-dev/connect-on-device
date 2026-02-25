@@ -49,7 +49,6 @@ from .hud import (
     handle_hud_stream_stop,
     handle_hud_stream_status,
     handle_hud_stream_serve,
-    handle_hud_ws,
 )
 
 from .software import (

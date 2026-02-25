@@ -1,15 +1,9 @@
 """HUD live streaming pipeline manager for C3.
 
-Supports two modes:
+DRM mode (production):
+  replay(0.2x) -> UI(RECORD=1, RECORD_HLS=1, DRM) -> ffmpeg(HLS) -> /tmp/hud_live/
 
-1. **DRM mode** (preferred, production):
-   replay(0.2x) -> UI(RECORD=1, RECORD_HLS=1, DRM) -> ffmpeg(HLS) -> /tmp/hud_live/
-
-2. **Weston mode** (legacy fallback):
-   patched_weston -> replay(1x) + UI(wayland-egl) -> stream_capture(5fps) -> ffmpeg -> HLS
-
-Only one stream can be active at a time since both modes require exclusive display access.
-DRM mode is auto-selected when raylib + ui.py are available; otherwise falls back to Weston.
+Only one stream can be active at a time since DRM requires exclusive display access.
 """
 
 import asyncio
@@ -28,21 +22,7 @@ logger = logging.getLogger("hud_stream")
 
 # C3 binary paths
 OPENPILOT_DIR = "/data/openpilot"
-BIN_DIR = "/data/connect_on_device/bin"
-UI_BIN = os.path.join(OPENPILOT_DIR, "selfdrive/ui/ui")
 REPLAY_BIN = os.path.join(OPENPILOT_DIR, "tools/replay/replay")
-WESTON_PATCHED = os.path.join(BIN_DIR, "weston_patched")
-STREAM_CAPTURE = os.path.join(BIN_DIR, "stream_capture")
-WESTON_STOCK = "/usr/bin/weston"
-WESTON_CONFIG = "/usr/comma/weston.ini"
-
-# Weston capture settings — C3 display is 1080x2160 portrait
-CAPTURE_WIDTH = 1080
-CAPTURE_HEIGHT = 2160
-CAPTURE_FPS = 5       # Achievable rate with GPU readback
-WARMUP_SEC = 5
-XDG_RUNTIME_DIR = "/var/tmp/weston"
-WAYLAND_DISPLAY = "wayland-0"
 
 # DRM mode constants (reuse proven values from render_clip_drm.py)
 DRM_RAYLIB_PATH = "/data/pip_packages"
@@ -65,16 +45,9 @@ def _is_drm_available() -> bool:
     )
 
 
-def _is_weston_available() -> bool:
-    """Check if Weston streaming mode can be used."""
-    return all(os.path.isfile(p) for p in [
-        WESTON_PATCHED, STREAM_CAPTURE, UI_BIN, REPLAY_BIN,
-    ])
-
-
 def is_available() -> bool:
-    """Check if any streaming mode is available."""
-    return _is_drm_available() or _is_weston_available()
+    """Check if streaming is available."""
+    return _is_drm_available()
 
 
 def _start_selfdrive_publisher(stop_event: threading.Event):
@@ -154,19 +127,17 @@ class HudStreamManager:
 
     def __init__(self):
         self._procs: list = []
-        self._weston_proc = None
         self._status = "idle"   # idle | starting | streaming | error | stopping
         self._error = None
         self._route_name = None
         self._symlink_dir = None
         self._prefix = None
         self._lock = asyncio.Lock()
-        self._mode = "drm" if _is_drm_available() else "weston"
-        self._sd_stop = None  # selfdriveState publisher stop event (DRM mode)
+        self._sd_stop = None  # selfdriveState publisher stop event
 
     @property
     def status(self) -> dict:
-        result = {"status": self._status, "mode": self._mode}
+        result = {"status": self._status}
         if self._route_name:
             result["route"] = self._route_name
         if self._error:
@@ -187,13 +158,8 @@ class HudStreamManager:
         """Check if key processes are still running."""
         if not self._procs:
             return False
-        if self._mode == "drm":
-            # In DRM mode, the UI process is the pipeline (it runs ffmpeg internally)
-            # Check the last proc (UI)
-            return self._procs[-1].poll() is None
-        else:
-            # Weston mode: last two procs are capture and ffmpeg
-            return all(p.poll() is None for p in self._procs[-2:] if p is not None)
+        # The UI process is the pipeline (it runs ffmpeg internally)
+        return self._procs[-1].poll() is None
 
     async def start(self, route_name: str, local_id: str, dongle_id: str,
                     data_dir: str, start_sec: float = 0, max_seg: int = -1):
@@ -210,16 +176,9 @@ class HudStreamManager:
 
         loop = asyncio.get_event_loop()
         loop.run_in_executor(
-            None, self._start_sync, route_name, local_id, dongle_id,
+            None, self._start_sync_drm, route_name, local_id, dongle_id,
             data_dir, start_sec, max_seg,
         )
-
-    def _start_sync(self, route_name, local_id, dongle_id, data_dir, start_sec, max_seg):
-        """Route to the appropriate mode's startup."""
-        if self._mode == "drm":
-            self._start_sync_drm(route_name, local_id, dongle_id, data_dir, start_sec, max_seg)
-        else:
-            self._start_sync_weston(route_name, local_id, dongle_id, data_dir, start_sec, max_seg)
 
     def _start_sync_drm(self, route_name, local_id, dongle_id, data_dir, start_sec, max_seg):
         """DRM mode: replay + UI(RECORD_HLS) -> HLS output."""
@@ -387,170 +346,6 @@ class HudStreamManager:
             self._error = str(e)
             self._cleanup_sync()
 
-    def _start_sync_weston(self, route_name, local_id, dongle_id, data_dir, start_sec, max_seg):
-        """Weston mode: patched_weston + stream_capture -> ffmpeg -> HLS."""
-        try:
-            self._prefix = f"stream_{os.getpid()}_{int(time.time())}"
-
-            # Prepare HLS output directory
-            if HLS_DIR.exists():
-                shutil.rmtree(HLS_DIR)
-            HLS_DIR.mkdir(parents=True)
-
-            # Find segments
-            if max_seg < 0:
-                max_seg = _find_max_segment(data_dir, local_id)
-            if max_seg < 0:
-                self._status = "error"
-                self._error = "No segments found"
-                return
-
-            # Create symlinks for replay
-            self._symlink_dir = _create_symlink_dir(
-                data_dir, local_id, dongle_id, max_seg + 1)
-
-            # Switch to patched weston
-            self._weston_proc = _switch_to_patched_weston()
-            if self._weston_proc is None:
-                self._status = "error"
-                self._error = "Compositor failed to start"
-                _restore_stock_weston()
-                return
-
-            # Copy user params (IsMetric etc.) into isolated prefix
-            _copy_user_params(self._prefix)
-
-            # Ensure shm prefix directory exists for msgq socket binding
-            os.makedirs(f"/dev/shm/msgq_{self._prefix}", exist_ok=True)
-
-            # Environment for child processes
-            env = os.environ.copy()
-            env["XDG_RUNTIME_DIR"] = XDG_RUNTIME_DIR
-            env["WAYLAND_DISPLAY"] = WAYLAND_DISPLAY
-            env["OPENPILOT_PREFIX"] = self._prefix
-            env["TERM"] = "xterm"
-
-            # Start replay (loops by default for continuous streaming)
-            canonical = f"{dongle_id}|{local_id}"
-            replay_proc = subprocess.Popen(
-                [REPLAY_BIN, "--qcam", "-c", "1",
-                 "-s", str(int(max(start_sec, 0))),
-                 "--data_dir", self._symlink_dir,
-                 "--prefix", self._prefix,
-                 canonical],
-                env=env,
-                stdout=subprocess.DEVNULL,
-                stderr=open("/tmp/hud_replay.log", "w"),
-            )
-            self._procs.append(replay_proc)
-
-            # Wait for replay to create cereal sockets
-            # C++ msgq creates sockets at /dev/shm/msgq_{prefix}/{service}
-            msgq_shm_dir = f"/dev/shm/msgq_{self._prefix}"
-            deadline = time.monotonic() + 15
-            replay_ready = False
-            while time.monotonic() < deadline:
-                if replay_proc.poll() is not None:
-                    break
-                if (os.path.isdir(msgq_shm_dir) and
-                        os.path.exists(os.path.join(msgq_shm_dir, "modelV2"))):
-                    replay_ready = True
-                    break
-                time.sleep(0.3)
-
-            if not replay_ready:
-                self._status = "error"
-                self._error = "Replay failed to start"
-                self._cleanup_sync()
-                return
-
-            logger.info("Replay ready for %s", route_name)
-
-            # Start openpilot UI as wayland client
-            ui_proc = subprocess.Popen(
-                [UI_BIN, "-platform", "wayland-egl"],
-                env=env,
-                stdout=subprocess.DEVNULL,
-                stderr=open("/tmp/hud_ui.log", "w"),
-            )
-            self._procs.append(ui_proc)
-            time.sleep(WARMUP_SEC)
-
-            if ui_proc.poll() is not None:
-                self._status = "error"
-                self._error = f"UI exited ({ui_proc.returncode})"
-                self._cleanup_sync()
-                return
-
-            logger.info("UI running, starting HLS capture")
-
-            # stream_capture -> ffmpeg -> HLS pipeline
-            cap_env = os.environ.copy()
-            cap_env["XDG_RUNTIME_DIR"] = XDG_RUNTIME_DIR
-            cap_env["WAYLAND_DISPLAY"] = WAYLAND_DISPLAY
-
-            capture_proc = subprocess.Popen(
-                ["sudo", "-E", STREAM_CAPTURE,
-                 "-w", str(CAPTURE_WIDTH), "-h", str(CAPTURE_HEIGHT),
-                 "-r", str(CAPTURE_FPS), "-v"],
-                env=cap_env,
-                stdout=subprocess.PIPE,
-                stderr=open("/tmp/hud_capture.log", "w"),
-            )
-            self._procs.append(capture_proc)
-
-            # GOP size = fps * hls_time -> keyframe every segment boundary
-            gop = CAPTURE_FPS * HLS_TIME
-
-            ffmpeg_proc = subprocess.Popen(
-                ["ffmpeg", "-y",
-                 "-f", "rawvideo", "-pixel_format", "bgra",
-                 "-video_size", f"{CAPTURE_WIDTH}x{CAPTURE_HEIGHT}",
-                 "-framerate", str(CAPTURE_FPS),
-                 "-i", "pipe:0",
-                 "-vf", "transpose=2",
-                 "-c:v", "libx264", "-preset", "ultrafast",
-                 "-tune", "zerolatency",
-                 "-g", str(gop), "-keyint_min", str(gop),
-                 "-crf", "23",
-                 "-pix_fmt", "yuv420p",
-                 "-f", "hls",
-                 "-hls_time", str(HLS_TIME),
-                 "-hls_list_size", str(HLS_LIST_SIZE),
-                 "-hls_flags", "delete_segments",
-                 "-hls_segment_filename", str(HLS_DIR / "seg_%03d.ts"),
-                 str(HLS_DIR / "stream.m3u8")],
-                stdin=capture_proc.stdout,
-                stdout=subprocess.DEVNULL,
-                stderr=open("/tmp/hud_ffmpeg.log", "w"),
-            )
-            self._procs.append(ffmpeg_proc)
-            capture_proc.stdout.close()  # Allow SIGPIPE propagation
-
-            # Wait for first HLS segment to appear
-            m3u8_path = HLS_DIR / "stream.m3u8"
-            deadline = time.monotonic() + 30
-            while time.monotonic() < deadline:
-                if m3u8_path.exists() and m3u8_path.stat().st_size > 20:
-                    break
-                if capture_proc.poll() is not None or ffmpeg_proc.poll() is not None:
-                    break
-                time.sleep(0.5)
-
-            if m3u8_path.exists() and m3u8_path.stat().st_size > 20:
-                self._status = "streaming"
-                logger.info("HLS streaming active for %s", route_name)
-            else:
-                self._status = "error"
-                self._error = "HLS output not generated"
-                self._cleanup_sync()
-
-        except Exception as e:
-            logger.exception("Stream start failed")
-            self._status = "error"
-            self._error = str(e)
-            self._cleanup_sync()
-
     async def stop(self):
         """Stop the streaming pipeline and restore display."""
         async with self._lock:
@@ -568,7 +363,7 @@ class HudStreamManager:
 
     def _cleanup_sync(self):
         """Kill all child processes, restore display, clean up temp files."""
-        # Stop selfdriveState publisher (DRM mode)
+        # Stop selfdriveState publisher
         if self._sd_stop:
             self._sd_stop.set()
             self._sd_stop = None
@@ -593,20 +388,16 @@ class HudStreamManager:
         subprocess.run(["pkill", "-KILL", "-f", "tools/replay/replay"],
                        capture_output=True)
 
-        if self._mode == "drm":
-            # Exit OpenpilotPrefix context if active
-            if hasattr(self, '_op_prefix') and self._op_prefix:
-                try:
-                    self._op_prefix.__exit__(None, None, None)
-                except Exception:
-                    pass
-                self._op_prefix = None
+        # Exit OpenpilotPrefix context if active
+        if hasattr(self, '_op_prefix') and self._op_prefix:
+            try:
+                self._op_prefix.__exit__(None, None, None)
+            except Exception:
+                pass
+            self._op_prefix = None
 
-            # Restart production UI (same approach as render_clip_drm.py)
-            _restart_production_ui()
-        else:
-            # Weston mode: restore stock compositor
-            _restore_stock_weston()
+        # Restart production UI
+        _restart_production_ui()
 
         # Clean up symlink directory
         if self._symlink_dir:
@@ -621,7 +412,7 @@ class HudStreamManager:
             self._prefix = None
 
 
-# --- Module-level helpers (shared with render_clip.py logic) ----------
+# --- Module-level helpers (shared with render_clip_drm.py logic) ----------
 
 def _find_max_segment(data_dir: str, local_id: str) -> int:
     max_seg = -1
@@ -671,73 +462,3 @@ def _copy_user_params(prefix: str):
                 pass
     if copied:
         logger.info("Copied params to /%s: %s", prefix, ", ".join(copied))
-
-
-def _switch_to_patched_weston():
-    logger.info("Stopping stock weston...")
-    subprocess.run(["sudo", "pkill", "-f", "weston"], capture_output=True)
-    time.sleep(2)
-
-    os.makedirs(XDG_RUNTIME_DIR, exist_ok=True)
-
-    logger.info("Starting patched weston...")
-    env = os.environ.copy()
-    env["XDG_RUNTIME_DIR"] = XDG_RUNTIME_DIR
-    proc = subprocess.Popen(
-        ["sudo", "-E", WESTON_PATCHED, "--idle-time=0", "--tty=1",
-         f"--config={WESTON_CONFIG}"],
-        env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=open("/tmp/hud_weston.log", "w"),
-    )
-    time.sleep(3)
-
-    if proc.poll() is not None:
-        logger.error("Patched weston failed (exit %s)", proc.returncode)
-        return None
-
-    socket_path = os.path.join(XDG_RUNTIME_DIR, WAYLAND_DISPLAY)
-    subprocess.run(["sudo", "chmod", "777", socket_path], capture_output=True)
-
-    logger.info("Patched weston running (PID %d)", proc.pid)
-    return proc
-
-
-def _restore_stock_weston():
-    logger.info("Restoring stock weston...")
-    subprocess.run(["sudo", "pkill", "-f", "weston_patched"], capture_output=True)
-    subprocess.run(["sudo", "pkill", "-f", "weston"], capture_output=True)
-    time.sleep(2)
-
-    os.makedirs(XDG_RUNTIME_DIR, exist_ok=True)
-
-    env = os.environ.copy()
-    env["XDG_RUNTIME_DIR"] = XDG_RUNTIME_DIR
-    proc = subprocess.Popen(
-        ["sudo", "-E", WESTON_STOCK, "--idle-time=0", "--tty=1",
-         f"--config={WESTON_CONFIG}"],
-        env=env,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
-
-    # Wait for wayland socket to appear (up to 5s)
-    socket_path = os.path.join(XDG_RUNTIME_DIR, WAYLAND_DISPLAY)
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        if proc.poll() is not None:
-            logger.error("Stock weston exited immediately (code %s)", proc.returncode)
-            break
-        if os.path.exists(socket_path):
-            break
-        time.sleep(0.3)
-
-    # Open socket permissions so openpilot UI can connect
-    if os.path.exists(socket_path):
-        subprocess.run(["sudo", "chmod", "777", socket_path], capture_output=True)
-        logger.info("Stock weston restored (socket ready)")
-    else:
-        logger.error("Stock weston socket not found at %s", socket_path)
-
-    # Kill any stale openpilot UI so the manager restarts it on the new weston
-    subprocess.run(["pkill", "-f", "selfdrive/ui/ui"], capture_output=True)
-    logger.info("Signaled openpilot UI restart")

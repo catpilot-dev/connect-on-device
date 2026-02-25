@@ -38,7 +38,6 @@ from handlers import (
     handle_hud_stream_status,
     handle_hud_stream_stop,
     handle_hud_video,
-    handle_hud_ws,
     handle_me,
     handle_models_active,
     handle_models_check_updates,
@@ -240,9 +239,6 @@ def create_app(data_dir: str, static_dir: str) -> web.Application:
     app.router.add_delete("/v1/ssh-keys", handle_ssh_keys_delete)
 
     app.router.add_post("/api/webrtc", handle_webrtc)
-
-    # HUD overlay WebSocket (server-side rendered overlay at 20Hz)
-    app.router.add_get("/ws/hud", handle_hud_ws)
 
     # Dashboard telemetry (replay REST + live WebSocket)
     app.router.add_get("/v1/dashboard/telemetry/{routeName}/{segments}", handle_dashboard_telemetry)
