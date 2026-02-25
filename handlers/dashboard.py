@@ -115,8 +115,30 @@ async def handle_dashboard_ws(request):
             await asyncio.sleep(0.2)  # 5Hz
 
     except ImportError:
-        logger.warning("cereal not available — sending empty telemetry on WebSocket")
-        await ws.send_str(json.dumps({"error": "cereal not available (not running on C3)"}))
+        # Mock telemetry for testing UI when cereal is unavailable
+        import math, time as _time, random
+        logger.info("cereal not available — streaming mock telemetry")
+        t0 = _time.time()
+        while not ws.closed:
+            t = _time.time() - t0
+            msg = {
+                "t": round(t, 3),
+                "coolantTemp": round(80 + 10 * math.sin(t / 60), 1),
+                "oilTemp": round(90 + 15 * math.sin(t / 80), 1),
+                "vEgo": round(max(0, 22 + 8 * math.sin(t / 15)), 3),
+                "steeringAngleDeg": round(30 * math.sin(t / 5), 2),
+                "gasPressed": False,
+                "brakePressed": t % 20 > 18,
+                "cruiseSpeed": round(30 / 3.6, 2),
+                "cruiseEnabled": True,
+                "steerCmd": round(0.3 * math.sin(t / 5), 4),
+                "accelCmd": round(0.5 * math.sin(t / 10), 4),
+                "sdState": "enabled",
+                "sdEnabled": True,
+                "voltage": round(13.8 + 0.3 * math.sin(t / 30), 2),
+            }
+            await ws.send_str(json.dumps(msg))
+            await asyncio.sleep(0.2)
     except Exception as e:
         if not ws.closed:
             logger.warning("Dashboard WebSocket error: %s", e)
