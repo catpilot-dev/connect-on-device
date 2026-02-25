@@ -56,14 +56,35 @@
   function toggleFullscreen() {
     const container = document.querySelector('[data-video-container]')
     if (!container) return
+
+    // Native Fullscreen API (desktop + Android)
     if (document.fullscreenElement) {
       document.exitFullscreen?.()
-    } else {
-      const rfs = container.requestFullscreen
-        || container.webkitRequestFullscreen
-        || container.mozRequestFullScreen
-        || container.msRequestFullscreen
-      rfs?.call(container)
+      return
+    }
+    const rfs = container.requestFullscreen
+      || container.webkitRequestFullscreen
+      || container.mozRequestFullScreen
+      || container.msRequestFullscreen
+    if (rfs) {
+      rfs.call(container)
+      return
+    }
+
+    // iOS fallback: CSS-based fullscreen (iOS doesn't support Fullscreen API on divs)
+    container.classList.toggle('ios-fullscreen')
+    const entering = container.classList.contains('ios-fullscreen')
+    // Dispatch synthetic fullscreenchange so RouteDetailPage picks it up
+    document.dispatchEvent(new Event('fullscreenchange'))
+    if (entering) {
+      container._iosEscHandler = (e) => {
+        if (e.key === 'Escape') {
+          container.classList.remove('ios-fullscreen')
+          document.dispatchEvent(new Event('fullscreenchange'))
+          document.removeEventListener('keydown', container._iosEscHandler)
+        }
+      }
+      document.addEventListener('keydown', container._iosEscHandler)
     }
   }
 </script>

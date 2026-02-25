@@ -142,7 +142,8 @@
   })
 
   function onFullscreenChange() {
-    isFullscreen = !!document.fullscreenElement
+    const container = document.querySelector('[data-video-container]')
+    isFullscreen = !!document.fullscreenElement || !!container?.classList.contains('ios-fullscreen')
     // Auto-rotate to landscape on mobile when entering fullscreen
     try {
       if (isFullscreen) {
@@ -731,6 +732,7 @@
             onPause={handlePause}
             onHudStream={!enriching && !hudMode ? handleHudStream : undefined}
             onHudDownload={!enriching && !hudMode ? handleHudDownload : undefined}
+            onHevcFailed={() => { hevcSupported = false; hdSource = null }}
           />
           {#if isFullscreen && !enriching}
             <!-- Floating controls overlay in fullscreen -->
@@ -1097,13 +1099,19 @@
 </div>
 
 <style>
-  .fullscreen-container {
+  .fullscreen-container,
+  :global(.ios-fullscreen) {
     display: flex;
     flex-direction: column;
     height: 100vh;
     height: 100dvh; /* dynamic viewport height — excludes mobile browser chrome */
     background: black;
     gap: 0;
+  }
+  :global(.ios-fullscreen) {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
   }
   .fullscreen-video {
     flex: 1;

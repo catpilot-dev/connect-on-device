@@ -33,6 +33,7 @@
     onPause,
     onHudStream,
     onHudDownload,
+    onHevcFailed,
   } = $props()
 
   let videoEl = $state(null)
@@ -89,8 +90,8 @@
     if (Hls.isSupported()) {
       hls = new Hls({
         enableWorker: true,
-        maxBufferLength: 30,
-        maxMaxBufferLength: 120,
+        maxBufferLength: 60,
+        maxMaxBufferLength: 180,
         startLevel: 0,
         fragLoadingTimeOut: 20000,
         fragLoadingMaxRetry: 6,
@@ -231,6 +232,9 @@
     }, { once: true })
     hdVideoEl.addEventListener('error', () => {
       console.warn('HD segment load error:', hdSource, seg)
+      // HEVC playback failed (e.g. Firefox on iOS reports support but can't render)
+      // Fall back to qcamera HLS
+      onHevcFailed?.()
     }, { once: true })
   }
 
