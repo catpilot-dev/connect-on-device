@@ -509,6 +509,13 @@
     return flat.length > 0 ? flat : (dashStarted ? [] : null)
   })
 
+  // Auto-enter note edit mode when Notes tab selected with empty note
+  $effect(() => {
+    if (activeTab === 'note' && !noteText && !editingNote) {
+      editingNote = true
+    }
+  })
+
   // Load telemetry when dashboard tab first selected
   $effect(() => {
     if (activeTab === 'dashboard' && !dashStarted && route) {
