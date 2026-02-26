@@ -1006,8 +1006,7 @@ class RouteStore:
         bookmarks.append({"time_sec": round(time_sec, 1), "label": label})
         bookmarks.sort(key=lambda b: b["time_sec"])
         meta["bookmarks"] = bookmarks
-        self._rebuild_routes()
-        self._save_metadata()
+        self._executor.submit(self._save_metadata)
         return bookmarks
 
     def update_bookmark(self, local_id: str, index: int, label: str) -> list:
@@ -1018,8 +1017,7 @@ class RouteStore:
         bookmarks = meta.get("bookmarks", [])
         if 0 <= index < len(bookmarks):
             bookmarks[index]["label"] = label
-        self._rebuild_routes()
-        self._save_metadata()
+        self._executor.submit(self._save_metadata)
         return bookmarks
 
     def delete_bookmark(self, local_id: str, index: int) -> list:
@@ -1031,8 +1029,7 @@ class RouteStore:
         if 0 <= index < len(bookmarks):
             bookmarks.pop(index)
         meta["bookmarks"] = bookmarks
-        self._rebuild_routes()
-        self._save_metadata()
+        self._executor.submit(self._save_metadata)
         return bookmarks
 
     def get_recycled_routes(self) -> list[dict]:

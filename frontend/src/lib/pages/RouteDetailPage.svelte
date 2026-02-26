@@ -455,25 +455,27 @@
     if (route) await saveNote(route.local_id, noteText)
   }
 
-  async function addBookmarkHandler() {
+  function addBookmarkHandler() {
     if (!route || !newBookmarkLabel.trim()) return
-    const result = await addBookmark(route.local_id, currentTime, newBookmarkLabel.trim())
-    metaBookmarks = result.bookmarks
+    const bm = { time_sec: Math.round(currentTime * 10) / 10, label: newBookmarkLabel.trim() }
+    metaBookmarks = [...metaBookmarks, bm].sort((a, b) => a.time_sec - b.time_sec)
+    addBookmark(route.local_id, bm.time_sec, bm.label).catch(() => {})
     newBookmarkLabel = ''
     addingBookmark = false
   }
 
-  async function updateBookmarkHandler(index) {
+  function updateBookmarkHandler(index) {
     if (!route || !editingBookmarkLabel.trim()) return
-    const result = await updateBookmark(route.local_id, index, editingBookmarkLabel.trim())
-    metaBookmarks = result.bookmarks
+    metaBookmarks[index] = { ...metaBookmarks[index], label: editingBookmarkLabel.trim() }
+    metaBookmarks = metaBookmarks
+    updateBookmark(route.local_id, index, editingBookmarkLabel.trim()).catch(() => {})
     editingBookmarkIdx = -1
   }
 
-  async function deleteBookmarkHandler(index) {
+  function deleteBookmarkHandler(index) {
     if (!route) return
-    const result = await deleteBookmark(route.local_id, index)
-    metaBookmarks = result.bookmarks
+    metaBookmarks = metaBookmarks.filter((_, i) => i !== index)
+    deleteBookmark(route.local_id, index).catch(() => {})
   }
 
   let activeTab = $state('map')
