@@ -107,6 +107,16 @@ export async function addBookmark(routeName, timeSec, label) {
   return res.json()
 }
 
+export async function updateBookmark(routeName, index, label) {
+  const res = await fetch(`/v1/route/${routeId(routeName)}/bookmark/${index}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ label }),
+  })
+  if (!res.ok) throw new Error(`updateBookmark: ${res.status}`)
+  return res.json()
+}
+
 export async function deleteBookmark(routeName, index) {
   const res = await fetch(`/v1/route/${routeId(routeName)}/bookmark/${index}`, { method: 'DELETE' })
   if (!res.ok) throw new Error(`deleteBookmark: ${res.status}`)

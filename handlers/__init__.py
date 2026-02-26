@@ -30,6 +30,7 @@ from .routes import (
     handle_route_delete,
     handle_route_note,
     handle_route_bookmark_add,
+    handle_route_bookmark_update,
     handle_route_bookmark_delete,
     handle_route_preserve,
     handle_route_unpreserve,

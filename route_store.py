@@ -1010,6 +1010,18 @@ class RouteStore:
         self._save_metadata()
         return bookmarks
 
+    def update_bookmark(self, local_id: str, index: int, label: str) -> list:
+        """Update a bookmark's label by index. Returns updated bookmark list."""
+        meta = self._metadata.get(local_id)
+        if not meta:
+            return []
+        bookmarks = meta.get("bookmarks", [])
+        if 0 <= index < len(bookmarks):
+            bookmarks[index]["label"] = label
+        self._rebuild_routes()
+        self._save_metadata()
+        return bookmarks
+
     def delete_bookmark(self, local_id: str, index: int) -> list:
         """Delete a bookmark by index. Returns updated bookmark list."""
         meta = self._metadata.get(local_id)

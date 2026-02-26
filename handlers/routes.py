@@ -440,6 +440,19 @@ async def handle_route_bookmark_add(request: web.Request) -> web.Response:
     return web.json_response({"bookmarks": bookmarks})
 
 
+async def handle_route_bookmark_update(request: web.Request) -> web.Response:
+    """PUT /v1/route/{routeName}/bookmark/{index} — update a bookmark label"""
+    store = request.app["store"]
+    local_id = _resolve_local_id(store, request)
+    index = int(request.match_info["index"])
+    body = await request.json()
+    label = body.get("label", "").strip()
+    if not label:
+        raise web.HTTPBadRequest(text=json.dumps({"error": "label is required"}))
+    bookmarks = store.update_bookmark(local_id, index, label)
+    return web.json_response({"bookmarks": bookmarks})
+
+
 async def handle_route_bookmark_delete(request: web.Request) -> web.Response:
     """DELETE /v1/route/{routeName}/bookmark/{index} — delete a bookmark"""
     store = request.app["store"]
