@@ -92,7 +92,6 @@
   let newBookmarkLabel = $state('')
   let editingBookmarkIdx = $state(-1)
   let editingBookmarkLabel = $state('')
-  let expandedBookmark = $state(-1)
 
   // Restore selection from URL path: /{dongleId}/{localId}/{start}/{end}
   const _urlParts = location.pathname.split('/').filter(Boolean)
@@ -1214,9 +1213,8 @@
                         {:else}
                           <button
                             type="button"
-                            class="flex-1 text-left text-xs text-surface-300 cursor-pointer hover:text-surface-100 whitespace-pre-wrap break-words"
-                            class:line-clamp-2={expandedBookmark !== i}
-                            onclick={() => { if (expandedBookmark === i) { editingBookmarkIdx = i; editingBookmarkLabel = bm.label; expandedBookmark = -1 } else { expandedBookmark = i } }}
+                            class="flex-1 text-left text-xs text-surface-300 cursor-pointer hover:text-surface-100 whitespace-pre-wrap break-words line-clamp-2"
+                            onclick={() => { editingBookmarkIdx = i; editingBookmarkLabel = bm.label }}
                           >{bm.label}</button>
                         {/if}
                         <button
