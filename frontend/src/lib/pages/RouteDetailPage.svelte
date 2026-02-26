@@ -1202,11 +1202,13 @@
                         {#if editingBookmarkIdx === i}
                           <!-- svelte-ignore a11y_autofocus -->
                           <textarea
-                            class="flex-1 bg-surface-700 text-surface-100 rounded px-2 py-1 text-sm outline-none focus:ring-1 focus:ring-surface-500 resize-none min-h-[2.5rem]"
+                            class="flex-1 bg-surface-700 text-surface-100 rounded px-2 py-1 text-sm outline-none focus:ring-1 focus:ring-surface-500 resize-none overflow-hidden"
+                            rows="1"
                             bind:value={editingBookmarkLabel}
                             onkeydown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); updateBookmarkHandler(i) } if (e.key === 'Escape') { editingBookmarkIdx = -1; e.target.onblur = null } }}
                             onblur={() => { if (editingBookmarkIdx === i) updateBookmarkHandler(i) }}
                             oninput={(e) => { e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px' }}
+                            onfocus={(e) => { e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px' }}
                             autofocus
                           ></textarea>
                         {:else}
