@@ -16,6 +16,13 @@
   const timelineEvents = $derived(route.timeline ?? [])
   const isRecycled = $derived(!!route.recycled_reason)
 
+  const RECYCLE_TTL_DAYS = 7
+  const daysLeft = $derived(() => {
+    if (!route.hidden_at) return null
+    const elapsed = (Date.now() / 1000 - route.hidden_at) / 86400
+    return Math.max(0, Math.ceil(RECYCLE_TTL_DAYS - elapsed))
+  })
+
   const FILMSTRIP_COUNT = 8
   const totalSegs = $derived(route.maxqlog != null ? route.maxqlog + 1 : 0)
   const filmstripSlots = $derived(() => {
@@ -62,6 +69,9 @@
         {/if}
         {#if route.recycled_reason === 'deleted'}
           <span class="px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-500/20 text-red-400">Deleted</span>
+          {#if daysLeft() != null}
+            <span class="px-1.5 py-0.5 rounded text-[10px] font-medium bg-surface-600/50 text-surface-400">{daysLeft()}d left</span>
+          {/if}
         {:else}
           <span class="px-1.5 py-0.5 rounded text-[10px] font-medium bg-surface-600/50 text-surface-400">Invalid</span>
         {/if}

@@ -65,6 +65,7 @@ from handlers import (
     handle_route_download,
     handle_route_enrich,
     handle_route_files,
+    handle_route_scan,
     handle_route_get,
     handle_route_manifest,
     handle_route_note,
@@ -94,17 +95,34 @@ from handlers import (
 )
 from hud_stream import HudStreamManager, is_available as hud_stream_available
 from route_store import DEFAULT_DATA_DIR, DEFAULT_PORT, RouteStore
+from storage_management import run_cleanup
 
 logger = logging.getLogger("connect")
 
 
 # ─── Lifecycle hooks ──────────────────────────────────────────────────
 
+async def _cleanup_worker(app: web.Application):
+    """Periodic storage cleanup — runs every 5 minutes."""
+    store: RouteStore = app["store"]
+    while True:
+        await asyncio.sleep(300)
+        try:
+            result = run_cleanup(store)
+            if result["deleted"]:
+                logger.info("Cleanup: %s", result)
+        except Exception:
+            logger.exception("Cleanup error")
+
+
 async def _startup(app: web.Application):
     """Initial route scan on server startup."""
     store: RouteStore = app["store"]
     store.scan(force=True)
     logger.info("Route scan complete, %d routes found", len(store._routes))
+
+    # Start periodic storage cleanup task
+    app["cleanup_task"] = asyncio.create_task(_cleanup_worker(app))
 
     # Initialize HUD stream manager if C3 binaries are available
     if hud_stream_available():
@@ -115,7 +133,11 @@ async def _startup(app: web.Application):
 
 
 async def _shutdown(app: web.Application):
-    """Clean shutdown — stop any active HUD stream."""
+    """Clean shutdown — stop any active HUD stream and cleanup task."""
+    task = app.get("cleanup_task")
+    if task:
+        task.cancel()
+
     mgr = app.get("stream_manager")
     if mgr and mgr.is_active:
         logger.info("Stopping active HUD stream on shutdown...")
@@ -161,6 +183,7 @@ def create_app(data_dir: str, static_dir: str) -> web.Application:
     app.router.add_delete("/v1/route/{routeName}/preserve", handle_route_unpreserve)
     app.router.add_get("/v1/route/{routeName}/download", handle_route_download)
     app.router.add_post("/v1/route/{routeName}/enrich", handle_route_enrich)
+    app.router.add_post("/v1/route/{routeName}/scan", handle_route_scan)
     app.router.add_post("/v1/route/{routeName}/screenshot", handle_screenshot)
     app.router.add_get("/v1/route/{routeName}/frame", handle_frame)
     app.router.add_get("/v1/route/{routeName}/camera/{camera_type}/{segment}", handle_camera_segment)

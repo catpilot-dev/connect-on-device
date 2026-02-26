@@ -128,7 +128,7 @@ class RouteStore:
         self._dongle_id: str = ""
         self._last_scan: float = 0
         self._metadata: dict = {}         # route_id -> route_metadata.py format
-        self._hidden: set = set()         # local_ids soft-deleted (hidden from list)
+        self._hidden: dict = {}            # local_id -> hide_time (Unix epoch)
         self._preserved: set = set()      # local_ids protected from cleanup
         self._metadata_path = Path(data_dir) / METADATA_FILE
         self._agnos_version: str | None = None
@@ -167,7 +167,15 @@ class RouteStore:
             try:
                 data = json.loads(self._metadata_path.read_text())
                 self._metadata = data.get("routes", {})
-                self._hidden = set(data.get("hidden_routes", []))
+                # hidden_routes: dict (new) or list (old format, backward compat)
+                raw_hidden = data.get("hidden_routes", {})
+                if isinstance(raw_hidden, list):
+                    # Old format: convert list to dict with current time as fallback
+                    self._hidden = {lid: time.time() for lid in raw_hidden}
+                elif isinstance(raw_hidden, dict):
+                    self._hidden = raw_hidden
+                else:
+                    self._hidden = {}
                 self._preserved = set(data.get("preserved_routes", []))
                 logger.info("Loaded metadata.json: %d routes, %d hidden, %d preserved",
                             len(self._metadata), len(self._hidden), len(self._preserved))
@@ -180,7 +188,7 @@ class RouteStore:
         data = {
             "version": "1.0",
             "last_updated": datetime.now(tz=timezone.utc).isoformat(),
-            "hidden_routes": sorted(self._hidden),
+            "hidden_routes": dict(sorted(self._hidden.items())),
             "preserved_routes": sorted(self._preserved),
             "routes": self._metadata,
         }
@@ -953,8 +961,8 @@ class RouteStore:
         return self._routes.get(fullname) if fullname else None
 
     def hide_route(self, local_id: str):
-        """Mark a route as hidden (soft-delete). Hidden from listings, deleted on low space."""
-        self._hidden.add(local_id)
+        """Mark a route as hidden (soft-delete). Hidden from listings, auto-purged after 7 days."""
+        self._hidden[local_id] = time.time()
         self._preserved.discard(local_id)
         self._rebuild_routes()
         self._save_metadata()
@@ -999,6 +1007,7 @@ class RouteStore:
 
             if local_id in self._hidden:
                 route["recycled_reason"] = "deleted"
+                route["hidden_at"] = self._hidden[local_id]
             elif route["maxqlog"] < 1 and not route.get("distance"):
                 route["recycled_reason"] = "invalid"
             elif not internal.get("wall_time_nanos"):

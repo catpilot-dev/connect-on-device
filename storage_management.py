@@ -3,14 +3,24 @@ Storage management for Connect on Device.
 
 Handles route preservation, soft-deletion, disk cleanup, and download streaming.
 Keeps server.py slim by isolating all storage logic here.
+
+Cleanup is a wrapper around openpilot's stock deleter (system/loggerd/deleter.py)
+with COD-specific logic:
+- Recycled routes: auto-purge after 7 days
+- COD-saved routes: respected unless emergency (<5GB)
+- xattr-preserved routes (from comma cloud): always respected by COD
+- Target: 10GB free (more conservative than stock 5GB)
 """
 
 import io
 import logging
+import os
 import shutil
 import tarfile
 import time
 from pathlib import Path
+
+from route_store import _route_counter
 
 logger = logging.getLogger("connect.storage")
 
@@ -22,6 +32,11 @@ DOWNLOAD_FILES = {
     "ecamera": ["ecamera.hevc"],
     "qlog": ["qlog.zst", "qlog"],
 }
+
+# COD cleanup thresholds
+MIN_FREE_BYTES = 10 * 1024 * 1024 * 1024   # 10 GB — phase 1 threshold
+EMERGENCY_BYTES = 5 * 1024 * 1024 * 1024    # 5 GB — phase 2 (emergency) threshold
+RECYCLE_TTL = 7 * 86400                      # 7 days before recycled routes auto-purge
 
 
 def get_storage_info(store) -> dict:
@@ -37,86 +52,94 @@ def get_storage_info(store) -> dict:
     }
 
 
-def run_cleanup(store) -> dict:
-    """Run storage cleanup based on free space thresholds.
+def has_xattr_preserve(store, local_id: str) -> bool:
+    """Check if any segment of a route has the user.preserve xattr (comma cloud)."""
+    info = store._raw.get(local_id)
+    if not info:
+        return False
+    for seg in info["segments"]:
+        seg_path = Path(seg["path"])
+        if not seg_path.exists():
+            continue
+        try:
+            os.getxattr(str(seg_path), b"user.preserve")
+            return True
+        except OSError:
+            pass
+    return False
 
-    Called during scan(). Deletes:
-    - Hidden routes when free < 20% (oldest first)
-    - Non-preserved routes when free < 10% (oldest first)
-    - Preserved routes when free < 10% and non-preserved exhausted (last resort)
+
+def _free_bytes(store) -> int:
+    """Current free bytes on the data partition."""
+    return shutil.disk_usage(store.data_dir).free
+
+
+def run_cleanup(store) -> dict:
+    """Single cleanup pass — COD wrapper around stock deleter logic.
+
+    Phase 0: Expired recycled routes (>7 days) — always, regardless of storage.
+    Phase 1: Normal routes (not saved, not xattr-preserved) — when free < 10GB.
+    Phase 2: COD-saved routes — emergency only, when free < 5GB after phase 1.
+
+    xattr-preserved routes (comma cloud) are never deleted by COD.
 
     Returns summary of actions taken.
     """
-    stat = shutil.disk_usage(store.data_dir)
-    free_pct = stat.free / stat.total * 100
+    now = time.time()
     deleted = []
 
-    if free_pct >= 20:
-        return {"free_pct": round(free_pct, 1), "deleted": []}
+    # ── Phase 0: Expired recycled routes (always) ───────────────────────
+    expired = [
+        (lid, hide_time) for lid, hide_time in list(store._hidden.items())
+        if now - hide_time > RECYCLE_TTL and lid in store._raw
+    ]
+    for lid, hide_time in expired:
+        age_days = (now - hide_time) / 86400
+        _delete_route_from_disk(store, lid)
+        deleted.append({"route": lid, "reason": "recycled_expired", "age_days": round(age_days, 1)})
+        logger.info("Cleanup: purged expired recycled route %s (%.1f days old)", lid, age_days)
 
-    # Phase 1: Delete hidden routes (oldest first) when < 20% free
-    if store._hidden:
-        hidden_with_mtime = []
-        for local_id in list(store._hidden):
-            info = store._raw.get(local_id)
-            if info:
-                hidden_with_mtime.append((local_id, info["mtime"]))
-        hidden_with_mtime.sort(key=lambda x: x[1])
+    # ── Phase 1: Normal routes when free < 10GB ─────────────────────────
+    free = _free_bytes(store)
+    if free < MIN_FREE_BYTES:
+        # Candidates: not saved, not hidden, not xattr-preserved
+        candidates = []
+        for lid in list(store._raw.keys()):
+            if lid in store._preserved or lid in store._hidden:
+                continue
+            if has_xattr_preserve(store, lid):
+                continue
+            candidates.append(lid)
+        # Sort oldest first by route counter (lowest = oldest)
+        candidates.sort(key=_route_counter)
 
-        for local_id, _mtime in hidden_with_mtime:
-            _delete_route_from_disk(store, local_id)
-            deleted.append({"route": local_id, "reason": "hidden"})
-            logger.info("Cleanup: deleted hidden route %s", local_id)
-
-            stat = shutil.disk_usage(store.data_dir)
-            free_pct = stat.free / stat.total * 100
-            if free_pct >= 20:
+        for lid in candidates:
+            _delete_route_from_disk(store, lid)
+            deleted.append({"route": lid, "reason": "low_storage"})
+            logger.info("Cleanup: deleted normal route %s (low storage)", lid)
+            free = _free_bytes(store)
+            if free >= MIN_FREE_BYTES:
                 break
 
-    if free_pct >= 10:
-        store._save_metadata()
-        return {"free_pct": round(free_pct, 1), "deleted": deleted}
-
-    # Phase 2: Delete non-preserved, non-hidden routes (oldest first) when < 10% free
-    normal_routes = []
-    for local_id, info in store._raw.items():
-        if local_id not in store._preserved and local_id not in store._hidden:
-            normal_routes.append((local_id, info["mtime"]))
-    normal_routes.sort(key=lambda x: x[1])
-
-    for local_id, _mtime in normal_routes:
-        _delete_route_from_disk(store, local_id)
-        deleted.append({"route": local_id, "reason": "space_critical"})
-        logger.info("Cleanup: deleted normal route %s (space critical)", local_id)
-
-        stat = shutil.disk_usage(store.data_dir)
-        free_pct = stat.free / stat.total * 100
-        if free_pct >= 10:
-            break
-
-    # Phase 3: Last resort — delete preserved routes (oldest first)
-    if free_pct < 10 and store._preserved:
-        preserved_routes = []
-        for local_id in list(store._preserved):
-            info = store._raw.get(local_id)
-            if info:
-                preserved_routes.append((local_id, info["mtime"]))
-        preserved_routes.sort(key=lambda x: x[1])
-
-        for local_id, _mtime in preserved_routes:
-            _delete_route_from_disk(store, local_id)
-            deleted.append({"route": local_id, "reason": "space_emergency"})
-            logger.warning("Cleanup: deleted PRESERVED route %s (emergency)", local_id)
-
-            stat = shutil.disk_usage(store.data_dir)
-            free_pct = stat.free / stat.total * 100
-            if free_pct >= 10:
+    # ── Phase 2: Emergency — COD-saved routes when free < 5GB ───────────
+    free = _free_bytes(store)
+    if free < EMERGENCY_BYTES:
+        saved = [lid for lid in list(store._preserved) if lid in store._raw]
+        saved.sort(key=_route_counter)
+        for lid in saved:
+            if has_xattr_preserve(store, lid):
+                continue
+            _delete_route_from_disk(store, lid)
+            deleted.append({"route": lid, "reason": "emergency"})
+            logger.warning("Cleanup: deleted SAVED route %s (emergency, free < 5GB)", lid)
+            free = _free_bytes(store)
+            if free >= EMERGENCY_BYTES:
                 break
 
     if deleted:
         store._save_metadata()
 
-    return {"free_pct": round(free_pct, 1), "deleted": deleted}
+    return {"free_bytes": free, "deleted": deleted}
 
 
 def _delete_route_from_disk(store, local_id: str):
@@ -128,7 +151,7 @@ def _delete_route_from_disk(store, local_id: str):
             if seg_path.exists():
                 shutil.rmtree(seg_path, ignore_errors=True)
 
-    store._hidden.discard(local_id)
+    store._hidden.pop(local_id, None)
     store._preserved.discard(local_id)
     store._raw.pop(local_id, None)
     store._metadata.pop(local_id, None)
