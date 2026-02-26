@@ -8,3 +8,6 @@ export const selectedRoute = writable(null)
 
 /** Whether the device uses metric units (from openpilot IsMetric param) */
 export const isMetric = writable(true)
+
+/** Storage info from /v1/storage ({total, free, used, percent_free}) */
+export const storageInfo = writable(null)

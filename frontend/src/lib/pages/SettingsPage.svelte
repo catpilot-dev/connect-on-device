@@ -12,7 +12,8 @@
     fetchToggles, setToggle, fetchStorage, mapdCheckUpdate, mapdUpdate,
     fetchSshKeys, setSshKeys, removeSshKeys, fetchTileList } from '../api.js'
   import { getTileSource, setTileSource, TILE_SOURCES } from '../tileSource.js'
-  import { formatBytes, storageLevel } from '../format.js'
+  import { formatBytes } from '../format.js'
+  import { storageInfo } from '../stores.js'
 
   let { isOnroad = false } = $props()
   let params = $state({})
@@ -121,7 +122,11 @@
   let activeDriving = $derived(models?.driving?.find(m => m.id === models?.active_driving))
   let activeDm = $derived(models?.dm?.find(m => m.id === models?.active_dm))
   let storagePct = $derived(storage ? Math.round(100 - storage.percent_free) : 0)
-  let storageColor = $derived(storage ? storageLevel(storage.percent_free) : 'ok')
+  let storageBarColor = $derived(
+    storagePct >= 80 ? 'bg-red-500' :
+    storagePct >= 60 ? 'bg-amber-400' :
+    'bg-green-500'
+  )
 
   onMount(async () => {
     fetchLateralDelay().then(d => { latDelay = d }).catch(() => {})
@@ -140,7 +145,7 @@
   function onDevOpen(open) {
     if (open && !dev) {
       fetchDeviceInfo().then(d => { dev = d }).catch(() => {})
-      fetchStorage().then(s => { storage = s }).catch(() => {})
+      fetchStorage().then(s => { storage = s; storageInfo.set(s) }).catch(() => {})
     }
   }
 
@@ -1100,10 +1105,7 @@
               <div class="flex items-center gap-2">
                 <div class="w-24 h-1.5 rounded-full bg-surface-700 overflow-hidden">
                   <div
-                    class="h-full rounded-full transition-all duration-500"
-                    class:bg-engage-green={storageColor === 'ok'}
-                    class:bg-engage-orange={storageColor === 'warning'}
-                    class:bg-engage-red={storageColor === 'critical'}
+                    class="h-full rounded-full transition-all duration-500 {storageBarColor}"
                     style="width: {storagePct}%"
                   ></div>
                 </div>

@@ -1,8 +1,8 @@
 <script>
   import { onMount } from 'svelte'
-  import { dongleId } from '../stores.js'
+  import { dongleId, storageInfo } from '../stores.js'
   import { fetchRoutes, fetchStorage, scanRoute } from '../api.js'
-  import { formatBytes, storageLevel } from '../format.js'
+  import { formatBytes } from '../format.js'
   import RouteCard from '../components/RouteCard.svelte'
 
   let routes = $state([])
@@ -19,7 +19,7 @@
   const TABS = [
     { id: 'recent', label: 'Recent' },
     { id: 'saved', label: 'Saved' },
-    { id: 'all', label: 'All' },
+    { id: 'all', label: 'Stored' },
     { id: 'recycled', label: 'Recycled' },
   ]
 
@@ -87,6 +87,7 @@
       ])
       routes = data
       storage = st
+      storageInfo.set(st)
       hasMore = activeTab === 'all' && data.length >= PAGE_SIZE
       loading = false
       if (activeTab === 'recent' || activeTab === 'all') {
@@ -150,24 +151,48 @@
     return unsub
   })
 
-  const level = $derived(storage ? storageLevel(storage.percent_free) : 'ok')
   const datesModified = $derived(
     dateFrom !== TAB_DEFAULTS[activeTab].from() || dateTo !== TAB_DEFAULTS[activeTab].to()
+  )
+  const usedPct = $derived(storage ? 100 - storage.percent_free : 0)
+  const storedColor = $derived(
+    usedPct >= 80 ? '!text-red-400' :
+    usedPct >= 60 ? '!text-amber-400' :
+    '!text-green-400'
+  )
+  const storedBg = $derived(
+    usedPct >= 80 ? 'bg-red-500/15' :
+    usedPct >= 60 ? 'bg-amber-500/15' :
+    'bg-green-500/15'
+  )
+  const storedColorDim = $derived(
+    usedPct >= 80 ? '!text-red-400/60' :
+    usedPct >= 60 ? '!text-amber-400/60' :
+    '!text-green-400/60'
+  )
+  const storedColorHover = $derived(
+    usedPct >= 80 ? 'hover:!text-red-400' :
+    usedPct >= 60 ? 'hover:!text-amber-400' :
+    'hover:!text-green-400'
+  )
+  const storageTooltip = $derived(
+    storage
+      ? `Storage: ${formatBytes(storage.total - storage.free)} / ${formatBytes(storage.total)} (${Math.round(usedPct)}% used)`
+      : ''
   )
 </script>
 
 <div class="mx-auto w-full max-w-3xl px-4 py-4 space-y-3">
   <!-- Storage warning banner -->
-  {#if storage && storage.percent_free < 25}
+  {#if storage && usedPct >= 80}
     <div
-      class="rounded-lg px-4 py-3 text-sm flex items-center gap-2 {level === 'warning' ? 'bg-amber-500/10 text-amber-400' : 'bg-red-500/10 text-red-400'}"
+      class="rounded-lg px-4 py-3 text-sm flex items-center gap-2 bg-red-500/10 text-red-400"
     >
       <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
         <path fill-rule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.168 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 6a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 6zm0 9a1 1 0 100-2 1 1 0 000 2z" clip-rule="evenodd"/>
       </svg>
       <span>
-        Storage {level === 'critical' ? 'critically' : ''} low:
-        {formatBytes(storage.free)} free of {formatBytes(storage.total)}
+        Storage low: {formatBytes(storage.free)} free of {formatBytes(storage.total)}
       </span>
     </div>
   {/if}
@@ -179,10 +204,15 @@
       {#each TABS as tab}
         <button
           class="px-3 py-1.5 rounded-md text-sm font-medium transition-colors duration-150
-            {activeTab === tab.id
-              ? 'bg-surface-700 text-surface-100'
-              : 'text-surface-400 hover:text-surface-200'}"
+            {tab.id === 'recycled'
+              ? (activeTab === 'recycled' ? 'bg-red-500/15 !text-red-400' : '!text-red-400/60 hover:!text-red-400')
+              : tab.id === 'saved'
+                ? (activeTab === 'saved' ? 'bg-blue-500/15 !text-blue-400' : '!text-blue-400/60 hover:!text-blue-400')
+                : tab.id === 'all' && storage
+                  ? (activeTab === 'all' ? `${storedBg} ${storedColor}` : `${storedColorDim} ${storedColorHover}`)
+                  : (activeTab === tab.id ? 'bg-surface-700 text-surface-100' : 'text-surface-400 hover:text-surface-200')}"
           onclick={() => switchTab(tab.id)}
+          title={tab.id === 'all' && storage ? storageTooltip : ''}
         >
           {tab.label}
         </button>
@@ -209,6 +239,20 @@
       {/if}
     </div>
   </div>
+
+  <!-- Storage bar (Stored tab only) -->
+  {#if activeTab === 'all' && storage}
+    <div class="flex items-center gap-2">
+      <div class="flex-1 h-1.5 rounded-full bg-surface-700 overflow-hidden">
+        <div
+          class="h-full rounded-full transition-all duration-300
+            {usedPct >= 80 ? 'bg-red-500' : usedPct >= 60 ? 'bg-amber-400' : 'bg-green-500'}"
+          style="width: {usedPct}%"
+        ></div>
+      </div>
+      <span class="text-xs text-surface-500 whitespace-nowrap">{formatBytes(storage.total - storage.free)} / {formatBytes(storage.total)}</span>
+    </div>
+  {/if}
 
   <!-- Loading state -->
   {#if loading}

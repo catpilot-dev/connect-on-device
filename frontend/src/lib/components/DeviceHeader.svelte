@@ -6,7 +6,14 @@
   <div class="mx-auto max-w-6xl px-4 py-3 flex items-center gap-4 flex-wrap">
     <!-- Brand -->
     <div class="flex items-center gap-2">
-      <span class="text-lg font-semibold text-surface-50">connect</span>
+      <svg class="w-6 h-6" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path fill="currentColor" d="M 62,20 C 52,17 40,22 34,34 C 28,46 28,60 36,72 C 40,78 46,81 52,81 C 48,88 43,96 39,101 C 45,99 51,92 55,84 C 58,92 63,99 67,101 C 64,96 60,88 56,81 C 62,80 70,76 76,66 C 84,52 84,36 76,26 C 72,20 66,20 62,20Z"/>
+        <circle fill="#131318" cx="52" cy="36" r="4.5"/>
+        <path fill="currentColor" d="M 78,30 C 84,24 90,28 87,36 C 85,40 80,43 77,40Z"/>
+        <path fill="currentColor" d="M 36,56 C 28,54 26,60 30,64 C 32,66 36,65 38,62Z"/>
+        <path fill="none" stroke="#131318" stroke-width="2.5" stroke-linecap="round" d="M 40,48 C 42,52 47,54 52,52"/>
+      </svg>
+      <span class="text-lg font-semibold text-surface-50">COD</span>
     </div>
 
     <!-- Navigation tabs -->
