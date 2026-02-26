@@ -86,6 +86,7 @@
   let isFullscreen = $state(false)
 
   let noteText = $state('')
+  let editingNote = $state(false)
   let metaBookmarks = $state([])  // [{time_sec, label}] from metadata
   let addingBookmark = $state(false)
   let newBookmarkLabel = $state('')
@@ -450,6 +451,7 @@
   }
 
   async function saveNoteHandler() {
+    editingNote = false
     if (route) await saveNote(route.local_id, noteText)
   }
 
@@ -1119,13 +1121,31 @@
           <!-- Notes tab (note + bookmarks) -->
           <Tabs.Content value="note" class="pt-2">
             <div class="px-4 pb-4 space-y-3">
-              <textarea
-                class="w-full bg-surface-700 text-surface-100 rounded p-2 text-xs resize-y outline-none focus:ring-1 focus:ring-surface-500"
-                rows="3"
-                placeholder="Add a note..."
-                bind:value={noteText}
-                onblur={saveNoteHandler}
-              ></textarea>
+              {#if editingNote}
+                <!-- svelte-ignore a11y_autofocus -->
+                <textarea
+                  class="w-full bg-surface-700 text-surface-100 rounded p-2 text-xs resize-none overflow-hidden outline-none focus:ring-1 focus:ring-surface-500"
+                  rows="3"
+                  placeholder="Add a note..."
+                  bind:value={noteText}
+                  onblur={saveNoteHandler}
+                  oninput={(e) => { e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px' }}
+                  onfocus={(e) => { e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px' }}
+                  autofocus
+                ></textarea>
+              {:else if noteText}
+                <button
+                  type="button"
+                  class="w-full text-left text-xs cursor-pointer text-surface-200 note-rendered line-clamp-3"
+                  onclick={() => { editingNote = true }}
+                >{@html snarkdown(noteText)}</button>
+              {:else}
+                <button
+                  type="button"
+                  class="w-full text-left text-xs cursor-pointer text-surface-500"
+                  onclick={() => { editingNote = true }}
+                >Add a note...</button>
+              {/if}
 
               <!-- Bookmarks -->
               <div class="border-t border-surface-700/50 pt-3">
