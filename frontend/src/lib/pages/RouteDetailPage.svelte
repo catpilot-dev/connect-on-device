@@ -1189,9 +1189,9 @@
                       {@const mm = Math.floor(bm.time_sec / 60)}
                       {@const ss = Math.floor(bm.time_sec % 60).toString().padStart(2, '0')}
                       {@const isActive = currentTime >= bm.time_sec - 2 && (i + 1 >= metaBookmarks.length || currentTime < metaBookmarks[i + 1].time_sec - 2)}
-                      <div class="flex items-start gap-2 group">
+                      <div class="flex items-center gap-2 group">
                         <button
-                          class="shrink-0 px-2 py-1 text-xs font-mono rounded cursor-pointer mt-0.5"
+                          class="shrink-0 px-2 py-1 text-xs font-mono rounded cursor-pointer"
                           class:bg-engage-green={isActive}
                           class:text-black={isActive}
                           class:bg-surface-700={!isActive}
@@ -1220,7 +1220,7 @@
                           >{bm.label}</button>
                         {/if}
                         <button
-                          class="shrink-0 text-red-500/40 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer p-1 mt-0.5"
+                          class="shrink-0 text-red-500/40 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer p-1"
                           title="Delete bookmark"
                           onclick={() => deleteBookmarkHandler(i)}
                         >
