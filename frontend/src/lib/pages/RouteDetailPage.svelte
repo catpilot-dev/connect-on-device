@@ -1170,7 +1170,7 @@
                     <!-- svelte-ignore a11y_autofocus -->
                     <input
                       type="text"
-                      class="flex-1 bg-surface-700 text-surface-100 rounded px-2 py-1 text-sm outline-none focus:ring-1 focus:ring-surface-500"
+                      class="flex-1 bg-surface-700 text-surface-100 rounded px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-surface-500"
                       placeholder="What's happening here?"
                       bind:value={newBookmarkLabel}
                       onkeydown={(e) => { if (e.key === 'Enter') addBookmarkHandler(); if (e.key === 'Escape') addingBookmark = false }}
@@ -1202,7 +1202,7 @@
                         {#if editingBookmarkIdx === i}
                           <!-- svelte-ignore a11y_autofocus -->
                           <textarea
-                            class="flex-1 bg-surface-700 text-surface-100 rounded px-2 py-1 text-sm outline-none focus:ring-1 focus:ring-surface-500 resize-none overflow-hidden"
+                            class="flex-1 bg-surface-700 text-surface-100 rounded px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-surface-500 resize-none overflow-hidden"
                             rows="1"
                             bind:value={editingBookmarkLabel}
                             onkeydown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); updateBookmarkHandler(i) } if (e.key === 'Escape') { editingBookmarkIdx = -1; e.target.onblur = null } }}
@@ -1214,7 +1214,7 @@
                         {:else}
                           <button
                             type="button"
-                            class="flex-1 text-left text-sm text-surface-300 cursor-pointer hover:text-surface-100 whitespace-pre-wrap break-words"
+                            class="flex-1 text-left text-xs text-surface-300 cursor-pointer hover:text-surface-100 whitespace-pre-wrap break-words"
                             class:line-clamp-2={expandedBookmark !== i}
                             onclick={() => { if (expandedBookmark === i) { editingBookmarkIdx = i; editingBookmarkLabel = bm.label; expandedBookmark = -1 } else { expandedBookmark = i } }}
                           >{bm.label}</button>
