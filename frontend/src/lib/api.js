@@ -26,9 +26,12 @@ export async function fetchStorage() {
 
 // ── Routes ──────────────────────────────────────────────────
 
-export async function fetchRoutes(dongleId, { limit = 25, beforeCounter } = {}) {
+export async function fetchRoutes(dongleId, { limit = 5, beforeCounter, filter, afterGps, beforeGps } = {}) {
   let url = `/v1/devices/${dongleId}/routes?limit=${limit}`
   if (beforeCounter != null) url += `&before_counter=${beforeCounter}`
+  if (filter) url += `&filter=${filter}`
+  if (afterGps != null) url += `&after_gps=${afterGps}`
+  if (beforeGps != null) url += `&before_gps=${beforeGps}`
   const res = await fetch(url)
   if (!res.ok) throw new Error(`fetchRoutes: ${res.status}`)
   return res.json()
@@ -55,6 +58,12 @@ export async function fetchRouteFiles(routeName) {
 export async function enrichRoute(routeName) {
   const res = await fetch(`/v1/route/${routeId(routeName)}/enrich`, { method: 'POST' })
   if (!res.ok) throw new Error(`enrichRoute: ${res.status}`)
+  return res.json()
+}
+
+export async function scanRoute(localId) {
+  const res = await fetch(`/v1/route/${localId}/scan`, { method: 'POST' })
+  if (!res.ok) throw new Error(`scanRoute: ${res.status}`)
   return res.json()
 }
 

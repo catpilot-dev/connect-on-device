@@ -1,8 +1,8 @@
 """Route storage and metadata management for Connect on Device.
 
 Contains the RouteStore class that scans route directories, manages metadata,
-and provides comma-compatible route objects. Handles background enrichment
-of route metadata from rlog files.
+and provides comma-compatible route objects. Lazy enrichment: new routes are
+only parsed when the list page is visited, not during background scans.
 """
 
 import json
@@ -17,8 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from rlog_parser import _find_first_gps, _find_first_gps_time, _find_last_gps, _parse_rlog_metadata
-from storage_management import run_cleanup
+from log_parser import _find_first_gps, _find_first_gps_time, _find_last_gps, _parse_log_metadata
 
 logger = logging.getLogger("connect")
 
@@ -99,7 +98,7 @@ class RouteStore:
     Uses metadata.json (compatible with route_metadata.py) for persistent
     route metadata. Two-phase approach for fast startup:
     1. Fast scan: directory listing only (instant) — uses cached metadata or route counter
-    2. Background enrichment: parse rlog for uncached routes (non-blocking)
+    2. On-demand enrichment: parse qlog/rlog for uncached routes (user-triggered)
 
     metadata.json format (shared with route_metadata.py):
     {
@@ -465,12 +464,16 @@ class RouteStore:
         self._fullname_map = fullname_map
         self._local_id_map = local_id_map
 
-    def _enrich_one(self, local_id: str, segments: list) -> dict | None:
-        """Parse rlog metadata for a single route. Runs in thread pool.
+    def _find_log(self, seg_path: str) -> str | None:
+        """Find best log file in a segment directory: qlog first, rlog fallback."""
+        return self._find_qlog(seg_path) or self._find_rlog(seg_path)
 
-        Tries segment 0 first for initData + GPS + partial distance (from
-        the 5MB head read), then checks later segments for GPS only (cold
-        starts can delay GPS lock).
+    def _enrich_one(self, local_id: str, segments: list) -> dict | None:
+        """Parse log metadata for a single route. Runs in thread pool.
+
+        Prefers qlog (~400KB) over rlog (~8MB). Tries segment 0 first for
+        initData + GPS + partial distance, then checks later segments for
+        GPS only (cold starts can delay GPS lock).
 
         Per-segment distance accumulation is intentionally omitted — the UI
         computes accurate distance from coords.json on first route view.
@@ -480,9 +483,9 @@ class RouteStore:
 
         # Parse segment 0 for full metadata (initData + GPS + partial distance)
         result = None
-        seg0_rlog = self._find_rlog(sorted_segs[0]["path"]) if sorted_segs else None
-        if seg0_rlog:
-            result = _parse_rlog_metadata(seg0_rlog)
+        seg0_log = self._find_log(sorted_segs[0]["path"]) if sorted_segs else None
+        if seg0_log:
+            result = _parse_log_metadata(seg0_log)
 
         if not result:
             result = {}
@@ -492,17 +495,17 @@ class RouteStore:
         need_time = not result.get("gps_time")
         if need_coords or need_time:
             for seg in sorted_segs[1:]:
-                rlog = self._find_rlog(seg["path"])
-                if not rlog:
+                log = self._find_log(seg["path"])
+                if not log:
                     continue
                 if need_coords:
-                    gps = _find_first_gps(rlog)
+                    gps = _find_first_gps(log)
                     if gps:
                         result["start_lat"] = gps[0]
                         result["start_lng"] = gps[1]
                         need_coords = False
                 if need_time:
-                    gps_t = _find_first_gps_time(rlog)
+                    gps_t = _find_first_gps_time(log)
                     if gps_t:
                         # Adjust back to segment 0 start time
                         result["gps_time"] = gps_t - seg["number"] * 60
@@ -517,30 +520,30 @@ class RouteStore:
 
         return result if result else None
 
-    def _rlog_to_metadata_entry(self, local_id: str, rlog_meta: dict) -> dict:
-        """Convert rlog parse result to route_metadata.py-compatible entry."""
+    def _log_to_metadata_entry(self, local_id: str, log_meta: dict) -> dict:
+        """Convert log parse result to metadata entry."""
         entry = {"route_id": local_id}
 
-        wtn = rlog_meta.get("wall_time_nanos", 0)
+        wtn = log_meta.get("wall_time_nanos", 0)
         if wtn:
             dt = datetime.fromtimestamp(wtn / 1e9, tz=timezone.utc)
             entry["creation_time"] = dt.isoformat()
         else:
             entry["creation_time"] = None
 
-        lat = rlog_meta.get("start_lat")
-        lng = rlog_meta.get("start_lng")
+        lat = log_meta.get("start_lat")
+        lng = log_meta.get("start_lng")
         entry["gps_coordinates"] = [lat, lng] if lat and lng else None
 
-        entry["dongle_id"] = rlog_meta.get("dongle_id", "Unknown")
-        entry["git_commit"] = rlog_meta.get("git_commit", "Unknown")
-        entry["git_branch"] = rlog_meta.get("git_branch")
-        entry["openpilot_version"] = rlog_meta.get("version", "Unknown")
-        entry["total_distance_m"] = rlog_meta.get("total_distance_m")
-        entry["car_fingerprint"] = rlog_meta.get("car_fingerprint")
-        entry["git_remote"] = rlog_meta.get("git_remote")
-        entry["device_type"] = rlog_meta.get("device_type")
-        entry["gps_time"] = rlog_meta.get("gps_time")
+        entry["dongle_id"] = log_meta.get("dongle_id", "Unknown")
+        entry["git_commit"] = log_meta.get("git_commit", "Unknown")
+        entry["git_branch"] = log_meta.get("git_branch")
+        entry["openpilot_version"] = log_meta.get("version", "Unknown")
+        entry["total_distance_m"] = log_meta.get("total_distance_m")
+        entry["car_fingerprint"] = log_meta.get("car_fingerprint")
+        entry["git_remote"] = log_meta.get("git_remote")
+        entry["device_type"] = log_meta.get("device_type")
+        entry["gps_time"] = log_meta.get("gps_time")
         entry["source"] = "connect_server"
         entry["enriched"] = True
 
@@ -651,32 +654,131 @@ class RouteStore:
         except Exception:
             return False
 
-    def _quick_enrich_new(self):
-        """Inline enrichment for routes not yet in metadata.
+    def get_pending_route_ids(self) -> list[dict]:
+        """Return minimal info for routes in _raw not yet in _metadata.
 
-        Called during scan() to make new routes immediately visible in the list.
-        Prefers qlog (~2-5MB total) over rlog (50-200MB) since both contain
-        initData, carParams, and gpsLocationExternal. Falls back to rlog if
-        qlog is unavailable. Tries later segments for GPS if seg 0 has no fix
-        (cold start). Caps at 5 routes per scan to keep page loads fast.
+        These are routes on disk that haven't been scanned yet. The list
+        endpoint includes them as placeholder cards with spinners.
+        Skips hidden routes and single-segment stubs.
+        """
+        pending = []
+        for lid, info in self._raw.items():
+            if lid in self._metadata or lid in self._hidden:
+                continue
+            seg_count = len(info["segments"])
+            if seg_count < 2:
+                continue  # skip single-segment stubs
+            pending.append({
+                "local_id": lid,
+                "seg_count": seg_count,
+                "counter": _route_counter(lid),
+            })
+        pending.sort(key=lambda x: x["counter"], reverse=True)
+        return pending
+
+    def enrich_single_new(self, local_id: str) -> dict | None:
+        """Enrich a single new route from qlog. Returns built route dict or None.
+
+        Called by the /scan endpoint when the frontend requests enrichment
+        for one pending route at a time (progressive loading).
+        """
+        if local_id in self._metadata or local_id in self._hidden:
+            return None
+        info = self._raw.get(local_id)
+        if not info:
+            return None
+
+        sorted_segs = sorted(info["segments"], key=lambda s: s["number"])
+
+        # Parse seg 0: prefer qlog (tiny) over rlog (huge)
+        log_file = None
+        for seg in sorted_segs[:1]:
+            log_file = self._find_qlog(seg["path"]) or self._find_rlog(seg["path"])
+        if not log_file:
+            return None
+
+        result = _parse_log_metadata(log_file)
+        if not result:
+            return None
+
+        # GPS fallback for cold start
+        need_coords = not result.get("start_lat")
+        need_time = not result.get("gps_time")
+        if need_coords or need_time:
+            for seg in sorted_segs[1:]:
+                log = self._find_qlog(seg["path"]) or self._find_rlog(seg["path"])
+                if not log:
+                    continue
+                if need_coords:
+                    gps = _find_first_gps(log)
+                    if gps:
+                        result["start_lat"] = gps[0]
+                        result["start_lng"] = gps[1]
+                        need_coords = False
+                if need_time:
+                    gps_t = _find_first_gps_time(log)
+                    if gps_t:
+                        result["gps_time"] = gps_t - seg["number"] * 60
+                        need_time = False
+                if not need_coords and not need_time:
+                    break
+
+        # Skip stubs: < 2 segments AND no GPS
+        has_gps = result.get("start_lat") is not None
+        if len(sorted_segs) < 2 and not has_gps:
+            return None
+
+        entry = self._log_to_metadata_entry(local_id, result)
+        entry["enriched"] = False
+        self._metadata[local_id] = entry
+
+        # Reverse-geocode start address
+        lat = result.get("start_lat")
+        lng = result.get("start_lng")
+        if lat and lng:
+            addr, is_road = _reverse_geocode(lat, lng)
+            if addr:
+                entry["start_address"] = addr
+
+        self._rebuild_routes()
+        self._save_metadata()
+        logger.info("Scanned route %s", local_id)
+
+        # Return the built route
+        fullname = self._local_id_map.get(local_id)
+        return self._routes.get(fullname) if fullname else None
+
+    def enrich_new_routes(self) -> int:
+        """Enrich routes not yet in metadata — called by list endpoint, not during scan.
+
+        Finds routes in _raw that are NOT in _metadata and NOT in _hidden.
+        Parses seg 0 qlog.zst for initData + GPS, tries later segments for GPS
+        on cold start. Reverse-geocodes start address. Stores in metadata with
+        enriched=False (full enrichment deferred to explicit Enrich button).
+
+        Skips stub routes (< 2 segments AND no GPS) — these won't appear in list.
+
+        Returns count of newly enriched routes.
         """
         new_routes = [
             (lid, info) for lid, info in self._raw.items()
             if lid not in self._metadata and lid not in self._hidden
         ]
         if not new_routes:
-            return
+            return 0
 
-        # Sort newest first, cap at 5 per scan
+        # Sort newest first for consistent ordering
         new_routes.sort(key=lambda x: _route_counter(x[0]), reverse=True)
-        new_routes = new_routes[:5]
 
-        logger.info("Quick-enriching %d new routes", len(new_routes))
+        logger.info("Enriching %d new routes from qlog", len(new_routes))
         enriched = 0
 
         for local_id, info in new_routes:
             try:
                 sorted_segs = sorted(info["segments"], key=lambda s: s["number"])
+
+                # Skip stubs: < 2 segments with no qlog/rlog
+                seg_count = len(sorted_segs)
 
                 # Parse seg 0: prefer qlog (tiny) over rlog (huge)
                 log_file = None
@@ -685,7 +787,7 @@ class RouteStore:
                 if not log_file:
                     continue
 
-                result = _parse_rlog_metadata(log_file)
+                result = _parse_log_metadata(log_file)
                 if not result:
                     continue
 
@@ -711,19 +813,36 @@ class RouteStore:
                         if not need_coords and not need_time:
                             break
 
-                entry = self._rlog_to_metadata_entry(local_id, result)
-                entry["enriched"] = False  # Still needs geocoding
+                # Skip stubs: < 2 segments AND no GPS (too short to be useful)
+                has_gps = result.get("start_lat") is not None
+                if seg_count < 2 and not has_gps:
+                    continue
+
+                entry = self._log_to_metadata_entry(local_id, result)
+                entry["enriched"] = False  # Full enrichment deferred to Enrich button
                 self._metadata[local_id] = entry
+
+                # Reverse-geocode start address from initData GPS
+                lat = result.get("start_lat")
+                lng = result.get("start_lng")
+                if lat and lng:
+                    addr, is_road = _reverse_geocode(lat, lng)
+                    if addr:
+                        entry["start_address"] = addr
+
                 enriched += 1
             except Exception as e:
-                logger.debug("Quick-enrich error for %s: %s", local_id, e)
+                logger.debug("Enrich error for %s: %s", local_id, e)
 
         if enriched:
+            self._rebuild_routes()
             self._save_metadata()
-            logger.info("Quick-enriched %d/%d new routes", enriched, len(new_routes))
+            logger.info("Enriched %d/%d new routes", enriched, len(new_routes))
+
+        return enriched
 
     def scan(self, force: bool = False) -> dict:
-        """Directory scan with inline enrichment for new routes."""
+        """Directory scan — listing only, no log parsing or enrichment."""
         if not force and (time.time() - self._last_scan) < CACHE_TTL:
             return self._routes
 
@@ -763,25 +882,13 @@ class RouteStore:
             info["segments"].sort(key=lambda s: s["number"])
 
         self._raw = dict(raw)
-        onroad = self._is_onroad()
-        if not onroad:
-            self._quick_enrich_new()
         self._rebuild_routes()
         self._last_scan = time.time()
 
-        logger.info("Scanned %d routes, %d total segments (%d in metadata.json)%s",
+        logger.info("Scanned %d routes, %d total segments (%d in metadata.json)",
                      len(self._routes),
                      sum(len(r["_segments"]) for r in self._routes.values()),
-                     len(self._metadata),
-                     " [onroad, skipped enrichment/cleanup]" if onroad else "")
-
-        # Run storage cleanup if space is low (skip while driving)
-        if not onroad:
-            cleanup_result = run_cleanup(self)
-            if cleanup_result["deleted"]:
-                logger.info("Storage cleanup: freed %d routes, now %.1f%% free",
-                            len(cleanup_result["deleted"]), cleanup_result["free_pct"])
-                self._rebuild_routes()
+                     len(self._metadata))
 
         return self._routes
 
@@ -875,6 +982,35 @@ class RouteStore:
         self._rebuild_routes()
         self._save_metadata()
 
+    def get_recycled_routes(self) -> list[dict]:
+        """Return route dicts for hidden and invalid routes (recycled bin).
+
+        Includes:
+        - Routes in _hidden set → recycled_reason: "deleted"
+        - Routes with maxqlog < 1 and no distance (stubs) → recycled_reason: "invalid"
+        - Routes with no wall_time_nanos → recycled_reason: "invalid"
+
+        Uses _build_route() to construct route dicts with recycled_reason added.
+        """
+        recycled = []
+        for local_id, info in self._raw.items():
+            internal = self._meta_to_internal(local_id)
+            route = self._build_route(local_id, info, internal)
+
+            if local_id in self._hidden:
+                route["recycled_reason"] = "deleted"
+            elif route["maxqlog"] < 1 and not route.get("distance"):
+                route["recycled_reason"] = "invalid"
+            elif not internal.get("wall_time_nanos"):
+                route["recycled_reason"] = "invalid"
+            else:
+                continue  # valid, non-hidden route — skip
+
+            recycled.append(route)
+
+        recycled.sort(key=lambda r: _route_counter(r.get("_local_id", "")), reverse=True)
+        return recycled
+
     def resolve_segment_path(self, fullname: str, segment: int, filename: str) -> Path | None:
         """Resolve a comma-style path to a local file."""
         local_id = self.get_local_id(fullname)
@@ -887,7 +1023,7 @@ class RouteStore:
         """Delete cached events.json and coords.json for a route.
 
         Returns count of files deleted. The next events/coords fetch will
-        regenerate them from rlogs with the latest parser code.
+        regenerate them from qlogs/rlogs with the latest parser code.
         """
         info = self._raw.get(local_id)
         if not info:
@@ -918,9 +1054,9 @@ class RouteStore:
         info = self._raw.get(local_id)
         if not info:
             return False
-        rlog_meta = self._enrich_one(local_id, info["segments"])
-        if rlog_meta:
-            entry = self._rlog_to_metadata_entry(local_id, rlog_meta)
+        log_meta = self._enrich_one(local_id, info["segments"])
+        if log_meta:
+            entry = self._log_to_metadata_entry(local_id, log_meta)
             self._metadata[local_id] = entry
             self._rebuild_routes()
             self._save_metadata()

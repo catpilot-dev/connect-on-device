@@ -8,7 +8,7 @@ from pathlib import Path
 from aiohttp import web
 
 from handler_helpers import get_route_or_404
-from rlog_parser import _generate_coords_json, _generate_events_json
+from log_parser import _generate_coords_json, _generate_events_json
 from route_helpers import _base_url, _clean_route, _resolve_local_id, _route_bookmarks, _route_engagement, _route_timeline_summary, _set_route_url
 from route_store import _route_counter
 from storage_management import DOWNLOAD_FILES, build_download_tar
@@ -17,36 +17,127 @@ logger = logging.getLogger("connect")
 
 
 async def handle_routes_list(request: web.Request) -> web.Response:
-    """GET /v1/devices/{dongleId}/routes — paginated route list"""
+    """GET /v1/devices/{dongleId}/routes — filtered, paginated route list.
+
+    Query params:
+      filter: recent (default) | saved | all | recycled
+      limit: max results per page (default 5)
+      before_counter: pagination cursor (all tab only)
+      after_gps: Unix epoch — only routes with gps_time >= this (all tab)
+      before_gps: Unix epoch — only routes with gps_time <= this (all tab)
+
+    Returns known routes plus pending placeholders (pending=true) for
+    routes not yet scanned. Frontend shows spinner cards for pending items.
+    """
     store = request.app["store"]
     routes = await store.async_scan()
 
-    limit = int(request.query.get("limit", 25))
-    # Support both counter-based and timestamp-based pagination cursors
+    tab = request.query.get("filter", "recent")
+    limit = int(request.query.get("limit", 5))
     before_counter = int(request.query.get("before_counter", 999999999))
-    created_before = float(request.query.get("created_before", time.time() + 86400))
 
-    # Sort by route counter (reliable, monotonically increasing per device)
-    sorted_routes = sorted(routes.values(),
-                           key=lambda r: _route_counter(r.get("_local_id", "")),
-                           reverse=True)
+    # GPS date range filter (applies to all tabs)
+    after_gps = request.query.get("after_gps")
+    before_gps = request.query.get("before_gps")
+    after_gps = float(after_gps) if after_gps else None
+    before_gps = float(before_gps) if before_gps else None
+
+    def _gps_in_range(local_id: str) -> bool:
+        """Check if route's gps_time falls within the requested date range."""
+        meta = store._metadata.get(local_id, {})
+        gps_time = meta.get("gps_time")
+        if not gps_time:
+            return False
+        if after_gps and gps_time < after_gps:
+            return False
+        if before_gps and gps_time > before_gps:
+            return False
+        return True
+
+    # ── Recycled tab: hidden + invalid routes ──
+    if tab == "recycled":
+        recycled = store.get_recycled_routes()
+        route_list = []
+        for r in recycled:
+            lid = r.get("_local_id", "")
+            if after_gps or before_gps:
+                meta = store._metadata.get(lid, {})
+                gps_time = meta.get("gps_time")
+                if gps_time:
+                    if after_gps and gps_time < after_gps:
+                        continue
+                    if before_gps and gps_time > before_gps:
+                        continue
+            r_with_url = _set_route_url(r, request)
+            cleaned = _clean_route(r_with_url)
+            cleaned["route_counter"] = _route_counter(lid)
+            cleaned["recycled_reason"] = r["recycled_reason"]
+            route_list.append(cleaned)
+        return web.json_response(route_list)
+
+    # ── Saved tab: preserved routes only ──
+    if tab == "saved":
+        route_list = []
+        sorted_routes = sorted(
+            routes.values(),
+            key=lambda r: _route_counter(r.get("_local_id", "")),
+            reverse=True,
+        )
+        for r in sorted_routes:
+            if not store.is_preserved(r["_local_id"]):
+                continue
+            if not _gps_in_range(r["_local_id"]):
+                continue
+            r_with_url = _set_route_url(r, request)
+            cleaned = _clean_route(r_with_url)
+            cleaned["route_counter"] = _route_counter(r.get("_local_id", ""))
+            cleaned["is_preserved"] = True
+            if cleaned.get("engagement_pct") is not None:
+                timeline = _route_timeline_summary(r)
+                if timeline is not None:
+                    cleaned["timeline"] = timeline
+            route_list.append(cleaned)
+        return web.json_response(route_list)
+
+    # ── Recent / All tabs: merged known + pending ──
+    pending = store.get_pending_route_ids()
+
+    items = []
+    for r in routes.values():
+        counter = _route_counter(r.get("_local_id", ""))
+        if not _gps_in_range(r["_local_id"]):
+            continue
+        items.append(("route", counter, r))
+
+    # Include pending items for recent and all tabs
+    if tab in ("recent", "all"):
+        for p in pending:
+            items.append(("pending", p["counter"], p))
+
+    items.sort(key=lambda x: x[1], reverse=True)
 
     route_list = []
-    for r in sorted_routes:
-        counter = _route_counter(r.get("_local_id", ""))
-        # Skip routes at or after the cursor
-        if counter >= before_counter:
+    for kind, counter, data in items:
+        # Pagination (all tab only)
+        if tab == "all" and counter >= before_counter:
             continue
-        r_with_url = _set_route_url(r, request)
-        cleaned = _clean_route(r_with_url)
-        cleaned["route_counter"] = counter
-        cleaned["is_preserved"] = store.is_preserved(r["_local_id"])
-        # Include pre-built timeline for enriched routes (saves N*M HTTP requests)
-        if cleaned.get("engagement_pct") is not None:
-            timeline = _route_timeline_summary(r)
-            if timeline is not None:
-                cleaned["timeline"] = timeline
-        route_list.append(cleaned)
+        if kind == "route":
+            r_with_url = _set_route_url(data, request)
+            cleaned = _clean_route(r_with_url)
+            cleaned["route_counter"] = counter
+            cleaned["is_preserved"] = store.is_preserved(data["_local_id"])
+            if cleaned.get("engagement_pct") is not None:
+                timeline = _route_timeline_summary(data)
+                if timeline is not None:
+                    cleaned["timeline"] = timeline
+            route_list.append(cleaned)
+        else:
+            route_list.append({
+                "local_id": data["local_id"],
+                "route_counter": counter,
+                "pending": True,
+                "seg_count": data["seg_count"],
+            })
         if len(route_list) >= limit:
             break
 
@@ -117,57 +208,60 @@ async def handle_preserved_routes(request: web.Request) -> web.Response:
 # ─── Route detail handlers ───────────────────────────────────────────
 
 async def handle_route_get(request: web.Request) -> web.Response:
-    """GET /v1/route/{routeName}/ — single route detail"""
+    """GET /v1/route/{routeName}/ — single route detail (no auto-enrichment)"""
     route_name, route, store = get_route_or_404(request)
 
-    # On-demand enrichment: enrich when user selects a route
     local_id = route["_local_id"]
-    loop = asyncio.get_event_loop()
-    enriched = await loop.run_in_executor(None, store.ensure_enriched, local_id)
-    if enriched:
-        route = store.get_route(route_name)
-
-    # Compute and persist engagement % from cached events.json
     meta = store._metadata.get(local_id, {})
-    if meta and meta.get("engagement_pct") is None:
-        engaged_ms, total_ms = _route_engagement(store, route)
-        if total_ms > 0 and engaged_ms > 0:
-            pct = round(engaged_ms / total_ms * 100)
-            meta["engagement_pct"] = pct
+
+    # Only report events as cached if route is fully enriched — stale events.json
+    # from a previous session shouldn't bypass the Enrich button for re-scanned routes
+    max_seg = route.get("maxqlog", 0)
+    events_cached = meta.get("enriched", False) and all(
+        (store.data_dir / f"{local_id}--{i}" / "events.json").exists()
+        for i in range(max_seg + 1)
+    )
+
+    # Opportunistic: compute engagement % and geocode if events/coords are cached
+    # but metadata is missing these values (e.g. after re-enrichment completed)
+    if events_cached and meta:
+        updated = False
+        if meta.get("engagement_pct") is None:
+            engaged_ms, total_ms = _route_engagement(store, route)
+            if total_ms > 0 and engaged_ms > 0:
+                meta["engagement_pct"] = round(engaged_ms / total_ms * 100)
+                updated = True
+        needs_geocode = meta.get("start_address") is None or meta.get("end_address") is None
+        if needs_geocode and meta.get("gps_coordinates"):
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, store.geocode_route, local_id)
+            updated = True
+        if updated:
             store._rebuild_routes()
             store._save_metadata()
             route = store.get_route(route_name)
 
-    # Reverse-geocode start/end addresses (runs in thread pool, cached)
-    needs_geocode = meta.get("start_address") is None or meta.get("end_address") is None
-    if meta and needs_geocode and meta.get("gps_coordinates"):
-        await loop.run_in_executor(None, store.geocode_route, local_id)
-        route = store.get_route(route_name)
-
     # Collect bookmarks from cached events.json (no rlog parsing needed)
     bookmarks = _route_bookmarks(route)
-
-    # Check if all events.json are cached (so frontend skips progress bar)
-    max_seg = route.get("maxqlog", 0)
-    events_cached = all(
-        (store.data_dir / f"{local_id}--{i}" / "events.json").exists()
-        for i in range(max_seg + 1)
-    )
 
     r_with_url = _set_route_url(route, request)
     cleaned = _clean_route(r_with_url)
     cleaned["is_preserved"] = store.is_preserved(local_id)
     cleaned["events_cached"] = events_cached
+    cleaned["enriched"] = meta.get("enriched", False)
     if bookmarks:
         cleaned["bookmarks"] = bookmarks
     return web.json_response(cleaned)
 
 
 async def handle_route_enrich(request: web.Request) -> web.Response:
-    """POST /v1/route/{routeName}/enrich — re-enrich a route.
+    """POST /v1/route/{routeName}/enrich — enrich or re-enrich a route.
 
     Clears cached events.json/coords.json so they regenerate with latest
-    parser code (e.g. new bookmark detection). Also re-runs metadata enrichment.
+    parser code. Re-runs metadata enrichment from rlog.
+
+    Note: engagement % and geocoding happen after the frontend fetches
+    events/coords (which regenerates the derived files from rlogs).
     """
     store = request.app["store"]
     local_id = _resolve_local_id(store, request)
@@ -177,11 +271,35 @@ async def handle_route_enrich(request: web.Request) -> web.Response:
     await loop.run_in_executor(None, store.ensure_enriched, local_id)
 
     route_name, route, store = get_route_or_404(request)
+    meta = store._metadata.get(local_id, {})
 
     r_with_url = _set_route_url(route, request)
     cleaned = _clean_route(r_with_url)
     cleaned["is_preserved"] = store.is_preserved(local_id)
+    cleaned["enriched"] = meta.get("enriched", False)
     cleaned["cleared_files"] = cleared
+    return web.json_response(cleaned)
+
+
+async def handle_route_scan(request: web.Request) -> web.Response:
+    """POST /v1/route/{routeName}/scan — scan a single pending route from qlog.
+
+    Called by the frontend for each pending card spinner. Parses qlog for
+    metadata + geocodes start address. Returns the enriched route object.
+    """
+    store = request.app["store"]
+    local_id = request.match_info["routeName"]
+
+    loop = asyncio.get_event_loop()
+    route = await loop.run_in_executor(None, store.enrich_single_new, local_id)
+
+    if not route:
+        raise web.HTTPNotFound(text=json.dumps({"error": "Route not found or not scannable"}))
+
+    r_with_url = _set_route_url(route, request)
+    cleaned = _clean_route(r_with_url)
+    cleaned["route_counter"] = _route_counter(local_id)
+    cleaned["is_preserved"] = store.is_preserved(local_id)
     return web.json_response(cleaned)
 
 
@@ -375,7 +493,7 @@ async def handle_connectdata(request: web.Request) -> web.Response:
     store = request.app["store"]
     seg_int = int(segment)
 
-    # Derived files: generate from rlog on demand, cache to disk
+    # Derived files: generate from qlog (preferred, ~400KB) or rlog (fallback, ~8MB)
     if filename in derived:
         local_id = store.get_local_id(fullname)
         if not local_id:
@@ -388,18 +506,17 @@ async def handle_connectdata(request: web.Request) -> web.Response:
             except Exception:
                 pass
 
-        rlog = store.resolve_segment_path(fullname, seg_int, "rlog.zst")
-        if not rlog:
-            rlog = store.resolve_segment_path(fullname, seg_int, "rlog")
-        if not rlog:
+        # Prefer qlog (tiny, has all state/GPS messages) over rlog (huge)
+        log_file = (store.resolve_segment_path(fullname, seg_int, "qlog.zst")
+                    or store.resolve_segment_path(fullname, seg_int, "qlog")
+                    or store.resolve_segment_path(fullname, seg_int, "rlog.zst")
+                    or store.resolve_segment_path(fullname, seg_int, "rlog"))
+        if not log_file:
             return web.json_response([])
 
         gen_fn = _generate_coords_json if filename == "coords.json" else _generate_events_json
         loop = asyncio.get_event_loop()
-        # Use store's single-worker executor to serialize rlog decompression.
-        # Prevents parallel requests from decompressing 30 rlogs simultaneously
-        # (each ~200MB), keeping peak memory bounded to 1 rlog at a time.
-        data = await loop.run_in_executor(store._executor, gen_fn, str(rlog), seg_int)
+        data = await loop.run_in_executor(store._executor, gen_fn, str(log_file), seg_int)
 
         try:
             cache_path.write_text(json.dumps(data))
