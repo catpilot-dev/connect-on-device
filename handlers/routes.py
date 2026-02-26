@@ -222,24 +222,22 @@ async def handle_route_get(request: web.Request) -> web.Response:
         for i in range(max_seg + 1)
     )
 
-    # Opportunistic: compute engagement % and geocode if events/coords are cached
-    # but metadata is missing these values (e.g. after re-enrichment completed)
+    # Opportunistic: compute engagement % if events/coords are cached
+    # but metadata is missing the value (e.g. after re-enrichment completed)
     if events_cached and meta:
-        updated = False
         if meta.get("engagement_pct") is None:
             engaged_ms, total_ms = _route_engagement(store, route)
             if total_ms > 0 and engaged_ms > 0:
                 meta["engagement_pct"] = round(engaged_ms / total_ms * 100)
-                updated = True
+                store._rebuild_routes()
+                store._save_metadata()
+                route = store.get_route(route_name)
+
+        # Geocode in background — don't block the response (Nominatim rate limit = 2+ sec)
         needs_geocode = meta.get("start_address") is None or meta.get("end_address") is None
         if needs_geocode and meta.get("gps_coordinates"):
             loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, store.geocode_route, local_id)
-            updated = True
-        if updated:
-            store._rebuild_routes()
-            store._save_metadata()
-            route = store.get_route(route_name)
+            loop.run_in_executor(None, store.geocode_route, local_id)
 
     # Collect bookmarks from cached events.json (no rlog parsing needed)
     bookmarks = _route_bookmarks(route)
