@@ -289,6 +289,11 @@ class RouteStore:
         if notes:
             result["notes"] = notes
 
+        # Bookmarks
+        bookmarks = meta.get("bookmarks")
+        if bookmarks:
+            result["bookmarks"] = bookmarks
+
         return result
 
     def _needs_enrich(self, lid: str) -> bool:
@@ -431,6 +436,7 @@ class RouteStore:
             "start_address": internal.get("start_address"),
             "end_address": internal.get("end_address"),
             "notes": internal.get("notes"),
+            "bookmarks": internal.get("bookmarks"),
             "local_id": local_id,
             "_local_id": local_id,
             "_segments": info["segments"],
@@ -989,6 +995,33 @@ class RouteStore:
         meta["notes"] = note
         self._rebuild_routes()
         self._save_metadata()
+
+    def add_bookmark(self, local_id: str, time_sec: float, label: str) -> list:
+        """Add a bookmark to a route. Returns updated bookmark list."""
+        meta = self._metadata.get(local_id)
+        if not meta:
+            meta = {"route_id": local_id}
+            self._metadata[local_id] = meta
+        bookmarks = meta.get("bookmarks", [])
+        bookmarks.append({"time_sec": round(time_sec, 1), "label": label})
+        bookmarks.sort(key=lambda b: b["time_sec"])
+        meta["bookmarks"] = bookmarks
+        self._rebuild_routes()
+        self._save_metadata()
+        return bookmarks
+
+    def delete_bookmark(self, local_id: str, index: int) -> list:
+        """Delete a bookmark by index. Returns updated bookmark list."""
+        meta = self._metadata.get(local_id)
+        if not meta:
+            return []
+        bookmarks = meta.get("bookmarks", [])
+        if 0 <= index < len(bookmarks):
+            bookmarks.pop(index)
+        meta["bookmarks"] = bookmarks
+        self._rebuild_routes()
+        self._save_metadata()
+        return bookmarks
 
     def get_recycled_routes(self) -> list[dict]:
         """Return route dicts for hidden and invalid routes (recycled bin).

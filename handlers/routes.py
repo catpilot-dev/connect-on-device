@@ -239,16 +239,28 @@ async def handle_route_get(request: web.Request) -> web.Response:
             loop = asyncio.get_event_loop()
             loop.run_in_executor(None, store.geocode_route, local_id)
 
-    # Collect bookmarks from cached events.json (no rlog parsing needed)
-    bookmarks = _route_bookmarks(route)
+    # Auto-import drive bookmarks from events.json into metadata bookmarks
+    if events_cached and not meta.get("drive_bookmarks_imported"):
+        drive_bm = _route_bookmarks(route)
+        if drive_bm:
+            existing = meta.get("bookmarks", [])
+            existing_times = {b["time_sec"] for b in existing}
+            for ms in drive_bm:
+                t = round(ms / 1000, 1)
+                if t not in existing_times:
+                    existing.append({"time_sec": t, "label": "Drive bookmark"})
+            existing.sort(key=lambda b: b["time_sec"])
+            meta["bookmarks"] = existing
+        meta["drive_bookmarks_imported"] = True
+        store._rebuild_routes()
+        store._save_metadata()
+        route = store.get_route(route_name) or route
 
     r_with_url = _set_route_url(route, request)
     cleaned = _clean_route(r_with_url)
     cleaned["is_preserved"] = store.is_preserved(local_id)
     cleaned["events_cached"] = events_cached
     cleaned["enriched"] = meta.get("enriched", False)
-    if bookmarks:
-        cleaned["bookmarks"] = bookmarks
     return web.json_response(cleaned)
 
 
@@ -413,6 +425,28 @@ async def handle_route_note(request: web.Request) -> web.Response:
     note = body.get("note", "")
     store.set_note(local_id, note)
     return web.json_response({"status": "ok"})
+
+
+async def handle_route_bookmark_add(request: web.Request) -> web.Response:
+    """POST /v1/route/{routeName}/bookmark — add a bookmark"""
+    store = request.app["store"]
+    local_id = _resolve_local_id(store, request)
+    body = await request.json()
+    time_sec = body.get("time_sec", 0)
+    label = body.get("label", "").strip()
+    if not label:
+        raise web.HTTPBadRequest(text=json.dumps({"error": "label is required"}))
+    bookmarks = store.add_bookmark(local_id, float(time_sec), label)
+    return web.json_response({"bookmarks": bookmarks})
+
+
+async def handle_route_bookmark_delete(request: web.Request) -> web.Response:
+    """DELETE /v1/route/{routeName}/bookmark/{index} — delete a bookmark"""
+    store = request.app["store"]
+    local_id = _resolve_local_id(store, request)
+    index = int(request.match_info["index"])
+    bookmarks = store.delete_bookmark(local_id, index)
+    return web.json_response({"bookmarks": bookmarks})
 
 
 async def handle_route_preserve(request: web.Request) -> web.Response:

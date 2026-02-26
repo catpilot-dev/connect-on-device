@@ -97,6 +97,22 @@ export async function saveNote(routeName, note) {
   return res.json()
 }
 
+export async function addBookmark(routeName, timeSec, label) {
+  const res = await fetch(`/v1/route/${routeId(routeName)}/bookmark`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ time_sec: timeSec, label }),
+  })
+  if (!res.ok) throw new Error(`addBookmark: ${res.status}`)
+  return res.json()
+}
+
+export async function deleteBookmark(routeName, index) {
+  const res = await fetch(`/v1/route/${routeId(routeName)}/bookmark/${index}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`deleteBookmark: ${res.status}`)
+  return res.json()
+}
+
 export async function takeScreenshot(routeName, timeSec, camera = 'fcamera') {
   const res = await fetch(`/v1/route/${routeId(routeName)}/screenshot`, {
     method: 'POST',

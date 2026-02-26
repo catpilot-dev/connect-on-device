@@ -1,7 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte'
   import { selectedRoute, dongleId, isMetric } from '../stores.js'
-  import { fetchRoute, fetchRouteFiles, fetchAllCoords, fetchAllEventsWithProgress, enrichRoute, startHudStream, stopHudStream, hudStreamStatus, hudStreamUrl, prerenderHud, hudProgress, hudVideoUrl, cancelHudRender, saveNote, takeScreenshot, fetchDashboardTelemetry } from '../api.js'
+  import { fetchRoute, fetchRouteFiles, fetchAllCoords, fetchAllEventsWithProgress, enrichRoute, startHudStream, stopHudStream, hudStreamStatus, hudStreamUrl, prerenderHud, hudProgress, hudVideoUrl, cancelHudRender, saveNote, addBookmark, deleteBookmark, takeScreenshot, fetchDashboardTelemetry } from '../api.js'
   import { formatDate, formatDistance, formatDuration, getRouteDurationMs, formatAbsoluteTimeHM } from '../format.js'
   import { buildTimelineEvents } from '../derived.js'
   import snarkdown from 'snarkdown'
@@ -87,6 +87,9 @@
 
   let noteText = $state('')
   let editingNote = $state(false)
+  let metaBookmarks = $state([])  // [{time_sec, label}] from metadata
+  let addingBookmark = $state(false)
+  let newBookmarkLabel = $state('')
 
   // Restore selection from URL path: /{dongleId}/{localId}/{start}/{end}
   const _urlParts = location.pathname.split('/').filter(Boolean)
@@ -124,7 +127,6 @@
 
   const durationMs = $derived(route ? getRouteDurationMs(route) : 0)
   const durationMin = $derived(route?.maxqlog != null ? route.maxqlog + 1 : null)
-  const bookmarks = $derived(timelineEvents.filter(e => e.type === 'user_flag').map(e => e.route_offset_millis))
   // HD sources only available when HEVC is supported
   const sources = $derived.by(() => {
     if (!files || !hevcSupported) return []
@@ -177,6 +179,7 @@
       route = r
       files = f
       noteText = r.notes || ''
+      metaBookmarks = r.bookmarks || []
 
       // Seek to selection start from URL (after video player mounts)
       if (selectionStart > 0) {
@@ -185,17 +188,20 @@
         videoPlayer?.seek(selectionStart)
       }
 
-      // Fetch coords and events in background (non-blocking)
+      // Fetch coords in background (non-blocking)
       fetchAllCoords(r).then(c => coords = c).catch(() => {})
-      enrichTotal = (r.maxqlog ?? 0) + 1
-      enrichNeeded = !r.events_cached
-      fetchAllEventsWithProgress(r, (done, total) => {
-        enrichDone = done
-        enrichTotal = total
-      }).then(raw => {
+
+      // Only auto-load events if already cached on server (no progress bar needed)
+      if (r.events_cached) {
         enrichNeeded = false
-        timelineEvents = buildTimelineEvents(raw, getRouteDurationMs(r))
-      }).catch(() => { enrichNeeded = false })
+        enrichTotal = (r.maxqlog ?? 0) + 1
+        fetchAllEventsWithProgress(r, () => {}).then(raw => {
+          timelineEvents = buildTimelineEvents(raw, getRouteDurationMs(r))
+        }).catch(() => {})
+      } else {
+        enrichNeeded = true
+        // enrichTotal stays 0 so enriching derived stays false → shows Enrich button
+      }
     } catch (e) {
       error = e.message
     } finally {
@@ -447,6 +453,20 @@
     if (route) await saveNote(route.local_id, noteText)
   }
 
+  async function addBookmarkHandler() {
+    if (!route || !newBookmarkLabel.trim()) return
+    const result = await addBookmark(route.local_id, currentTime, newBookmarkLabel.trim())
+    metaBookmarks = result.bookmarks
+    newBookmarkLabel = ''
+    addingBookmark = false
+  }
+
+  async function deleteBookmarkHandler(index) {
+    if (!route) return
+    const result = await deleteBookmark(route.local_id, index)
+    metaBookmarks = result.bookmarks
+  }
+
   let activeTab = $state('map')
 
   // ── Dashboard replay state (progressive per-segment loading) ──
@@ -620,8 +640,9 @@
   async function reEnrich() {
     if (!route || reEnriching) return
     reEnriching = true
+    enrichNeeded = false  // Hide the Enrich button, show progress bar
     try {
-      // Clear cached derived files on server
+      // Clear cached derived files on server and re-enrich metadata
       await enrichRoute(route.local_id)
       // Re-fetch events (regenerates events.json from rlogs)
       enrichDone = 0
@@ -631,6 +652,8 @@
         enrichTotal = total
       })
       timelineEvents = buildTimelineEvents(raw, getRouteDurationMs(route))
+      // Re-fetch route to get updated metadata (engagement %, addresses, enriched flag)
+      route = await fetchRoute(route.local_id)
       // Re-fetch coords too
       fetchAllCoords(route).then(c => coords = c).catch(() => {})
     } catch (e) {
@@ -703,12 +726,19 @@
       <!-- Video player + controls -->
       <div class:space-y-2={!isFullscreen} class:fullscreen-container={isFullscreen} data-video-container>
         {#if !isFullscreen}
-          {#if enriching}
+          {#if enrichNeeded && !enriching && !reEnriching}
+            <button
+              class="w-full py-3 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 text-sm font-medium transition-colors border border-amber-500/30"
+              onclick={reEnrich}
+            >
+              Enrich route data
+            </button>
+          {:else if enriching || reEnriching}
             <div class="space-y-1">
               <div class="h-2 bg-surface-700 rounded-full overflow-hidden">
                 <div
                   class="h-full bg-engage-green rounded-full transition-all duration-300"
-                  style="width: {(enrichDone / enrichTotal) * 100}%"
+                  style="width: {enrichTotal > 0 ? (enrichDone / enrichTotal) * 100 : 0}%"
                 ></div>
               </div>
               <p class="text-xs text-surface-400 text-center">Enriching segments {enrichDone}/{enrichTotal}</p>
@@ -863,7 +893,7 @@
       <div class="card lg:h-full">
         <Tabs.Root bind:value={activeTab} class="lg:h-full lg:grid lg:grid-rows-[auto_1fr]">
           <Tabs.List class="flex border-b border-surface-700/50">
-            {#each [['map','Map'],['route','Route'],['dashboard','Dashboard'],['note','Note']] as [id, label]}
+            {#each [['map','Map'],['route','Route'],['dashboard','Dashboard'],['note','Notes']] as [id, label]}
               <Tabs.Trigger value={id}
                 class="flex-1 px-2 py-3 text-xs font-medium text-center transition-colors
                   {activeTab === id ? 'text-surface-100 border-b-2 border-engage-blue' : 'text-surface-500 hover:text-surface-300'}"
@@ -1077,7 +1107,7 @@
             </div>
           </Tabs.Content>
 
-          <!-- Note tab (note + bookmarks) -->
+          <!-- Notes tab (note + bookmarks) -->
           <Tabs.Content value="note" class="pt-2">
             <div class="px-4 pb-4 space-y-3">
               {#if editingNote}
@@ -1107,29 +1137,68 @@
                 </button>
               {/if}
 
-              {#if bookmarks.length}
-                <div class="border-t border-surface-700/50 pt-3">
-                  <p class="text-xs text-surface-500 mb-2">Bookmarks</p>
-                  <div class="flex flex-wrap gap-2">
-                    {#each bookmarks as bm, i}
-                      {@const totalSec = Math.floor(bm / 1000)}
-                      {@const mm = Math.floor(totalSec / 60)}
-                      {@const ss = (totalSec % 60).toString().padStart(2, '0')}
-                      {@const isActive = currentTime >= bm / 1000 - 2 && (i + 1 >= bookmarks.length || currentTime < bookmarks[i + 1] / 1000 - 2)}
-                      <button
-                        class="px-2 py-1 text-xs font-mono rounded text-surface-200"
-                        class:bg-engage-green={isActive}
-                        class:text-black={isActive}
-                        class:bg-surface-700={!isActive}
-                        class:hover:bg-surface-600={!isActive}
-                        onclick={() => handleSeek(Math.max(0, bm / 1000 - 2))}
-                      >
-                        {mm}:{ss}
-                      </button>
+              <!-- Bookmarks -->
+              <div class="border-t border-surface-700/50 pt-3">
+                <div class="flex items-center justify-between mb-2">
+                  <p class="text-xs text-surface-500">Bookmarks</p>
+                  {#if !addingBookmark}
+                    <button
+                      class="text-xs text-engage-blue hover:text-blue-300 cursor-pointer"
+                      onclick={() => { addingBookmark = true; newBookmarkLabel = '' }}
+                    >+ Add</button>
+                  {/if}
+                </div>
+
+                {#if addingBookmark}
+                  {@const captureSec = currentTime}
+                  {@const capMm = Math.floor(captureSec / 60)}
+                  {@const capSs = Math.floor(captureSec % 60).toString().padStart(2, '0')}
+                  <div class="flex items-center gap-2 mb-2">
+                    <span class="text-xs font-mono text-surface-400 shrink-0">{capMm}:{capSs}</span>
+                    <!-- svelte-ignore a11y_autofocus -->
+                    <input
+                      type="text"
+                      class="flex-1 bg-surface-700 text-surface-100 rounded px-2 py-1 text-sm outline-none focus:ring-1 focus:ring-surface-500"
+                      placeholder="What's happening here?"
+                      bind:value={newBookmarkLabel}
+                      onkeydown={(e) => { if (e.key === 'Enter') addBookmarkHandler(); if (e.key === 'Escape') addingBookmark = false }}
+                      autofocus
+                    />
+                    <button
+                      class="text-xs text-surface-500 hover:text-surface-300 cursor-pointer"
+                      onclick={() => addingBookmark = false}
+                    >Cancel</button>
+                  </div>
+                {/if}
+
+                {#if metaBookmarks.length}
+                  <div class="space-y-1">
+                    {#each metaBookmarks as bm, i}
+                      {@const mm = Math.floor(bm.time_sec / 60)}
+                      {@const ss = Math.floor(bm.time_sec % 60).toString().padStart(2, '0')}
+                      {@const isActive = currentTime >= bm.time_sec - 2 && (i + 1 >= metaBookmarks.length || currentTime < metaBookmarks[i + 1].time_sec - 2)}
+                      <div class="flex items-center gap-2 group">
+                        <button
+                          class="shrink-0 px-2 py-1 text-xs font-mono rounded cursor-pointer"
+                          class:bg-engage-green={isActive}
+                          class:text-black={isActive}
+                          class:bg-surface-700={!isActive}
+                          class:text-surface-200={!isActive}
+                          class:hover:bg-surface-600={!isActive}
+                          onclick={() => handleSeek(Math.max(0, bm.time_sec - 2))}
+                        >{mm}:{ss}</button>
+                        <span class="flex-1 text-sm text-surface-300 truncate">{bm.label}</span>
+                        <button
+                          class="text-surface-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity text-xs cursor-pointer px-1"
+                          onclick={() => deleteBookmarkHandler(i)}
+                        >x</button>
+                      </div>
                     {/each}
                   </div>
-                </div>
-              {/if}
+                {:else if !addingBookmark}
+                  <p class="text-xs text-surface-600">No bookmarks yet. Pause at a moment and click + Add.</p>
+                {/if}
+              </div>
             </div>
           </Tabs.Content>
 
