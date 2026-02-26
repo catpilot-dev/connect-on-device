@@ -510,9 +510,15 @@
   })
 
   // Auto-enter note edit mode when Notes tab selected with empty note
+  let noteTextarea = $state(null)
   $effect(() => {
     if (activeTab === 'note' && !noteText && !editingNote) {
       editingNote = true
+    }
+  })
+  $effect(() => {
+    if (editingNote && noteTextarea) {
+      noteTextarea.focus()
     }
   })
 
@@ -1131,7 +1137,8 @@
               {#if editingNote}
                 <!-- svelte-ignore a11y_autofocus -->
                 <textarea
-                  class="w-full bg-surface-700 text-surface-100 rounded p-2 text-xs resize-none overflow-hidden outline-none focus:ring-1 focus:ring-surface-500"
+                  bind:this={noteTextarea}
+                  class="w-full bg-surface-700 text-surface-100 rounded p-2 text-sm resize-none overflow-hidden outline-none focus:ring-1 focus:ring-surface-500"
                   rows="3"
                   placeholder="Add a note..."
                   bind:value={noteText}
@@ -1143,13 +1150,13 @@
               {:else if noteText}
                 <button
                   type="button"
-                  class="w-full text-left text-xs cursor-pointer text-surface-200 note-rendered line-clamp-3"
+                  class="w-full text-left text-sm cursor-pointer text-surface-200 note-rendered line-clamp-3"
                   onclick={() => { editingNote = true }}
                 >{@html snarkdown(noteText)}</button>
               {:else}
                 <button
                   type="button"
-                  class="w-full text-left text-xs cursor-pointer text-surface-500"
+                  class="w-full text-left text-sm cursor-pointer text-surface-500"
                   onclick={() => { editingNote = true }}
                 >Add a note...</button>
               {/if}
@@ -1189,12 +1196,12 @@
                 {/if}
 
                 {#if metaBookmarks.length}
-                  <div class="space-y-1">
+                  <div class="divide-y divide-surface-700/50">
                     {#each metaBookmarks as bm, i}
                       {@const mm = Math.floor(bm.time_sec / 60)}
                       {@const ss = Math.floor(bm.time_sec % 60).toString().padStart(2, '0')}
                       {@const isActive = currentTime >= bm.time_sec - 2 && (i + 1 >= metaBookmarks.length || currentTime < metaBookmarks[i + 1].time_sec - 2)}
-                      <div class="flex items-center gap-2 group">
+                      <div class="flex items-center gap-2 group py-1.5">
                         <button
                           class="shrink-0 px-2 py-1 text-xs font-mono rounded cursor-pointer"
                           class:bg-engage-green={isActive}
@@ -1207,7 +1214,7 @@
                         {#if editingBookmarkIdx === i}
                           <!-- svelte-ignore a11y_autofocus -->
                           <textarea
-                            class="flex-1 bg-surface-700 text-surface-100 rounded px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-surface-500 resize-none overflow-hidden"
+                            class="flex-1 bg-surface-700 text-surface-100 rounded px-2 py-1 text-sm outline-none focus:ring-1 focus:ring-surface-500 resize-none overflow-hidden"
                             rows="1"
                             bind:value={editingBookmarkLabel}
                             onkeydown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); updateBookmarkHandler(i) } if (e.key === 'Escape') { editingBookmarkIdx = -1; e.target.onblur = null } }}
@@ -1219,7 +1226,7 @@
                         {:else}
                           <button
                             type="button"
-                            class="flex-1 text-left text-xs text-surface-300 cursor-pointer hover:text-surface-100 whitespace-pre-wrap break-words line-clamp-2"
+                            class="flex-1 text-left text-sm text-surface-300 cursor-pointer hover:text-surface-100 whitespace-pre-wrap break-words line-clamp-2"
                             onclick={() => { editingBookmarkIdx = i; editingBookmarkLabel = bm.label }}
                           >{bm.label}</button>
                         {/if}

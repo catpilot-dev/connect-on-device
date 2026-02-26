@@ -44,6 +44,7 @@
   let manifestUrl = null
   let isPlaying = $state(false)
   let isMuted = $state(true)
+  let buffering = $state(true)   // Show spinner until first frame ready
   let userWantsPause = false  // Guard against HLS spurious play events after seek
 
   // HD (fcamera) state
@@ -81,6 +82,7 @@
   function initPlayer() {
     if (!videoEl || !files?.qcameras) return
 
+    buffering = true
     cleanupHls()
 
     const manifest = buildManifest(files.qcameras)
@@ -459,6 +461,9 @@
     onplay={handleHlsPlay}
     onpause={handleHlsPause}
     onended={handleHlsPause}
+    onwaiting={() => { if (!showingHud && !showingHd) buffering = true }}
+    onplaying={() => { if (!showingHud && !showingHd) buffering = false }}
+    oncanplay={() => { if (!showingHud && !showingHd) buffering = false }}
   >
     Your browser does not support video playback.
   </video>
@@ -478,6 +483,9 @@
     onplay={handleHudPlay}
     onpause={handleHudPause}
     onended={handleHudPause}
+    onwaiting={() => { if (showingHud) buffering = true }}
+    onplaying={() => { if (showingHud) buffering = false }}
+    oncanplay={() => { if (showingHud) buffering = false }}
   >
   </video>
 
@@ -495,6 +503,9 @@
     onplay={handleHdPlay}
     onpause={handleHdPause}
     onended={handleHdEnded}
+    onwaiting={() => { if (showingHd) buffering = true }}
+    onplaying={() => { if (showingHd) buffering = false }}
+    oncanplay={() => { if (showingHd) buffering = false }}
   >
   </video>
 
@@ -502,6 +513,10 @@
   {#if !files?.qcameras?.some(u => u)}
     <div class="absolute inset-0 flex items-center justify-center bg-surface-900">
       <p class="text-surface-400 text-sm">No video available</p>
+    </div>
+  {:else if buffering}
+    <div class="absolute inset-0 z-10 flex items-center justify-center pointer-events-none bg-black/40">
+      <div class="w-8 h-8 border-3 border-white/30 border-t-white rounded-full animate-spin"></div>
     </div>
   {/if}
 
