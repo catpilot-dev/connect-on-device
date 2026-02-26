@@ -92,6 +92,7 @@
   let newBookmarkLabel = $state('')
   let editingBookmarkIdx = $state(-1)
   let editingBookmarkLabel = $state('')
+  let expandedBookmark = $state(-1)
 
   // Restore selection from URL path: /{dongleId}/{localId}/{start}/{end}
   const _urlParts = location.pathname.split('/').filter(Boolean)
@@ -1188,9 +1189,9 @@
                       {@const mm = Math.floor(bm.time_sec / 60)}
                       {@const ss = Math.floor(bm.time_sec % 60).toString().padStart(2, '0')}
                       {@const isActive = currentTime >= bm.time_sec - 2 && (i + 1 >= metaBookmarks.length || currentTime < metaBookmarks[i + 1].time_sec - 2)}
-                      <div class="flex items-center gap-2 group">
+                      <div class="flex items-start gap-2 group">
                         <button
-                          class="shrink-0 px-2 py-1 text-xs font-mono rounded cursor-pointer"
+                          class="shrink-0 px-2 py-1 text-xs font-mono rounded cursor-pointer mt-0.5"
                           class:bg-engage-green={isActive}
                           class:text-black={isActive}
                           class:bg-surface-700={!isActive}
@@ -1200,23 +1201,24 @@
                         >{mm}:{ss}</button>
                         {#if editingBookmarkIdx === i}
                           <!-- svelte-ignore a11y_autofocus -->
-                          <input
-                            type="text"
-                            class="flex-1 bg-surface-700 text-surface-100 rounded px-2 py-0.5 text-sm outline-none focus:ring-1 focus:ring-surface-500"
+                          <textarea
+                            class="flex-1 bg-surface-700 text-surface-100 rounded px-2 py-1 text-sm outline-none focus:ring-1 focus:ring-surface-500 resize-none min-h-[2.5rem]"
                             bind:value={editingBookmarkLabel}
-                            onkeydown={(e) => { if (e.key === 'Enter') updateBookmarkHandler(i); if (e.key === 'Escape') { editingBookmarkIdx = -1; e.target.onblur = null } }}
+                            onkeydown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); updateBookmarkHandler(i) } if (e.key === 'Escape') { editingBookmarkIdx = -1; e.target.onblur = null } }}
                             onblur={() => { if (editingBookmarkIdx === i) updateBookmarkHandler(i) }}
+                            oninput={(e) => { e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px' }}
                             autofocus
-                          />
+                          ></textarea>
                         {:else}
                           <button
                             type="button"
-                            class="flex-1 text-left text-sm text-surface-300 truncate cursor-pointer hover:text-surface-100"
-                            onclick={() => { editingBookmarkIdx = i; editingBookmarkLabel = bm.label }}
+                            class="flex-1 text-left text-sm text-surface-300 cursor-pointer hover:text-surface-100 whitespace-pre-wrap break-words"
+                            class:line-clamp-2={expandedBookmark !== i}
+                            onclick={() => { if (expandedBookmark === i) { editingBookmarkIdx = i; editingBookmarkLabel = bm.label; expandedBookmark = -1 } else { expandedBookmark = i } }}
                           >{bm.label}</button>
                         {/if}
                         <button
-                          class="shrink-0 text-red-500/40 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer p-1"
+                          class="shrink-0 text-red-500/40 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer p-1 mt-0.5"
                           title="Delete bookmark"
                           onclick={() => deleteBookmarkHandler(i)}
                         >
