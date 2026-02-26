@@ -1204,8 +1204,8 @@
                             type="text"
                             class="flex-1 bg-surface-700 text-surface-100 rounded px-2 py-0.5 text-sm outline-none focus:ring-1 focus:ring-surface-500"
                             bind:value={editingBookmarkLabel}
-                            onkeydown={(e) => { if (e.key === 'Enter') updateBookmarkHandler(i); if (e.key === 'Escape') editingBookmarkIdx = -1 }}
-                            onblur={() => updateBookmarkHandler(i)}
+                            onkeydown={(e) => { if (e.key === 'Enter') updateBookmarkHandler(i); if (e.key === 'Escape') { editingBookmarkIdx = -1; e.target.onblur = null } }}
+                            onblur={() => { if (editingBookmarkIdx === i) updateBookmarkHandler(i) }}
                             autofocus
                           />
                         {:else}
