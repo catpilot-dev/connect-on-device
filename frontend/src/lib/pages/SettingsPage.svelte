@@ -755,6 +755,9 @@
           {#if (sw.UpdaterFetchAvailable || sw.UpdateAvailable) && sw.UpdaterNewDescription}
             <div class="text-sm text-engage-green">Update: {sw.UpdaterNewDescription}</div>
           {/if}
+          {#if sw.UpdaterWarning}
+            <div class="text-xs text-amber-400">{sw.UpdaterWarning}</div>
+          {/if}
           {#if swError}
             <div class="text-xs text-engage-red">{swError}</div>
           {/if}
