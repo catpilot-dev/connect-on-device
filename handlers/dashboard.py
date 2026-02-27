@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import threading
 from pathlib import Path
 
 from aiohttp import web
@@ -64,11 +65,53 @@ async def handle_dashboard_telemetry(request):
     return web.json_response(samples)
 
 
+def _sm_poller(latest, stop_event):
+    """Background thread: poll cereal SubMaster and stash latest telemetry dict.
+
+    Runs sm.update() (blocking) in its own thread so the asyncio event loop
+    is never blocked. The async WebSocket sender reads from `latest` dict.
+    """
+    import cereal.messaging as messaging
+
+    sm = messaging.SubMaster([
+        "carState", "carControl", "selfdriveState", "peripheralState",
+    ])
+
+    while not stop_event.is_set():
+        sm.update(200)  # blocks up to 200ms — safe in this thread
+
+        if not sm.updated["carState"]:
+            continue
+
+        cs = sm["carState"]
+        cc = sm["carControl"]
+        sd = sm["selfdriveState"]
+        ps = sm["peripheralState"]
+
+        latest["msg"] = {
+            "t": round(sm.logMonoTime["carState"] / 1e9, 3),
+            "coolantTemp": round(float(getattr(cs, "coolantTemp", 0)), 1),
+            "oilTemp": round(float(getattr(cs, "oilTemp", 0)), 1),
+            "vEgo": round(float(cs.vEgo), 3),
+            "steeringAngleDeg": round(float(cs.steeringAngleDeg), 2),
+            "gasPressed": bool(cs.gasPressed),
+            "brakePressed": bool(cs.brakePressed),
+            "cruiseSpeed": round(float(cs.cruiseState.speed), 2),
+            "cruiseEnabled": bool(cs.cruiseState.enabled),
+            "steerCmd": round(float(cc.actuators.steer), 4),
+            "accelCmd": round(float(cc.actuators.accel), 4),
+            "sdState": str(sd.state),
+            "sdEnabled": bool(sd.enabled),
+            "voltage": round(float(ps.voltage), 2),
+        }
+
+
 async def handle_dashboard_ws(request):
     """GET /ws/dashboard — WebSocket live telemetry at 5Hz.
 
-    Subscribes to cereal SubMaster on C3 and streams dashboard telemetry
-    as JSON messages. Falls back gracefully if cereal is unavailable.
+    Subscribes to cereal SubMaster in a background thread (sm.update is blocking)
+    and streams dashboard telemetry as JSON over WebSocket.
+    Falls back to mock data if cereal is unavailable.
     """
     ws = web.WebSocketResponse()
     await ws.prepare(request)
@@ -76,47 +119,29 @@ async def handle_dashboard_ws(request):
     logger.info("Dashboard WebSocket connected")
 
     try:
-        import cereal.messaging as messaging
+        import cereal.messaging  # noqa: F401 — probe availability
 
-        sm = messaging.SubMaster([
-            "carState", "carControl", "selfdriveState", "peripheralState",
-        ])
+        latest = {"msg": None}
+        stop_event = threading.Event()
+        poller = threading.Thread(target=_sm_poller, args=(latest, stop_event), daemon=True)
+        poller.start()
+        logger.info("cereal available — SubMaster poller started")
 
-        while not ws.closed:
-            sm.update(200)  # 200ms timeout
-
-            if not sm.updated["carState"]:
-                await asyncio.sleep(0.05)
-                continue
-
-            cs = sm["carState"]
-            cc = sm["carControl"]
-            sd = sm["selfdriveState"]
-            ps = sm["peripheralState"]
-
-            msg = {
-                "t": round(sm.logMonoTime["carState"] / 1e9, 3),
-                "coolantTemp": round(float(getattr(cs, "coolantTemp", 0)), 1),
-                "oilTemp": round(float(getattr(cs, "oilTemp", 0)), 1),
-                "vEgo": round(float(cs.vEgo), 3),
-                "steeringAngleDeg": round(float(cs.steeringAngleDeg), 2),
-                "gasPressed": bool(cs.gasPressed),
-                "brakePressed": bool(cs.brakePressed),
-                "cruiseSpeed": round(float(cs.cruiseState.speed), 2),
-                "cruiseEnabled": bool(cs.cruiseState.enabled),
-                "steerCmd": round(float(cc.actuators.steer), 4),
-                "accelCmd": round(float(cc.actuators.accel), 4),
-                "sdState": str(sd.state),
-                "sdEnabled": bool(sd.enabled),
-                "voltage": round(float(ps.voltage), 2),
-            }
-
-            await ws.send_str(json.dumps(msg))
-            await asyncio.sleep(0.2)  # 5Hz
+        last_sent = None
+        try:
+            while not ws.closed:
+                msg = latest["msg"]
+                if msg is not None and msg is not last_sent:
+                    await ws.send_str(json.dumps(msg))
+                    last_sent = msg
+                await asyncio.sleep(0.2)  # 5Hz
+        finally:
+            stop_event.set()
+            poller.join(timeout=1)
 
     except ImportError:
         # Mock telemetry for testing UI when cereal is unavailable
-        import math, time as _time, random
+        import math, time as _time
         logger.info("cereal not available — streaming mock telemetry")
         t0 = _time.time()
         while not ws.closed:
