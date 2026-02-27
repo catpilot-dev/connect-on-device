@@ -6,9 +6,10 @@
   /**
    * Cross-browser HLS video player with HUD live stream support.
    *
-   * Two video elements:
+   * Three video elements:
    * 1. HLS video (qcamera segments) — always loaded, hidden when HUD active
-   * 2. HUD live stream video — shown when hudLiveUrl is set, plays live HLS from C3 compositor capture
+   * 2. HUD live stream video — shown when hudLiveUrl is set, plays live HLS from C3
+   * 3. HD camera video (fcamera/ecamera/dcamera) — shown when hdSource is set
    *
    * Compatibility strategy:
    * 1. hls.js (Chrome, Firefox, Edge, Opera, Android Chrome/Firefox/Samsung)
@@ -153,6 +154,13 @@
     }
   }
 
+  function cleanupHudHls() {
+    if (hudHls) {
+      hudHls.destroy()
+      hudHls = null
+    }
+  }
+
   function cleanup() {
     cleanupHls()
     cleanupHudHls()
@@ -190,14 +198,6 @@
   }
 
   // ── HUD live stream event handlers ───────────────────────
-  function handleHudTimeUpdate() {
-    // Time tracking handled by RouteDetailPage tick timer during live stream
-  }
-
-  function handleHudDurationChange() {
-    // Keep duration from HLS (full route), not from live stream
-  }
-
   function handleHudPlay() {
     if (!showingHud) return
     isPlaying = true
@@ -208,13 +208,6 @@
     if (!showingHud) return
     isPlaying = false
     onPause?.()
-  }
-
-  function cleanupHudHls() {
-    if (hudHls) {
-      hudHls.destroy()
-      hudHls = null
-    }
   }
 
   // ── HD (fcamera) playback ────────────────────────────────
@@ -312,7 +305,7 @@
     }
   })
 
-  // ── Swap logic: react to hudLiveUrl changes ───────────────
+  // ── HUD live stream: react to hudLiveUrl changes ───────────
   $effect(() => {
     if (hudLiveUrl && hudVideoEl) {
       // Switching TO HUD live stream
@@ -343,7 +336,6 @@
           }
         })
       } else if (hudVideoEl.canPlayType('application/vnd.apple.mpegurl')) {
-        // Safari native HLS
         hudVideoEl.src = hudLiveUrl
         hudVideoEl.addEventListener('loadedmetadata', () => {
           hudVideoEl.play().catch(() => {})
@@ -357,7 +349,6 @@
         hudVideoEl.removeAttribute('src')
         hudVideoEl.load()
       }
-      // Resume qcamera at current time
       videoEl.currentTime = currentTime
       if (isPlaying) videoEl.play().catch(() => {})
     }
@@ -468,27 +459,6 @@
     Your browser does not support video playback.
   </video>
 
-  <!-- HUD live stream video element -->
-  <video
-    bind:this={hudVideoEl}
-    class="absolute inset-0 w-full h-full object-cover"
-    class:hidden={!showingHud}
-    muted
-    playsinline
-    webkit-playsinline
-    x5-video-player-type="h5"
-    preload="auto"
-    ontimeupdate={handleHudTimeUpdate}
-    ondurationchange={handleHudDurationChange}
-    onplay={handleHudPlay}
-    onpause={handleHudPause}
-    onended={handleHudPause}
-    onwaiting={() => { if (showingHud) buffering = true }}
-    onplaying={() => { if (showingHud) buffering = false }}
-    oncanplay={() => { if (showingHud) buffering = false }}
-  >
-  </video>
-
   <!-- HD camera video element (fcamera/ecamera/dcamera) -->
   <video
     bind:this={hdVideoEl}
@@ -509,12 +479,31 @@
   >
   </video>
 
+  <!-- HUD live stream video element -->
+  <video
+    bind:this={hudVideoEl}
+    class="absolute inset-0 w-full h-full object-cover"
+    class:hidden={!showingHud}
+    muted
+    playsinline
+    webkit-playsinline
+    x5-video-player-type="h5"
+    preload="auto"
+    onplay={handleHudPlay}
+    onpause={handleHudPause}
+    onended={handleHudPause}
+    onwaiting={() => { if (showingHud) buffering = true }}
+    onplaying={() => { if (showingHud) buffering = false }}
+    oncanplay={() => { if (showingHud) buffering = false }}
+  >
+  </video>
+
   <!-- Loading indicator when no video loaded -->
   {#if !files?.qcameras?.some(u => u)}
     <div class="absolute inset-0 flex items-center justify-center bg-surface-900">
       <p class="text-surface-400 text-sm">No video available</p>
     </div>
-  {:else if buffering}
+  {:else if buffering && !showingHud}
     <div class="absolute inset-0 z-10 flex items-center justify-center pointer-events-none bg-black/40">
       <div class="w-8 h-8 border-3 border-white/30 border-t-white rounded-full animate-spin"></div>
     </div>
@@ -528,7 +517,7 @@
       {#if onHudStream}
         <button
           class="pointer-events-auto w-8 h-8 flex items-center justify-center rounded-full bg-white/20 hover:bg-white/40 backdrop-blur-sm transition-colors"
-          title="HUD Live Stream"
+          title="HUD UI Preview"
           onclick={onHudStream}
         >
           <!-- Play/monitor icon -->

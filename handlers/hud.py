@@ -18,6 +18,7 @@ logger = logging.getLogger("connect")
 _hud_prerender_tasks: dict = {}
 
 HUD_CACHE_DIR = Path("/data/connect_on_device/hud_cache")
+RENDER_HLS_DIR = Path("/data/connect_on_device/hud_hls_tmp")
 RENDER_SCRIPT_DRM = Path(__file__).parent.parent / "render_clip_drm.py"
 PYTHON_BIN = "/usr/local/venv/bin/python"
 OPENPILOT_DIR = Path("/data/openpilot")
@@ -389,7 +390,7 @@ async def handle_hud_cancel(request: web.Request) -> web.Response:
                 pass
         logger.info("HUD render cancelled for %s", fullname)
 
-    # Clean up status file and cached output
+    # Clean up status file, cached output, and render HLS temp dir
     try:
         sf = Path(task["status_file"])
         if sf.exists():
@@ -397,6 +398,9 @@ async def handle_hud_cancel(request: web.Request) -> web.Response:
         out = Path(task["output"])
         if out.exists():
             out.unlink()
+        if RENDER_HLS_DIR.exists():
+            import shutil
+            shutil.rmtree(RENDER_HLS_DIR, ignore_errors=True)
     except Exception:
         pass
 
@@ -498,7 +502,6 @@ async def handle_hud_stream_serve(request: web.Request) -> web.Response:
     """GET /v1/hud/stream/{filename} — serve HLS .m3u8 and .ts files."""
     filename = request.match_info["filename"]
 
-    # Security: only allow HLS files
     if not (filename.endswith(".m3u8") or filename.endswith(".ts")):
         raise web.HTTPForbidden(text="Only .m3u8 and .ts files allowed")
 
@@ -507,14 +510,12 @@ async def handle_hud_stream_serve(request: web.Request) -> web.Response:
         raise web.HTTPNotFound()
 
     if filename.endswith(".m3u8"):
-        # Playlist — never cache (live stream, contents change)
         return web.Response(
             body=filepath.read_bytes(),
             content_type="application/vnd.apple.mpegurl",
             headers={"Cache-Control": "no-cache, no-store"},
         )
     else:
-        # Segment — immutable once written, safe to cache
         return web.FileResponse(
             filepath,
             headers={

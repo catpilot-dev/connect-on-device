@@ -124,6 +124,13 @@ async def _startup(app: web.Application):
     store.scan(force=True)
     logger.info("Route scan complete, %d routes found", len(store._routes))
 
+    # Clean up stale render HLS temp dir (persists on /data across reboots)
+    hls_tmp = Path("/data/connect_on_device/hud_hls_tmp")
+    if hls_tmp.exists():
+        import shutil
+        shutil.rmtree(hls_tmp, ignore_errors=True)
+        logger.info("Cleaned up stale HLS temp dir")
+
     # Start periodic storage cleanup task
     app["cleanup_task"] = asyncio.create_task(_cleanup_worker(app))
 
@@ -200,7 +207,7 @@ def create_app(data_dir: str, static_dir: str) -> web.Application:
     app.router.add_get("/v1/route/{routeName}/hud/progress", handle_hud_progress)
     app.router.add_get("/v1/route/{routeName}/hud/video", handle_hud_video)
 
-    # HUD live streaming (wayland screenshooter → HLS)
+    # HUD live streaming (DRM replay → HLS)
     app.router.add_post("/v1/hud/stream/start", handle_hud_stream_start)
     app.router.add_post("/v1/hud/stream/stop", handle_hud_stream_stop)
     app.router.add_get("/v1/hud/stream/status", handle_hud_stream_status)

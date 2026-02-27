@@ -40,9 +40,7 @@
   let hudPollTimer = null
   let hudTickTimer = null
   let hudStartTime = 0  // currentTime when stream was started
-  const hudLiveUrl = $derived(
-    hudStreaming || (dlRendering && dlPhase === 'recording') ? hudStreamUrl() : null
-  )
+  const hudLiveUrl = $derived(hudStreaming ? hudStreamUrl() : null)
   // HUD download (pre-render to MP4)
   let dlRendering = $state(false)
   let dlReady = $state(false)
@@ -301,16 +299,18 @@
   function startHudTick() {
     stopHudTick()
     hudStartTime = currentTime
-    // Advance playhead at 1s/s — replay runs at real-time
+    const endTime = (selectionEnd > 0) ? selectionEnd : duration
+    // Advance playhead at 1s/s — replay runs at real-time, one pass only
     hudTickTimer = setInterval(() => {
       currentTime += 1
-      // Respect selection range (selectionEnd defaults to duration)
-      if (selectionEnd > 0 && currentTime >= selectionEnd) {
-        currentTime = selectionStart
-        hudStartTime = selectionStart
-      } else if (duration > 0 && currentTime >= duration) {
-        currentTime = 0
-        hudStartTime = 0
+      if (endTime > 0 && currentTime >= endTime) {
+        // Reached end — stop stream, return to normal video
+        stopHudTick()
+        hudWanted = false
+        hudStreaming = false
+        hudMode = null
+        stopHudStream().catch(() => {})
+        restoreVideoDefaults()
       }
     }, 1000)
   }
@@ -842,7 +842,7 @@
                   <span class="text-xs text-surface-400">Starting stream...</span>
                 {:else if hudStreaming}
                   <div class="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
-                  <span class="text-xs text-surface-400">Preview of HUD UI in slow motion</span>
+                  <span class="text-xs text-surface-400">HUD UI Preview</span>
                 {:else if hudError}
                   <span class="text-xs text-red-400">{hudError}</span>
                 {/if}

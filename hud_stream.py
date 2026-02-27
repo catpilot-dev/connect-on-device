@@ -1,7 +1,10 @@
 """HUD live streaming pipeline manager for C3.
 
 DRM mode (production):
-  replay(0.2x) -> UI(RECORD=1, RECORD_HLS=1, DRM) -> ffmpeg(HLS) -> /tmp/hud_live/
+  replay(1x, qcam+SW) -> UI(RECORD_HLS, 5fps) -> ffmpeg(HLS) -> browser
+
+The device screen also shows the HUD (DRM render), but the primary output
+is HLS segments served to the browser — works for all devices including C4.
 
 Only one stream can be active at a time since DRM requires exclusive display access.
 """
@@ -24,17 +27,18 @@ logger = logging.getLogger("hud_stream")
 OPENPILOT_DIR = "/data/openpilot"
 REPLAY_BIN = os.path.join(OPENPILOT_DIR, "tools/replay/replay")
 
-# DRM mode constants (reuse proven values from render_clip_drm.py)
+# DRM mode constants
 DRM_RAYLIB_PATH = "/data/pip_packages"
 PYTHON_BIN = "/usr/local/venv/bin/python"
 UI_SCRIPT = "selfdrive/ui/ui.py"
-DRM_RECORD_FPS = 2       # GPU readback rate at 2160x1080
-DRM_REPLAY_SPEED = 0.2   # 0.2x -> 10 unique frames/route-second
+DRM_REPLAY_SPEED = 1.0   # Real-time replay
+DRM_UI_FPS = 20          # UI renders at 20fps for smooth device display
+DRM_RECORD_SKIP = 3      # Capture every 4th frame → 5fps HLS output
 
 # HLS output
 HLS_DIR = Path("/tmp/hud_live")
-HLS_TIME = 2          # seconds per segment
-HLS_LIST_SIZE = 5     # segments in playlist
+HLS_TIME = 0.2        # seconds per segment (1 frame at 5fps)
+HLS_LIST_SIZE = 15    # segments in playlist (~3s buffer)
 
 
 def _is_drm_available() -> bool:
@@ -50,36 +54,22 @@ def is_available() -> bool:
     return _is_drm_available()
 
 
-def _start_selfdrive_publisher(stop_event: threading.Event):
-    """Publish fake selfdriveState to prevent 'System Unresponsive' alert.
-
-    On C3 (non-PC), the UI checks for stale selfdriveState and shows a
-    full-screen red alert after 5s. Publishing at 20Hz keeps it fresh.
-    """
-    try:
-        if OPENPILOT_DIR not in sys.path:
-            sys.path.insert(0, OPENPILOT_DIR)
-        import cereal.messaging as messaging
-        pm = messaging.PubMaster(['selfdriveState'])
-        while not stop_event.is_set():
-            msg = messaging.new_message('selfdriveState')
-            msg.valid = True
-            ss = msg.selfdriveState
-            ss.enabled = False
-            ss.active = False
-            ss.alertSize = 0  # NONE - no alert overlay
-            pm.send('selfdriveState', msg)
-            stop_event.wait(0.05)  # 20Hz
-    except Exception as e:
-        # "Address already in use" is expected — replay takes over the endpoint
-        logger.info("selfdriveState publisher stopped: %s", e)
-
 
 def _stop_production_ui():
     """Stop the production openpilot UI to free up DRM master."""
     logger.info("Stopping production UI...")
     subprocess.run(["pkill", "-f", "selfdrive.ui.ui"], capture_output=True)
-    time.sleep(1)
+    # Wait for process to fully exit and release DRM resources.
+    # SIGTERM may take time; escalate to SIGKILL if still alive.
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        r = subprocess.run(["pgrep", "-f", "selfdrive.ui.ui"], capture_output=True)
+        if r.returncode != 0:
+            break
+        time.sleep(0.3)
+    else:
+        subprocess.run(["pkill", "-9", "-f", "selfdrive.ui.ui"], capture_output=True)
+        time.sleep(0.5)
 
 
 def _restart_production_ui():
@@ -133,7 +123,6 @@ class HudStreamManager:
         self._symlink_dir = None
         self._prefix = None
         self._lock = asyncio.Lock()
-        self._sd_stop = None  # selfdriveState publisher stop event
 
     @property
     def status(self) -> dict:
@@ -158,7 +147,7 @@ class HudStreamManager:
         """Check if key processes are still running."""
         if not self._procs:
             return False
-        # The UI process is the pipeline (it runs ffmpeg internally)
+        # The UI process is the pipeline (it runs ffmpeg internally for HLS)
         return self._procs[-1].poll() is None
 
     async def start(self, route_name: str, local_id: str, dongle_id: str,
@@ -181,7 +170,7 @@ class HudStreamManager:
         )
 
     def _start_sync_drm(self, route_name, local_id, dongle_id, data_dir, start_sec, max_seg):
-        """DRM mode: replay + UI(RECORD_HLS) -> HLS output."""
+        """DRM mode: replay(1x, qcam+SW) → UI(RECORD_HLS, 5fps) → HLS output."""
         try:
             self._prefix = f"stream_{os.getpid()}_{int(time.time())}"
 
@@ -230,17 +219,10 @@ class HudStreamManager:
             # OpenpilotPrefix creates /dev/shm/{prefix}/ — we need both.
             os.makedirs(f"/dev/shm/msgq_{self._prefix}", exist_ok=True)
 
-            # Start selfdriveState publisher to prevent "System Unresponsive"
-            self._sd_stop = threading.Event()
-            sd_thread = threading.Thread(
-                target=_start_selfdrive_publisher,
-                args=(self._sd_stop,), daemon=True)
-            sd_thread.start()
-
             # Stop production UI to free DRM master
             _stop_production_ui()
 
-            # Start replay at 0.2x speed (loops by default for continuous streaming)
+            # Start replay at 1x speed with qcam + SW decoder (reliable)
             canonical = f"{dongle_id}|{local_id}"
             replay_env = os.environ.copy()
             replay_env["TERM"] = "xterm"
@@ -248,7 +230,7 @@ class HudStreamManager:
 
             replay_proc = subprocess.Popen(
                 [REPLAY_BIN, "-c", "1",
-                 "--no-hw-decoder",
+                 "--qcam", "--no-hw-decoder",
                  "-s", str(int(max(start_sec, 0))),
                  "-x", str(DRM_REPLAY_SPEED),
                  "--data_dir", self._symlink_dir,
@@ -280,9 +262,11 @@ class HudStreamManager:
                 self._cleanup_sync()
                 return
 
-            logger.info("Replay ready for %s (DRM mode, %.1fx speed)", route_name, DRM_REPLAY_SPEED)
+            logger.info("Replay ready for %s (qcam+SW, %.1fx)", route_name, DRM_REPLAY_SPEED)
 
-            # Start UI with DRM RECORD + HLS env vars
+            # Start UI with RECORD_HLS — renders to DRM screen + captures frames → HLS
+            # Note: replay publishes all cereal messages including selfdriveState
+            # with correct engagement state — no fake publisher needed.
             hls_output = str(HLS_DIR / "stream.m3u8")
             ui_env = {
                 "RECORD": "1",
@@ -290,7 +274,8 @@ class HudStreamManager:
                 "RECORD_OUTPUT": hls_output,
                 "RECORD_HLS_TIME": str(HLS_TIME),
                 "RECORD_HLS_LIST_SIZE": str(HLS_LIST_SIZE),
-                "FPS": str(DRM_RECORD_FPS),
+                "FPS": str(DRM_UI_FPS),
+                "RECORD_SKIP": str(DRM_RECORD_SKIP),
                 "BIG": "1",  # Force 2160x1080 layout
                 "PYTHONPATH": f"{OPENPILOT_DIR}:{DRM_RAYLIB_PATH}",
                 "OPENPILOT_PREFIX": self._prefix,
@@ -327,11 +312,10 @@ class HudStreamManager:
 
             if m3u8_path.exists() and m3u8_path.stat().st_size > 20:
                 self._status = "streaming"
-                logger.info("HLS streaming active for %s (DRM mode)", route_name)
+                logger.info("HLS streaming active for %s (5fps, 1x)", route_name)
             else:
                 self._status = "error"
                 self._error = "HLS output not generated"
-                # Check UI log for hints
                 try:
                     log = Path("/tmp/hud_ui_drm.log").read_text()[-500:]
                     if log.strip():
@@ -363,11 +347,6 @@ class HudStreamManager:
 
     def _cleanup_sync(self):
         """Kill all child processes, restore display, clean up temp files."""
-        # Stop selfdriveState publisher
-        if self._sd_stop:
-            self._sd_stop.set()
-            self._sd_stop = None
-
         # Terminate child processes
         for p in self._procs:
             try:
@@ -404,6 +383,10 @@ class HudStreamManager:
             shutil.rmtree(self._symlink_dir, ignore_errors=True)
             self._symlink_dir = None
 
+        # Clean up HLS output
+        if HLS_DIR.exists():
+            shutil.rmtree(HLS_DIR, ignore_errors=True)
+
         # Clean up shared memory and params
         if self._prefix:
             shutil.rmtree(f"/dev/shm/{self._prefix}", ignore_errors=True)
@@ -412,7 +395,7 @@ class HudStreamManager:
             self._prefix = None
 
 
-# --- Module-level helpers (shared with render_clip_drm.py logic) ----------
+# --- Module-level helpers ---
 
 def _find_max_segment(data_dir: str, local_id: str) -> int:
     max_seg = -1

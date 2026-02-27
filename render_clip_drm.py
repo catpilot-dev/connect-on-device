@@ -53,16 +53,16 @@ DRM_RAYLIB_PATH = "/data/pip_packages"
 RECORD_FPS = 2
 REPLAY_SPEED = 0.2
 SPEEDUP_FACTOR = 1.0 / REPLAY_SPEED  # 5x
-HLS_DIR = "/tmp/hud_live"
+HLS_DIR = "/data/connect_on_device/hud_hls_tmp"
 SECONDS_TO_WARM = 2
 
 
 def start_selfdrive_publisher(stop_event: threading.Event):
-    """Background thread: publish fake selfdriveState to prevent 'System Unresponsive' alert.
+    """Publish fake selfdriveState to prevent 'System Unresponsive' alert.
 
-    On C3, Hardware::PC() is false (compile-time QCOM2), so the UI checks for stale
-    selfdriveState and shows a full-screen red alert after 5s.
-    Publishing at 20Hz keeps the message fresh well within the 5s timeout.
+    At 0.2x replay speed, gaps in rlog selfdriveState are amplified 5x — a 1s gap
+    becomes 5s, triggering the UI's staleness timeout. This keeps the message fresh.
+    Not needed for HUD Preview (1x speed) where replay's own messages suffice.
     """
     import cereal.messaging as messaging
     pm = messaging.PubMaster(['selfdriveState'])
@@ -247,7 +247,8 @@ def main():
             lr = LogReader(rlog_path)
             populate_car_params(lr)
 
-            # Prevent "System Unresponsive" alert
+            # Prevent "System Unresponsive" — at 0.2x replay, selfdriveState gaps
+            # in the rlog get amplified 5x, exceeding the UI's 5s staleness timeout.
             sd_thread = threading.Thread(target=start_selfdrive_publisher,
                                          args=(sd_stop,), daemon=True)
             sd_thread.start()
@@ -301,6 +302,7 @@ def main():
                 "RECORD_OUTPUT": hls_m3u8,
                 "RECORD_HLS_TIME": "2",
                 "RECORD_HLS_LIST_SIZE": "9999",
+                "RECORD_CRF": "10",  # Near-lossless first pass; post-processing is the single lossy encode
                 "FPS": str(RECORD_FPS),
                 "BIG": "1",  # Force 2160x1080 layout
                 "PYTHONPATH": f"{OPENPILOT_DIR}:{DRM_RAYLIB_PATH}",
@@ -387,6 +389,15 @@ def main():
 
             print(f"UI exited (code {ui_proc.returncode})", file=sys.stderr)
 
+            # Kill replay + selfdriveState publisher — not needed for post-processing
+            sd_stop.set()
+            if replay_proc.poll() is None:
+                replay_proc.terminate()
+                try:
+                    replay_proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    replay_proc.kill()
+
             # Concatenate HLS segments into raw MP4 for post-processing
             hls_m3u8 = os.path.join(HLS_DIR, "stream.m3u8")
             if os.path.isfile(hls_m3u8):
@@ -446,7 +457,8 @@ def main():
                     "-metadata", "encoder=connect_on_device render_clip_drm",
                     "-c:v", "libx264",
                     "-preset", "ultrafast",
-                    "-crf", "23",
+                    "-crf", "18",
+                    "-threads", "0",
                     "-pix_fmt", "yuv420p",
                     "-movflags", "+faststart",
                     args.output,
