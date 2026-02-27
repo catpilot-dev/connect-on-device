@@ -51,6 +51,8 @@
   let dlFrame = $state(0)
   let dlTotalFrames = $state(0)
   let dlRemainingSec = $state(0)
+  let dlPostElapsed = $state(0)
+  let dlPostTotal = $state(0)
   let dlRenderStart = $state(0)
   let dlPollTimer = null
 
@@ -367,6 +369,13 @@
     }
   }
 
+  function formatRemaining(sec) {
+    if (!sec || sec <= 0) return ''
+    const m = Math.floor(sec / 60)
+    const s = Math.round(sec % 60)
+    return m > 0 ? `${m}m ${s}s` : `${s}s`
+  }
+
   async function startDownload() {
     if (dlRendering || dlReady) return
     dlRendering = true
@@ -378,6 +387,8 @@
     dlFrame = 0
     dlTotalFrames = 0
     dlRemainingSec = 0
+    dlPostElapsed = 0
+    dlPostTotal = 0
     dlRenderStart = selectionStart || 0
 
     try {
@@ -410,6 +421,8 @@
           dlFrame = p.frame || 0
           dlTotalFrames = p.total_frames || dlTotalFrames
           dlRemainingSec = p.remaining_sec ?? dlRemainingSec
+          dlPostElapsed = p.post_elapsed_sec ?? dlPostElapsed
+          dlPostTotal = p.post_total_sec ?? dlPostTotal
 
           // Update playhead to follow render position
           if (p.elapsed_sec != null && p.status === 'rendering') {
@@ -865,16 +878,21 @@
                 </div>
               </div>
             {:else if dlRendering}
-              <div class="space-y-1 px-2">
-                <div class="h-1.5 bg-surface-700 rounded-full overflow-hidden">
-                  <div class="h-full bg-engage-green rounded-full transition-all"
-                    style="width: {dlTotal > 0 ? (dlElapsed / dlTotal) * 100 : 0}%"></div>
+              <div class="flex items-center justify-between h-8 px-2">
+                <div class="flex items-center gap-2">
+                  {#if dlPhase === 'recording'}
+                    <span class="dl-rec-dot"></span>
+                    <span class="text-xs text-surface-300">Recording {Math.round(dlElapsed)}s / {Math.round(dlTotal)}s{dlRemainingSec > 0 ? ` · ~${formatRemaining(dlRemainingSec)}` : ''}</span>
+                  {:else if dlPhase === 'concatenating' || dlPhase === 'post-processing'}
+                    <span class="dl-spinner"></span>
+                    <span class="text-xs text-surface-300">Post-processing {Math.round(dlPostElapsed)}s / {Math.round(dlPostTotal || dlTotal)}s</span>
+                  {:else}
+                    <span class="dl-spinner"></span>
+                    <span class="text-xs text-surface-300">Preparing{dlPhase ? ` · ${dlPhase}` : '...'}</span>
+                  {/if}
                 </div>
-                <div class="flex items-center justify-between">
-                  <span class="text-xs text-surface-400">{dlPhase || 'rendering'} · {Math.round(dlElapsed)}s/{Math.round(dlTotal)}s{dlRemainingSec > 0 ? ` · ~${dlRemainingSec}s left` : ''}</span>
-                  <button class="btn-sm bg-red-600 hover:bg-red-500 text-white px-3 py-1 rounded text-xs"
-                    onclick={cancelDownload}>Cancel</button>
-                </div>
+                <button class="btn-sm bg-red-600 hover:bg-red-500 text-white px-3 py-1 rounded text-xs"
+                  onclick={cancelDownload}>Cancel</button>
               </div>
             {:else if dlReady}
               <div class="flex items-center justify-end gap-2 h-8 px-2">
@@ -1325,4 +1343,24 @@
   .note-rendered :global(ul) { padding-left: 1.2em; margin: 0.25em 0; list-style: disc; }
   .note-rendered :global(ol) { padding-left: 1.2em; margin: 0.25em 0; list-style: decimal; }
   .note-rendered :global(li) { margin: 0.1em 0; }
+  .dl-spinner {
+    width: 12px; height: 12px;
+    border: 2px solid rgba(34, 197, 94, 0.3);
+    border-top-color: #22c55e;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    flex-shrink: 0;
+  }
+  @keyframes spin { to { transform: rotate(360deg) } }
+  .dl-rec-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: #ef4444;
+    animation: recording-blink-dot 4s ease-in-out infinite;
+    flex-shrink: 0;
+  }
+  @keyframes recording-blink-dot {
+    0%, 100% { opacity: 0; }
+    50% { opacity: 1; }
+  }
 </style>

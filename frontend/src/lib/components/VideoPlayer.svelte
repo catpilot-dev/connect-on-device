@@ -444,6 +444,7 @@
     class:hidden={showingHud}
     muted
     playsinline
+    disablepictureinpicture
     webkit-playsinline
     x5-video-player-type="h5"
     preload="auto"
@@ -466,6 +467,7 @@
     class:invisible={!showingHd}
     muted={isMuted}
     playsinline
+    disablepictureinpicture
     webkit-playsinline
     x5-video-player-type="h5"
     preload="auto"
@@ -486,6 +488,7 @@
     class:hidden={!showingHud}
     muted
     playsinline
+    disablepictureinpicture
     webkit-playsinline
     x5-video-player-type="h5"
     preload="auto"
@@ -509,37 +512,36 @@
     </div>
   {/if}
 
-  <!-- Hover overlay: HUD stream + download icons -->
+  <!-- Hover overlay: HUD stream + download buttons (centered) -->
   {#if !frozen && !showingHud && (onHudStream || onHudDownload)}
-    <div class="absolute bottom-0 left-0 right-0 hidden sm:flex items-center justify-center gap-3 py-2
-      bg-gradient-to-t from-black/60 to-transparent
+    <div class="absolute inset-0 hidden sm:flex items-center justify-center gap-4
       opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none">
       {#if onHudStream}
         <button
-          class="pointer-events-auto w-8 h-8 flex items-center justify-center rounded-full bg-white/20 hover:bg-white/40 backdrop-blur-sm transition-colors"
+          class="pointer-events-auto flex items-center gap-2 px-4 py-2.5 rounded-lg bg-black/50 hover:bg-black/70 border border-transparent hover:border-blue-500 backdrop-blur-sm transition-colors"
           title="HUD UI Preview"
           onclick={onHudStream}
         >
-          <!-- Play/monitor icon -->
-          <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
             <rect x="2" y="3" width="20" height="14" rx="2"/>
             <path d="M8 21h8M12 17v4"/>
             <polygon points="10,7 10,13 15,10" fill="currentColor" stroke="none"/>
           </svg>
+          <span class="text-white text-sm font-medium">HUD Preview</span>
         </button>
       {/if}
       {#if onHudDownload}
         <button
-          class="pointer-events-auto w-8 h-8 flex items-center justify-center rounded-full bg-white/20 hover:bg-white/40 backdrop-blur-sm transition-colors"
+          class="pointer-events-auto flex items-center gap-2 px-4 py-2.5 rounded-lg bg-black/50 hover:bg-black/70 border border-transparent hover:border-blue-500 backdrop-blur-sm transition-colors"
           title="Download HUD Video"
           onclick={onHudDownload}
         >
-          <!-- Download icon -->
-          <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
             <polyline points="7 10 12 15 17 10"/>
             <line x1="12" y1="15" x2="12" y2="3"/>
           </svg>
+          <span class="text-white text-sm font-medium">HUD Download</span>
         </button>
       {/if}
     </div>

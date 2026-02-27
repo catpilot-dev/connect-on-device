@@ -77,6 +77,30 @@ def start_selfdrive_publisher(stop_event: threading.Event):
         stop_event.wait(0.05)  # 20Hz
 
 
+def run_ffmpeg_with_progress(cmd, status_file, phase, total_sec, log_path):
+    """Run ffmpeg with -progress tracking, updating status file with post_elapsed_sec."""
+    # Insert -progress pipe:1 before output (last arg)
+    full_cmd = cmd[:-1] + ["-progress", "pipe:1", cmd[-1]]
+    proc = Popen(full_cmd, stdout=subprocess.PIPE, stderr=open(log_path, "w"),
+                 universal_newlines=True)
+    post_elapsed = 0.0
+    for line in proc.stdout:
+        line = line.strip()
+        if line.startswith("out_time_us="):
+            try:
+                us = int(line.split("=", 1)[1])
+                post_elapsed = min(us / 1_000_000, total_sec)
+                write_status(status_file, {
+                    "status": "rendering", "phase": phase,
+                    "elapsed_sec": round(total_sec, 1), "total_sec": total_sec,
+                    "post_elapsed_sec": round(post_elapsed, 1), "post_total_sec": round(total_sec, 1),
+                })
+            except (ValueError, IndexError):
+                pass
+    proc.wait()
+    return proc.returncode
+
+
 def write_status(status_file: str, data: dict):
     """Atomically write status JSON."""
     tmp = status_file + ".tmp"
@@ -405,8 +429,8 @@ def main():
                                                 "total_sec": duration, "phase": "concatenating"})
                 concat_cmd = ["ffmpeg", "-y", "-allowed_extensions", "ALL",
                               "-i", hls_m3u8, "-c", "copy", raw_output]
-                subprocess.run(concat_cmd, stdout=subprocess.DEVNULL,
-                               stderr=open("/tmp/hud_concat_drm.log", "w"))
+                run_ffmpeg_with_progress(concat_cmd, args.status_file,
+                                         "concatenating", duration, "/tmp/hud_concat_drm.log")
 
             # Post-process: trim warmup + speed up from 0.2x to real-time
             # Raw recording: 2fps at 0.2x speed → needs 5x speedup to play at real-time.
@@ -466,10 +490,9 @@ def main():
 
                 print(f"Post-processing: trim={actual_warmup:.1f}s, {SPEEDUP_FACTOR:.0f}x speedup → {args.fps}fps...",
                       file=sys.stderr)
-                result = subprocess.run(post_cmd,
-                                        stdout=subprocess.DEVNULL,
-                                        stderr=open("/tmp/hud_trim_drm.log", "w"))
-                if result.returncode == 0 and os.path.isfile(args.output):
+                rc = run_ffmpeg_with_progress(post_cmd, args.status_file,
+                                              "post-processing", duration, "/tmp/hud_trim_drm.log")
+                if rc == 0 and os.path.isfile(args.output):
                     os.unlink(raw_output)
                 else:
                     # Post-process failed — use raw output as fallback
