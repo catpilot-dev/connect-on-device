@@ -707,7 +707,7 @@
     if (!route || dlDownloading) return
     dlDownloading = true
     try {
-      const res = await fetch(hudVideoUrl(route.local_id))
+      const res = await fetch(hudVideoUrl(route.local_id) + `?t=${Date.now()}`)
       const blob = await res.blob()
       const a = document.createElement('a')
       a.href = URL.createObjectURL(blob)
