@@ -9,6 +9,7 @@
   import SettingsPage from './lib/pages/SettingsPage.svelte'
   import DashboardPage from './lib/pages/DashboardPage.svelte'
   import SignalBrowserPage from './lib/pages/SignalBrowserPage.svelte'
+  import PluginsPage from './lib/pages/PluginsPage.svelte'
 
   let error = $state(null)
   let isOnroad = $state(false)
@@ -16,6 +17,7 @@
     const parts = location.pathname.split('/').filter(Boolean)
     if (parts[0] === 'tiles') return 'tiles'
     if (parts[0] === 'settings') return 'settings'
+    if (parts[0] === 'plugins') return 'plugins'
     if (parts[0] === 'dashboard') return 'dashboard'
     if (parts[0] === 'signals') return 'signals'
     return 'routes'
@@ -96,6 +98,12 @@
     selectedRoute.set(null)
     history.pushState(null, '', '/dashboard')
   }
+
+  function showPlugins() {
+    page = 'plugins'
+    selectedRoute.set(null)
+    history.pushState(null, '', '/plugins')
+  }
 </script>
 
 {#if page === 'signals'}
@@ -130,6 +138,12 @@
           >
             Settings
           </button>
+          <button
+            class="px-3 py-1.5 text-sm rounded transition-colors {page === 'plugins' ? 'bg-surface-700 text-surface-50' : 'text-surface-400 hover:text-surface-200'}"
+            onclick={showPlugins}
+          >
+            Plugins
+          </button>
         </div>
       {/snippet}
     </DeviceHeader>
@@ -149,6 +163,8 @@
         <DashboardPage {isOnroad} />
       {:else if page === 'settings'}
         <SettingsPage {isOnroad} />
+      {:else if page === 'plugins'}
+        <PluginsPage />
       {:else if isOnroad}
         <div class="flex items-center justify-center h-64">
           <div class="text-center">

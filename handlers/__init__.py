@@ -108,6 +108,11 @@ from .signals import (
     handle_signal_all,
 )
 
+from .plugins import (
+    handle_plugins_get,
+    handle_plugin_toggle,
+)
+
 from .stubs import (
     handle_stub_empty_array,
     handle_stub_error,

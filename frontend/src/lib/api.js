@@ -554,6 +554,20 @@ export async function deleteTile(lat, lon) {
   return res.json()
 }
 
+// ── Plugins ──────────────────────────────────────────────
+
+export async function fetchPlugins() {
+  const res = await fetch('/v1/plugins')
+  if (!res.ok) throw new Error(`fetchPlugins: ${res.status}`)
+  return res.json()
+}
+
+export async function togglePlugin(pluginId) {
+  const res = await fetch(`/v1/plugins/${pluginId}/toggle`, { method: 'POST' })
+  if (!res.ok) throw new Error(`togglePlugin: ${res.status}`)
+  return res.json()
+}
+
 // ── Mapd binary update ──────────────────────────────────
 
 export async function mapdCheckUpdate() {
