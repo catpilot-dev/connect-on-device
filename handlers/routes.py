@@ -244,6 +244,8 @@ async def handle_route_get(request: web.Request) -> web.Response:
         drive_bm = _route_bookmarks(route)
         if drive_bm:
             existing = meta.get("bookmarks", [])
+            # Normalize old-format bookmarks (plain numbers → dicts)
+            existing = [b if isinstance(b, dict) else {"time_sec": b, "label": ""} for b in existing]
             existing_times = {b["time_sec"] for b in existing}
             for ms in drive_bm:
                 t = round(ms / 1000, 1)
