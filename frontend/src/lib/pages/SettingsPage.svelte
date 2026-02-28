@@ -8,6 +8,7 @@
   import { createPoll } from '../utils/poll.js'
   import { fetchParams, setParam,
     fetchSoftware, softwareCheck, softwareDownload, softwareInstall, softwareBranch, softwareUninstall,
+    softwarePreparePlugins,
     fetchLateralDelay, fetchDeviceInfo, deviceReboot, devicePoweroff, deviceSetLanguage,
     fetchToggles, setToggle, fetchStorage, mapdCheckUpdate, mapdUpdate,
     fetchSshKeys, setSshKeys, removeSshKeys, fetchTileList } from '../api.js'
@@ -19,7 +20,6 @@
   let params = $state({})
   let loading = $state(true)
   let error = $state(null)
-  let saving = $state(null)
   let latDelay = $state(null)
   let tileSource = $state(getTileSource())
 
@@ -36,7 +36,7 @@
   let swLoading = $state(true)
   let swError = $state(null)
   let swChecking = $state(false)
-  let swInstallPhase = $state(null)  // null | 'downloading' | 'installing' | 'rebooting'
+  let swInstallPhase = $state(null)  // null | 'downloading' | 'preparing' | 'installing' | 'rebooting'
   let swChecked = $state(false)
   const swRepoUrl = $derived(sw?.GitRemote?.replace(/\.git$/, '') || null)
 
@@ -76,12 +76,7 @@
   const SECTIONS = [
     {
       title: 'Driving',
-      items: [
-        { key: 'MapdSpeedLimitControlEnabled', label: 'Map Speed Control', desc: 'Automatically limit speed based on OSM map data', type: 'bool' },
-        { key: 'MapdSpeedLimitOffsetPercent', label: 'Speed Offset', desc: 'Percentage above the posted speed limit', type: 'pills', options: [0, 5, 10, 15], suffix: '%', dependsOn: 'MapdSpeedLimitControlEnabled' },
-        { key: 'MapdCurveTargetLatAccel', label: 'Curve Comfort', desc: 'Target lateral acceleration in curves (m/s²)', type: 'pills', options: ['1.5', '2.0', '2.5', '3.0'], dependsOn: 'MapdSpeedLimitControlEnabled' },
-        { key: 'LaneCenteringCorrection', label: 'Lane Centering in Curves', desc: 'Apply lane offset for better centering', type: 'bool' },
-      ],
+      items: [],
     },
   ]
 
@@ -177,6 +172,9 @@
     try {
       // Already downloaded — skip to install
       if (sw.UpdateAvailable) {
+        // Prepare plugins from staged update before installing
+        swInstallPhase = 'preparing'
+        try { await softwarePreparePlugins() } catch { /* no plugins in branch — fine */ }
         swInstallPhase = 'installing'
         await softwareInstall()
         swInstallPhase = 'rebooting'
@@ -191,6 +189,9 @@
           sw = await fetchSoftware()
           if (sw.UpdateAvailable) {
             installPoll.stop()
+            // Prepare plugins from staged update before installing
+            swInstallPhase = 'preparing'
+            try { await softwarePreparePlugins() } catch { /* no plugins in branch — fine */ }
             swInstallPhase = 'installing'
             await softwareInstall()
             swInstallPhase = 'rebooting'
@@ -359,34 +360,6 @@
     if (secs < 3600) return `${Math.floor(secs / 60)}m ago`
     if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`
     return `${Math.floor(secs / 86400)}d ago`
-  }
-
-  async function toggle(key) {
-    const prev = params[key]
-    params[key] = !prev
-    saving = key
-    try {
-      await setParam(key, params[key])
-    } catch (e) {
-      params[key] = prev
-      error = e.message
-    } finally {
-      saving = null
-    }
-  }
-
-  async function setOffset(key, value) {
-    const prev = params[key]
-    params[key] = value
-    saving = key
-    try {
-      await setParam(key, value)
-    } catch (e) {
-      params[key] = prev
-      error = e.message
-    } finally {
-      saving = null
-    }
   }
 
   async function handleMapdCheck() {
@@ -682,7 +655,7 @@
             {#if swInstallPhase}
               <button class="text-sm py-2 rounded-lg bg-surface-700 text-surface-400 flex items-center justify-center gap-2" disabled>
                 <Spinner />
-                {swInstallPhase === 'downloading' ? 'Downloading' : swInstallPhase === 'installing' ? 'Installing' : swInstallPhase === 'rebooting' ? 'Rebooting' : 'Installing'}
+                {swInstallPhase === 'downloading' ? 'Downloading' : swInstallPhase === 'preparing' ? 'Preparing plugins' : swInstallPhase === 'installing' ? 'Installing' : swInstallPhase === 'rebooting' ? 'Rebooting' : 'Installing'}
               </button>
             {:else if swChecking}
               <button class="text-sm py-2 rounded-lg bg-surface-700 text-surface-400 flex items-center justify-center gap-2" disabled>

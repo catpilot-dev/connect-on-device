@@ -143,6 +143,11 @@ export function cameraUrl(routeName, cameraType, segment) {
   return `/v1/route/${routeId(routeName)}/camera/${cameraType}/${segment}`
 }
 
+/** Build URL for remuxed qcamera fMP4 chunk (continuous, no HLS stutter) */
+export function qcameraMp4Url(routeName, fromSeg, count = 5) {
+  return `/v1/route/${routeId(routeName)}/qcamera.mp4?from=${fromSeg}&count=${count}`
+}
+
 /** Build download URL with file type and segment selection */
 export function downloadUrl(routeName, fileTypes = ['rlog'], segments = null) {
   let url = `/v1/route/${routeId(routeName)}/download?files=${fileTypes.join(',')}`
@@ -370,6 +375,12 @@ export async function softwareUninstall() {
   return res.json()
 }
 
+export async function softwarePreparePlugins() {
+  const res = await fetch('/v1/software/prepare-plugins', { method: 'POST' })
+  if (!res.ok) throw new Error(`softwarePreparePlugins: ${res.status}`)
+  return res.json()
+}
+
 // ── Lateral delay ───────────────────────────────────────────
 
 export async function fetchLateralDelay() {
@@ -565,6 +576,16 @@ export async function fetchPlugins() {
 export async function togglePlugin(pluginId) {
   const res = await fetch(`/v1/plugins/${pluginId}/toggle`, { method: 'POST' })
   if (!res.ok) throw new Error(`togglePlugin: ${res.status}`)
+  return res.json()
+}
+
+export async function setPluginParam(pluginId, key, value) {
+  const res = await fetch(`/v1/plugins/${pluginId}/param`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key, value }),
+  })
+  if (!res.ok) throw new Error(`setPluginParam: ${res.status}`)
   return res.json()
 }
 

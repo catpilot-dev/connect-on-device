@@ -85,13 +85,8 @@ async def handle_toggles_set(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok", "key": key, "value": value})
 
 
-BMW_PARAMS = {
+PARAMS = {
     "LongitudinalPersonality": {"type": "int", "label": "Driving Personality", "default": 2},
-    "DccCalibrationMode": {"type": "bool", "label": "DCC Calibration Mode"},
-    "LaneCenteringCorrection": {"type": "bool", "label": "Lane Centering Correction"},
-    "MapdSpeedLimitControlEnabled": {"type": "bool", "label": "Map Speed Limit Control"},
-    "MapdSpeedLimitOffsetPercent": {"type": "int", "label": "Speed Limit Offset %"},
-    "MapdCurveTargetLatAccel": {"type": "int", "label": "Curve Target Lat Accel"},
     "MapdVersion": {"type": "str", "label": "Mapd Version"},
 }
 
@@ -158,7 +153,7 @@ async def handle_params_get(request: web.Request) -> web.Response:
     mapd_settings = None  # lazy-loaded
 
     result = {}
-    for key, meta in BMW_PARAMS.items():
+    for key, meta in PARAMS.items():
         raw = read_param(key)
 
         # Fallback: if individual param missing, read from MapdSettings JSON
@@ -198,9 +193,9 @@ async def handle_params_set(request: web.Request) -> web.Response:
     body = await request.json()
     key = body.get("key")
     value = body.get("value")
-    if key not in BMW_PARAMS:
+    if key not in PARAMS:
         raise web.HTTPBadRequest(text=json.dumps({"error": f"Unknown param: {key}"}))
-    meta = BMW_PARAMS[key]
+    meta = PARAMS[key]
     if meta["type"] == "bool":
         raw = "1" if value else "0"
     else:

@@ -42,6 +42,7 @@ from .media import (
     handle_screenshot,
     handle_frame,
     handle_camera_segment,
+    handle_qcamera_mp4,
 )
 
 from .hud import (
@@ -62,6 +63,7 @@ from .software import (
     handle_software_install,
     handle_software_branch,
     handle_software_uninstall,
+    handle_software_prepare_plugins,
 )
 
 from .params import (
@@ -111,6 +113,7 @@ from .signals import (
 from .plugins import (
     handle_plugins_get,
     handle_plugin_toggle,
+    handle_plugin_param,
 )
 
 from .stubs import (
