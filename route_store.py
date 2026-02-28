@@ -27,7 +27,7 @@ ROUTE_DIR_RE = re.compile(r"^(\w+--\w+)--(\d+)$")
 DEFAULT_DATA_DIR = "/data/media/0/realdata"
 DEFAULT_PORT = 8082
 CACHE_TTL = 120  # seconds — route scan is expensive with metadata
-METADATA_FILE = "metadata.json"
+METADATA_FILE = ".route_metadata.json"
 
 # Nominatim reverse geocoding (OSM)
 _NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse"
@@ -130,9 +130,8 @@ class RouteStore:
         self._metadata: dict = {}         # route_id -> route_metadata.py format
         self._hidden: dict = {}            # local_id -> hide_time (Unix epoch)
         self._preserved: set = set()      # local_ids protected from cleanup
-        # Store metadata outside realdata dir to avoid confusing openpilot's uploader
-        # (uploader.py clear_locks() calls os.listdir() on every entry, expects only directories)
-        self._metadata_path = Path("/data/connect_on_device") / METADATA_FILE
+        # Dot-prefixed filename so uploader.py clear_locks() skips it
+        self._metadata_path = Path(data_dir) / METADATA_FILE
         self._agnos_version: str | None = None
         self._executor = ThreadPoolExecutor(max_workers=1)
         self._bg_scanning = False

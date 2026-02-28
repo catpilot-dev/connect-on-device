@@ -53,7 +53,7 @@ def _make_store(tmp_path, route_ids, hidden=None, preserved=None, metadata_route
         "preserved_routes": preserved,
         "routes": metadata_routes,
     }
-    (tmp_path / "metadata.json").write_text(json.dumps(meta))
+    (tmp_path / ".route_metadata.json").write_text(json.dumps(meta))
 
     with patch.object(RouteStore, "_detect_dongle_id"), \
          patch.object(RouteStore, "_detect_agnos_version"):
@@ -357,7 +357,7 @@ class TestHiddenBackwardCompat:
             "preserved_routes": [],
             "routes": {},
         }
-        (tmp_path / "metadata.json").write_text(json.dumps(meta))
+        (tmp_path / ".route_metadata.json").write_text(json.dumps(meta))
 
         with patch.object(RouteStore, "_detect_dongle_id"), \
              patch.object(RouteStore, "_detect_agnos_version"):
@@ -380,7 +380,7 @@ class TestHiddenBackwardCompat:
             "preserved_routes": [],
             "routes": {},
         }
-        (tmp_path / "metadata.json").write_text(json.dumps(meta))
+        (tmp_path / ".route_metadata.json").write_text(json.dumps(meta))
 
         with patch.object(RouteStore, "_detect_dongle_id"), \
              patch.object(RouteStore, "_detect_agnos_version"):

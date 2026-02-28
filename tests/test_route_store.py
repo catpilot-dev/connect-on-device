@@ -223,7 +223,7 @@ class TestBuildRoute:
 
     def test_counter_fallback_no_create_time(self, populated_data_dir):
         """Without create_time in metadata, fall back to counter."""
-        meta_path = populated_data_dir / "metadata.json"
+        meta_path = populated_data_dir / ".route_metadata.json"
         data = json.loads(meta_path.read_text())
         # Remove creation_time from a route
         del data["routes"]["00000100--def456"]["creation_time"]

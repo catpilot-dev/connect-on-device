@@ -71,7 +71,7 @@ def sample_metadata():
 @pytest.fixture
 def populated_data_dir(fake_data_dir, sample_metadata):
     """fake_data_dir with metadata.json written."""
-    meta_path = fake_data_dir / "metadata.json"
+    meta_path = fake_data_dir / ".route_metadata.json"
     meta_path.write_text(json.dumps(sample_metadata, indent=2))
     return fake_data_dir
 
