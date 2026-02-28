@@ -38,6 +38,7 @@ def _scan_plugins():
       'description': manifest.get('description', ''),
       'enabled': enabled,
       'dependencies': manifest.get('dependencies', []),
+      'panel': manifest.get('panel', False),
     })
   return plugins
 

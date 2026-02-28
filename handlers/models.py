@@ -15,8 +15,28 @@ logger = logging.getLogger("connect")
 PYTHON_BIN = "/usr/local/venv/bin/python"
 
 MODELS_BASE = Path("/data/models")
-SWAPPER_SCRIPT = Path(__file__).parent.parent / "model_swapper.py"
-DOWNLOAD_SCRIPT = Path(__file__).parent.parent / "model_download.py"
+PLUGINS_DIR = Path("/data/plugins")
+PLUGIN_ID = "model_selector"
+
+
+def _plugin_dir() -> Path | None:
+    """Return plugin directory if installed and enabled, else None."""
+    d = PLUGINS_DIR / PLUGIN_ID
+    if d.is_dir() and not (d / ".disabled").exists():
+        return d
+    return None
+
+
+def _find_script(name: str) -> Path | None:
+    """Find a model management script — plugin dir first, then local fallback."""
+    d = _plugin_dir()
+    if d:
+        s = d / name
+        if s.exists():
+            return s
+    # Fallback for local development (script next to handlers/)
+    s = Path(__file__).parent.parent / name
+    return s if s.exists() else None
 
 _model_download_task = None  # track background download {proc, model_id, type, status}
 
@@ -85,8 +105,16 @@ def _list_installed_models(model_type: str) -> list[dict]:
     return models
 
 
+def _require_plugin():
+    """Raise 503 if model_selector plugin is not installed/enabled."""
+    if not _plugin_dir():
+        raise web.HTTPServiceUnavailable(
+            text=json.dumps({"error": "model_selector plugin not installed or disabled"}))
+
+
 async def handle_models_active(request: web.Request) -> web.Response:
     """GET /v1/models/active — lightweight: just active model IDs and names."""
+    _require_plugin()
     result = {}
     for model_type in ("driving", "dm"):
         active = _read_active_model(model_type)
@@ -97,6 +125,7 @@ async def handle_models_active(request: web.Request) -> web.Response:
 
 async def handle_models_list(request: web.Request) -> web.Response:
     """GET /v1/models — list installed models and active model IDs."""
+    _require_plugin()
     loop = asyncio.get_event_loop()
     driving = await loop.run_in_executor(None, _list_installed_models, "driving")
     dm = await loop.run_in_executor(None, _list_installed_models, "dm")
@@ -134,6 +163,7 @@ async def handle_models_list(request: web.Request) -> web.Response:
 
 async def handle_models_swap(request: web.Request) -> web.Response:
     """POST /v1/models/swap — swap active model via model_swapper.py."""
+    _require_plugin()
     body = await parse_json(request)
 
     model_type = body.get("type")
@@ -141,13 +171,14 @@ async def handle_models_swap(request: web.Request) -> web.Response:
     if model_type not in ("driving", "dm") or not model_id:
         raise web.HTTPBadRequest(text=json.dumps({"error": "Need type (driving|dm) and model_id"}))
 
-    if not SWAPPER_SCRIPT.exists():
+    swapper_script = _find_script("model_swapper.py")
+    if not swapper_script:
         raise web.HTTPServiceUnavailable(text=json.dumps({"error": "model_swapper.py not found"}))
 
     loop = asyncio.get_event_loop()
     try:
         result = await loop.run_in_executor(None, lambda: subprocess.run(
-            [PYTHON_BIN, str(SWAPPER_SCRIPT), "--type", model_type, "swap", model_id],
+            [PYTHON_BIN, str(swapper_script), "--type", model_type, "swap", model_id],
             capture_output=True, text=True, timeout=60,
         ))
     except subprocess.TimeoutExpired:
@@ -168,7 +199,9 @@ async def handle_models_swap(request: web.Request) -> web.Response:
 
 async def handle_models_check_updates(request: web.Request) -> web.Response:
     """POST /v1/models/check-updates — update registry then check for new models."""
-    if not DOWNLOAD_SCRIPT.exists():
+    _require_plugin()
+    download_script = _find_script("model_download.py")
+    if not download_script:
         raise web.HTTPServiceUnavailable(
             text=json.dumps({"error": "model_download.py not found"}))
 
@@ -177,7 +210,7 @@ async def handle_models_check_updates(request: web.Request) -> web.Response:
     # Step 1: update registry from GitHub
     try:
         await loop.run_in_executor(None, lambda: subprocess.run(
-            [PYTHON_BIN, str(DOWNLOAD_SCRIPT), "update-registry"],
+            [PYTHON_BIN, str(download_script), "update-registry"],
             capture_output=True, text=True, timeout=120,
         ))
     except subprocess.TimeoutExpired:
@@ -186,7 +219,7 @@ async def handle_models_check_updates(request: web.Request) -> web.Response:
     # Step 2: check for available (not installed) models
     try:
         result = await loop.run_in_executor(None, lambda: subprocess.run(
-            [PYTHON_BIN, str(DOWNLOAD_SCRIPT), "check-updates"],
+            [PYTHON_BIN, str(download_script), "check-updates"],
             capture_output=True, text=True, timeout=30,
         ))
     except subprocess.TimeoutExpired:
@@ -214,6 +247,7 @@ async def handle_models_check_updates(request: web.Request) -> web.Response:
 
 async def handle_models_download(request: web.Request) -> web.Response:
     """POST /v1/models/download — start downloading a model in background."""
+    _require_plugin()
     global _model_download_task
 
     body = await parse_json(request)
@@ -223,7 +257,8 @@ async def handle_models_download(request: web.Request) -> web.Response:
     if model_type not in ("driving", "dm") or not model_id:
         raise web.HTTPBadRequest(text=json.dumps({"error": "Need type (driving|dm) and model_id"}))
 
-    if not DOWNLOAD_SCRIPT.exists():
+    download_script = _find_script("model_download.py")
+    if not download_script:
         raise web.HTTPServiceUnavailable(
             text=json.dumps({"error": "model_download.py not found"}))
 
@@ -237,7 +272,7 @@ async def handle_models_download(request: web.Request) -> web.Response:
 
     # Launch download as background subprocess
     proc = subprocess.Popen(
-        [PYTHON_BIN, str(DOWNLOAD_SCRIPT), "download", "--type", model_type, model_id],
+        [PYTHON_BIN, str(download_script), "download", "--type", model_type, model_id],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
 

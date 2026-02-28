@@ -2,6 +2,8 @@
   import { onMount } from 'svelte'
   import Toggle from '../components/Toggle.svelte'
   import Spinner from '../components/Spinner.svelte'
+  import ModelPanel from '../components/ModelPanel.svelte'
+  import ChevronIcon from '../components/ChevronIcon.svelte'
   import { fetchPlugins, togglePlugin, deviceReboot } from '../api.js'
 
   let plugins = $state(null)
@@ -9,6 +11,7 @@
   let error = $state(null)
   let togglingPlugin = $state(null)
   let needsReboot = $state(false)
+  let expandedPlugin = $state(null)
 
   onMount(async () => {
     try {
@@ -85,12 +88,18 @@
     {#each plugins as plugin}
       <div class="card p-4">
         <div class="flex items-center justify-between gap-3">
-          <div class="min-w-0 flex-1">
+          <button
+            class="min-w-0 flex-1 text-left"
+            onclick={() => expandedPlugin = expandedPlugin === plugin.id ? null : plugin.id}
+          >
             <div class="flex items-center gap-2">
               <span class="text-sm font-medium text-surface-100">{plugin.name}</span>
               <span class="text-[10px] px-1.5 py-0.5 rounded bg-surface-600 text-surface-400">{plugin.type}</span>
               {#if plugin.version}
                 <span class="text-[10px] text-surface-500">{plugin.version}</span>
+              {/if}
+              {#if plugin.panel && plugin.enabled}
+                <ChevronIcon class="text-surface-500 transition-transform {expandedPlugin === plugin.id ? 'rotate-180' : ''}" />
               {/if}
             </div>
             {#if plugin.description}
@@ -104,7 +113,7 @@
                 {/each}
               </div>
             {/if}
-          </div>
+          </button>
           <Toggle
             checked={plugin.enabled}
             disabled={togglingPlugin === plugin.id}
@@ -112,6 +121,14 @@
             onCheckedChange={() => handleToggle(plugin.id)}
           />
         </div>
+
+        {#if expandedPlugin === plugin.id && plugin.panel && plugin.enabled}
+          <div class="pt-4 border-t border-surface-700 mt-4">
+            {#if plugin.id === 'model_selector'}
+              <ModelPanel />
+            {/if}
+          </div>
+        {/if}
       </div>
     {/each}
   {/if}
