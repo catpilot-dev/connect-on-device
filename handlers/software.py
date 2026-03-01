@@ -182,9 +182,8 @@ async def handle_software_prepare_plugins(request: web.Request) -> web.Response:
     except FileNotFoundError:
         pass
 
-    # Sync venv packages for the target branch (may install missing deps)
-    venv_sync_result = await _run_venv_sync(
-        read_param("UpdaterTargetBranch") or read_param("GitBranch") or "bmw-master")
+    # Sync venv packages against local uv.lock (may install missing deps)
+    venv_sync_result = await _run_venv_sync()
     if venv_sync_result:
         result["venv_sync"] = venv_sync_result
 
@@ -198,17 +197,15 @@ async def handle_software_prepare_plugins(request: web.Request) -> web.Response:
 
 VENV_SYNC_SCRIPT = "/data/plugins/c3_compat/venv_sync.py"
 VENV_SYNC_PYTHON = "/usr/local/venv/bin/python"
-VENV_SYNC_REPO = "OxygenLiu/c3pilot"
 
 
-async def _run_venv_sync(branch: str, check_only: bool = False) -> dict | None:
+async def _run_venv_sync(check_only: bool = False) -> dict | None:
     """Run venv_sync.py as a subprocess. Returns parsed JSON result or None on error."""
     if not os.path.isfile(VENV_SYNC_SCRIPT):
         logger.debug("venv_sync.py not found at %s, skipping", VENV_SYNC_SCRIPT)
         return None
 
-    cmd = [VENV_SYNC_PYTHON, VENV_SYNC_SCRIPT,
-           "--repo", VENV_SYNC_REPO, "--branch", branch, "--json"]
+    cmd = [VENV_SYNC_PYTHON, VENV_SYNC_SCRIPT, "--json"]
     if check_only:
         cmd.append("--check-only")
 
@@ -238,24 +235,18 @@ async def _run_venv_sync(branch: str, check_only: bool = False) -> dict | None:
 async def handle_venv_sync(request: web.Request) -> web.Response:
     """POST /v1/software/venv-sync — manually trigger venv sync.
 
-    Optional JSON body: {"branch": "branch-name", "check_only": true}
-    Defaults to current GitBranch or UpdaterTargetBranch.
+    Optional JSON body: {"check_only": true}
     """
-    branch = None
     check_only = False
 
     if request.content_type == "application/json":
         try:
             body = await request.json()
-            branch = body.get("branch")
             check_only = body.get("check_only", False)
         except Exception:
             pass
 
-    if not branch:
-        branch = read_param("UpdaterTargetBranch") or read_param("GitBranch") or "bmw-master"
-
-    result = await _run_venv_sync(branch, check_only=check_only)
+    result = await _run_venv_sync(check_only=check_only)
     if result is None:
         return web.json_response(
             {"error": "venv_sync.py not available (c3_compat plugin not installed)"},
