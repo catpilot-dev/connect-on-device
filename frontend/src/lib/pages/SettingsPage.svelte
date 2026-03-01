@@ -147,43 +147,40 @@
     }
   }
 
-  async function handleSwInstall() {
+  async function handleSwDownload() {
     swError = null
     try {
-      // Already downloaded — skip to install
-      if (sw.UpdateAvailable) {
-        // Prepare plugins from staged update before installing
-        swInstallPhase = 'preparing'
-        try { await softwarePreparePlugins() } catch { /* no plugins in branch — fine */ }
-        swInstallPhase = 'installing'
-        await softwareInstall()
-        swInstallPhase = 'rebooting'
-        waitForReboot()
-        return
-      }
-      // Download first
       swInstallPhase = 'downloading'
       await softwareDownload()
-      const installPoll = createPoll(async () => {
+      const dlPoll = createPoll(async () => {
         try {
           sw = await fetchSoftware()
           if (sw.UpdateAvailable) {
-            installPoll.stop()
-            // Prepare plugins from staged update before installing
-            swInstallPhase = 'preparing'
-            try { await softwarePreparePlugins() } catch { /* no plugins in branch — fine */ }
-            swInstallPhase = 'installing'
-            await softwareInstall()
-            swInstallPhase = 'rebooting'
-            waitForReboot()
-          } else if (!sw.UpdaterState || sw.UpdaterState === 'idle') {
-            installPoll.stop()
+            dlPoll.stop()
             swInstallPhase = null
-            if (sw.UpdateFailedCount > 0) swError = 'Update failed'
+          } else if (!sw.UpdaterState || sw.UpdaterState === 'idle') {
+            dlPoll.stop()
+            swInstallPhase = null
+            if (sw.UpdateFailedCount > 0) swError = 'Download failed'
           }
         } catch { /* ignore poll errors */ }
       }, 2000)
-      installPoll.start()
+      dlPoll.start()
+    } catch (e) {
+      swError = e.message
+      swInstallPhase = null
+    }
+  }
+
+  async function handleSwInstall() {
+    swError = null
+    try {
+      swInstallPhase = 'preparing'
+      try { await softwarePreparePlugins() } catch { /* no plugins in branch — fine */ }
+      swInstallPhase = 'installing'
+      await softwareInstall()
+      swInstallPhase = 'rebooting'
+      waitForReboot()
     } catch (e) {
       swError = e.message
       swInstallPhase = null
@@ -454,32 +451,101 @@
           <div class="h-4 bg-surface-700 rounded w-32"></div>
         </div>
       {:else if sw}
-        <div class="space-y-4">
-          {#if sw.UpdaterCurrentDescription}
-            {@const curParts = sw.UpdaterCurrentDescription.split(' / ')}
-            {@const curCommitShort = curParts.length >= 3 ? curParts[2] : null}
-            <div class="text-sm text-surface-100">
-              {curParts[0]}{curParts.length > 1 ? ` / ${curParts[1]}` : ''}
-              {#if curCommitShort && swRepoUrl && sw.GitCommit}
-                / <a href="{swRepoUrl}/commit/{sw.GitCommit}" target="_blank" rel="noopener" class="text-engage-blue hover:underline">{curCommitShort}</a>
-              {:else if curCommitShort}
-                / {curCommitShort}
+        <div class="space-y-3">
+          <!-- Row 1: Current Version (matches stock openpilot) -->
+          <div class="flex items-center justify-between">
+            <div class="text-sm text-surface-400">Current Version</div>
+            {#if sw.UpdaterCurrentDescription}
+              {@const curParts = sw.UpdaterCurrentDescription.split(' / ')}
+              {@const curCommitShort = curParts.length >= 3 ? curParts[2] : null}
+              <div class="text-sm text-surface-100 text-right">
+                {curParts[0]}{curParts.length > 1 ? ` / ${curParts[1]}` : ''}
+                {#if curCommitShort && swRepoUrl && sw.GitCommit}
+                  / <a href="{swRepoUrl}/commit/{sw.GitCommit}" target="_blank" rel="noopener" class="text-engage-blue hover:underline">{curCommitShort}</a>
+                {:else if curCommitShort}
+                  / {curCommitShort}
+                {/if}
+                {#if curParts.length > 3} / {curParts.slice(3).join(' / ')}{/if}
+              </div>
+            {/if}
+          </div>
+
+          <!-- Row 2: Download — status + CHECK/DOWNLOAD button (matches stock openpilot) -->
+          <div class="flex items-center justify-between">
+            <div class="text-sm text-surface-400">Download</div>
+            <div class="flex items-center gap-3">
+              <div class="text-sm text-right">
+                {#if swInstallPhase === 'downloading'}
+                  <span class="text-surface-400">downloading...</span>
+                {:else if swChecking || sw.UpdaterState === 'checking'}
+                  <span class="text-surface-400">checking...</span>
+                {:else if sw.UpdaterState && sw.UpdaterState !== 'idle'}
+                  <span class="text-surface-400">{sw.UpdaterState}...</span>
+                {:else if sw.UpdateFailedCount > 0}
+                  <span class="text-engage-red">failed to check for update</span>
+                {:else if sw.UpdaterFetchAvailable && sw.UpdaterNewDescription}
+                  <span class="text-engage-green">{sw.UpdaterNewDescription}</span>
+                {:else if sw.UpdaterFetchAvailable}
+                  <span class="text-engage-green">update available</span>
+                {:else if swChecked || sw.LastUpdateTime}
+                  <span class="text-surface-500">up to date{#if sw.LastUpdateTime}, last checked {sw.LastUpdateTime.split('T')[0]}{/if}</span>
+                {:else}
+                  <span class="text-surface-500"></span>
+                {/if}
+              </div>
+              {#if swInstallPhase === 'downloading' || swChecking || (sw.UpdaterState && sw.UpdaterState !== 'idle')}
+                <button class="text-xs px-3 py-1.5 rounded-lg bg-surface-700 text-surface-500 flex items-center gap-1.5" disabled>
+                  <Spinner />
+                </button>
+              {:else if sw.UpdaterFetchAvailable && !sw.UpdateAvailable}
+                <button
+                  class="text-xs px-3 py-1.5 rounded-lg bg-engage-green/15 text-engage-green hover:bg-engage-green/25 transition-colors font-medium"
+                  onclick={handleSwDownload}
+                >DOWNLOAD</button>
+              {:else}
+                <button
+                  class="text-xs px-3 py-1.5 rounded-lg bg-surface-700 text-surface-300 hover:bg-surface-600 transition-colors font-medium"
+                  onclick={handleSwAutoCheck}
+                >CHECK</button>
               {/if}
-              {#if curParts.length > 3} / {curParts.slice(3).join(' / ')}{/if}
+            </div>
+          </div>
+
+          <!-- Row 3: Install Update — only visible when update downloaded (matches stock openpilot) -->
+          {#if sw.UpdateAvailable}
+            <div class="flex items-center justify-between">
+              <div class="text-sm text-surface-400">Install Update</div>
+              <div class="flex items-center gap-3">
+                {#if sw.UpdaterNewDescription}
+                  <div class="text-sm text-engage-green text-right">{sw.UpdaterNewDescription}</div>
+                {/if}
+                {#if swInstallPhase && swInstallPhase !== 'downloading'}
+                  <button class="text-xs px-3 py-1.5 rounded-lg bg-surface-700 text-surface-500 flex items-center gap-1.5" disabled>
+                    <Spinner />
+                    <span>{swInstallPhase === 'preparing' ? 'PREPARING' : swInstallPhase === 'rebooting' ? 'REBOOTING' : 'INSTALLING'}</span>
+                  </button>
+                {:else}
+                  <button
+                    class="text-xs px-3 py-1.5 rounded-lg bg-engage-green/15 text-engage-green hover:bg-engage-green/25 transition-colors font-medium"
+                    onclick={handleSwInstall}
+                  >INSTALL</button>
+                {/if}
+              </div>
             </div>
           {/if}
-          {#if (sw.UpdaterFetchAvailable || sw.UpdateAvailable) && sw.UpdaterNewDescription}
-            <div class="text-sm text-engage-green">Update: {sw.UpdaterNewDescription}</div>
-          {/if}
+
+          <!-- Warnings and errors -->
           {#if sw.UpdaterWarning}
             <div class="text-xs text-amber-400">{sw.UpdaterWarning}</div>
           {/if}
           {#if swError}
             <div class="text-xs text-engage-red">{swError}</div>
           {/if}
+
+          <!-- Branch selector -->
           {#if !sw.IsTestedBranch && sw.UpdaterAvailableBranches?.length > 0}
-            <div class="pt-3 ">
-              <div class="text-sm text-surface-100 mb-2">Target Branch</div>
+            <div class="flex items-center justify-between pt-1">
+              <div class="text-sm text-surface-400">Target Branch</div>
               <Select.Root
                 type="single"
                 value={sw.UpdaterTargetBranch || sw.GitBranch}
@@ -487,7 +553,7 @@
                 items={sw.UpdaterAvailableBranches.map(b => ({ value: b, label: b }))}
               >
                 <Select.Trigger
-                  class="w-full flex items-center justify-between rounded-lg px-3 py-2.5 bg-surface-700 border border-surface-600 hover:border-surface-500 transition-colors text-left"
+                  class="flex items-center gap-2 rounded-lg px-3 py-1.5 bg-surface-700 border border-surface-600 hover:border-surface-500 transition-colors"
                 >
                   <span class="text-sm text-surface-100 truncate">{sw.UpdaterTargetBranch || sw.GitBranch}</span>
                   <ChevronIcon class="text-surface-400 shrink-0" />
@@ -514,49 +580,14 @@
               </Select.Root>
             </div>
           {/if}
-          <div class="pt-3  grid grid-cols-2 gap-2">
-            {#if swInstallPhase}
-              <button class="text-sm py-2 rounded-lg bg-surface-700 text-surface-400 flex items-center justify-center gap-2" disabled>
-                <Spinner />
-                {swInstallPhase === 'downloading' ? 'Downloading' : swInstallPhase === 'preparing' ? 'Preparing plugins' : swInstallPhase === 'installing' ? 'Installing' : swInstallPhase === 'rebooting' ? 'Rebooting' : 'Installing'}
-              </button>
-            {:else if swChecking}
-              <button class="text-sm py-2 rounded-lg bg-surface-700 text-surface-400 flex items-center justify-center gap-2" disabled>
-                <Spinner />
-                Checking
-              </button>
-            {:else if sw.UpdateAvailable || sw.UpdaterFetchAvailable}
-              <button
-                class="text-sm py-2 rounded-lg bg-engage-green/15 text-engage-green hover:bg-engage-green/25 transition-colors"
-                onclick={handleSwInstall}
-              >
-                Install
-              </button>
-            {:else if sw.UpdateFailedCount > 0}
-              <button
-                class="text-sm py-2 rounded-lg bg-surface-700 text-surface-300 hover:bg-surface-600 transition-colors"
-                onclick={handleSwAutoCheck}
-              >
-                Retry
-              </button>
-            {:else if swChecked}
-              <button class="text-sm py-2 rounded-lg bg-surface-700 text-surface-500" disabled>
-                Up to Date
-              </button>
-            {:else}
-              <button
-                class="text-sm py-2 rounded-lg bg-surface-700 text-surface-300 hover:bg-surface-600 transition-colors"
-                onclick={handleSwAutoCheck}
-              >
-                Check
-              </button>
-            {/if}
+
+          <!-- Uninstall -->
+          <div class="flex items-center justify-between pt-1">
+            <div class="text-sm text-surface-400">Uninstall</div>
             <button
-              class="text-sm py-2 rounded-lg bg-engage-red/15 text-engage-red hover:bg-engage-red/25 transition-colors"
+              class="text-xs px-3 py-1.5 rounded-lg bg-engage-red/15 text-engage-red hover:bg-engage-red/25 transition-colors font-medium"
               onclick={handleSwUninstall}
-            >
-              Uninstall
-            </button>
+            >UNINSTALL</button>
           </div>
         </div>
       {/if}

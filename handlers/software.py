@@ -52,17 +52,6 @@ async def handle_software_get(request: web.Request) -> web.Response:
         else:
             result[key] = raw
 
-    # Detect stuck update: fetch available but staging never completes
-    # This typically means submodule commits weren't pushed to fork repos
-    if (result.get("UpdaterFetchAvailable") and
-            not result.get("UpdateAvailable") and
-            not result.get("UpdaterNewDescription") and
-            result.get("UpdaterState") in ("", "idle")):
-        result["UpdaterWarning"] = (
-            "Update fetch failed — submodule commits may not be pushed to fork repos. "
-            "Push panda and opendbc_repo branches, then retry."
-        )
-
     return web.json_response(result)
 
 
