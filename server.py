@@ -67,6 +67,7 @@ from handlers import (
     handle_software_branch,
     handle_software_uninstall,
     handle_software_prepare_plugins,
+    handle_venv_sync,
     handle_preserved_routes,
     handle_route_delete,
     handle_route_download,
@@ -275,6 +276,7 @@ def create_app(data_dir: str, static_dir: str) -> web.Application:
     app.router.add_post("/v1/software/branch", handle_software_branch)
     app.router.add_post("/v1/software/uninstall", handle_software_uninstall)
     app.router.add_post("/v1/software/prepare-plugins", handle_software_prepare_plugins)
+    app.router.add_post("/v1/software/venv-sync", handle_venv_sync)
 
     # Model management
     app.router.add_get("/v1/models/active", handle_models_active)

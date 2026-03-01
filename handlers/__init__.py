@@ -71,6 +71,7 @@ from .software import (
     handle_software_branch,
     handle_software_uninstall,
     handle_software_prepare_plugins,
+    handle_venv_sync,
 )
 
 from .params import (

@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import shutil
+import subprocess
 
 from aiohttp import web
 
@@ -181,6 +182,84 @@ async def handle_software_prepare_plugins(request: web.Request) -> web.Response:
     except FileNotFoundError:
         pass
 
-    logger.info("Plugins prepared: copied from staging, device=%s, c3_compat=%s",
-                device_type, result["c3_compat_enabled"])
+    # Sync venv packages for the target branch (may install missing deps)
+    venv_sync_result = await _run_venv_sync(
+        read_param("UpdaterTargetBranch") or read_param("GitBranch") or "bmw-master")
+    if venv_sync_result:
+        result["venv_sync"] = venv_sync_result
+
+    logger.info("Plugins prepared: copied from staging, device=%s, c3_compat=%s, venv_sync=%s",
+                device_type, result["c3_compat_enabled"],
+                venv_sync_result.get("synced") if venv_sync_result else "skipped")
     return web.json_response(result)
+
+
+# ─── Venv sync ────────────────────────────────────────────────────────
+
+VENV_SYNC_SCRIPT = "/data/plugins/c3_compat/venv_sync.py"
+VENV_SYNC_PYTHON = "/usr/local/venv/bin/python"
+VENV_SYNC_REPO = "OxygenLiu/c3pilot"
+
+
+async def _run_venv_sync(branch: str, check_only: bool = False) -> dict | None:
+    """Run venv_sync.py as a subprocess. Returns parsed JSON result or None on error."""
+    if not os.path.isfile(VENV_SYNC_SCRIPT):
+        logger.debug("venv_sync.py not found at %s, skipping", VENV_SYNC_SCRIPT)
+        return None
+
+    cmd = [VENV_SYNC_PYTHON, VENV_SYNC_SCRIPT,
+           "--repo", VENV_SYNC_REPO, "--branch", branch, "--json"]
+    if check_only:
+        cmd.append("--check-only")
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180)
+        if stderr:
+            logger.info("venv_sync stderr: %s", stderr.decode().strip()[:500])
+        if stdout:
+            return json.loads(stdout.decode())
+    except asyncio.TimeoutError:
+        logger.error("venv_sync timed out after 180s")
+        return {"error": "timeout"}
+    except json.JSONDecodeError:
+        logger.error("venv_sync returned invalid JSON: %s", stdout.decode()[:200] if stdout else "")
+        return {"error": "invalid json"}
+    except Exception as e:
+        logger.error("venv_sync failed: %s", e)
+        return {"error": str(e)}
+    return None
+
+
+async def handle_venv_sync(request: web.Request) -> web.Response:
+    """POST /v1/software/venv-sync — manually trigger venv sync.
+
+    Optional JSON body: {"branch": "branch-name", "check_only": true}
+    Defaults to current GitBranch or UpdaterTargetBranch.
+    """
+    branch = None
+    check_only = False
+
+    if request.content_type == "application/json":
+        try:
+            body = await request.json()
+            branch = body.get("branch")
+            check_only = body.get("check_only", False)
+        except Exception:
+            pass
+
+    if not branch:
+        branch = read_param("UpdaterTargetBranch") or read_param("GitBranch") or "bmw-master"
+
+    result = await _run_venv_sync(branch, check_only=check_only)
+    if result is None:
+        return web.json_response(
+            {"error": "venv_sync.py not available (c3_compat plugin not installed)"},
+            status=404)
+
+    status = 200 if result.get("synced") or result.get("synced") is None else 200
+    return web.json_response(result, status=status)
