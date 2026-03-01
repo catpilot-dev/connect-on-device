@@ -42,7 +42,7 @@ from .media import (
     handle_screenshot,
     handle_frame,
     handle_camera_segment,
-    handle_qcamera_mp4,
+    handle_qcamera_continuous,
 )
 
 from .hud import (
@@ -114,6 +114,9 @@ from .plugins import (
     handle_plugins_get,
     handle_plugin_toggle,
     handle_plugin_param,
+    handle_plugin_repo_get,
+    handle_plugin_repo_set,
+    handle_plugin_repo_install,
 )
 
 from .stubs import (

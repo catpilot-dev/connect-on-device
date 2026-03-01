@@ -78,7 +78,7 @@ from handlers import (
     handle_routes_list,
     handle_routes_segments,
     handle_camera_segment,
-    handle_qcamera_mp4,
+    handle_qcamera_continuous,
     handle_frame,
     handle_screenshot,
     handle_share_signature,
@@ -96,6 +96,9 @@ from handlers import (
     handle_plugins_get,
     handle_plugin_toggle,
     handle_plugin_param,
+    handle_plugin_repo_get,
+    handle_plugin_repo_set,
+    handle_plugin_repo_install,
     handle_ssh_keys_get,
     handle_ssh_keys_set,
     handle_ssh_keys_delete,
@@ -205,7 +208,7 @@ def create_app(data_dir: str, static_dir: str) -> web.Application:
     app.router.add_post("/v1/route/{routeName}/screenshot", handle_screenshot)
     app.router.add_get("/v1/route/{routeName}/frame", handle_frame)
     app.router.add_get("/v1/route/{routeName}/camera/{camera_type}/{segment}", handle_camera_segment)
-    app.router.add_get("/v1/route/{routeName}/qcamera.mp4", handle_qcamera_mp4)
+    app.router.add_get("/v1/route/{routeName}/qcamera_continuous.ts", handle_qcamera_continuous)
 
     # HUD video rendering (pre-render to MP4)
     app.router.add_post("/v1/route/{routeName}/hud/prerender", handle_hud_prerender)
@@ -275,7 +278,10 @@ def create_app(data_dir: str, static_dir: str) -> web.Application:
     app.router.add_post("/v1/mapd/check-update", handle_mapd_check_update)
     app.router.add_post("/v1/mapd/update", handle_mapd_update)
 
-    # Plugins
+    # Plugins — repo routes MUST come before {plugin_id} catch-all
+    app.router.add_get("/v1/plugins/repo", handle_plugin_repo_get)
+    app.router.add_post("/v1/plugins/repo", handle_plugin_repo_set)
+    app.router.add_post("/v1/plugins/repo/install", handle_plugin_repo_install)
     app.router.add_get("/v1/plugins", handle_plugins_get)
     app.router.add_post("/v1/plugins/{plugin_id}/toggle", handle_plugin_toggle)
     app.router.add_post("/v1/plugins/{plugin_id}/param", handle_plugin_param)

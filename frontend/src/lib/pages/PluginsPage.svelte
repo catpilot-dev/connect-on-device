@@ -3,8 +3,9 @@
   import Toggle from '../components/Toggle.svelte'
   import Spinner from '../components/Spinner.svelte'
   import ModelPanel from '../components/ModelPanel.svelte'
+  import MapdPanel from '../components/MapdPanel.svelte'
   import ChevronIcon from '../components/ChevronIcon.svelte'
-  import { fetchPlugins, togglePlugin, setPluginParam, deviceReboot } from '../api.js'
+  import { fetchPlugins, togglePlugin, setPluginParam, deviceReboot, fetchPluginRepo, setPluginRepo, installPluginRepo } from '../api.js'
 
   let plugins = $state(null)
   let loading = $state(true)
@@ -15,9 +16,22 @@
   let paramValues = $state({})  // { pluginId: { key: value } }
   let savingParam = $state(null)
 
+  // Plugin source state
+  let repo = $state(null)
+  let editingUrl = $state(false)
+  let urlDraft = $state('')
+  let savingUrl = $state(false)
+  let installing = $state(false)
+  let installOutput = $state(null)
+
   onMount(async () => {
     try {
-      plugins = await fetchPlugins()
+      const [pluginData, repoData] = await Promise.all([
+        fetchPlugins(),
+        fetchPluginRepo(),
+      ])
+      plugins = pluginData
+      repo = repoData
       // Initialize local param state from fetched settings
       const vals = {}
       for (const p of plugins) {
@@ -35,6 +49,51 @@
       loading = false
     }
   })
+
+  function formatTime(ts) {
+    if (!ts) return 'never'
+    return new Date(ts * 1000).toLocaleString()
+  }
+
+  function startEditUrl() {
+    urlDraft = repo?.url || ''
+    editingUrl = true
+  }
+
+  async function saveUrl() {
+    savingUrl = true
+    try {
+      await setPluginRepo(urlDraft)
+      repo = { ...repo, url: urlDraft }
+      editingUrl = false
+    } catch (e) {
+      error = e.message
+    } finally {
+      savingUrl = false
+    }
+  }
+
+  async function handleInstall() {
+    installing = true
+    installOutput = null
+    error = null
+    try {
+      const result = await installPluginRepo()
+      installOutput = result.output
+      if (result.reboot_required) needsReboot = true
+      // Refresh plugin list and repo info
+      const [pluginData, repoData] = await Promise.all([
+        fetchPlugins(),
+        fetchPluginRepo(),
+      ])
+      plugins = pluginData
+      repo = repoData
+    } catch (e) {
+      error = e.message
+    } finally {
+      installing = false
+    }
+  }
 
   async function handleToggle(pluginId) {
     if (togglingPlugin) return
@@ -91,12 +150,9 @@
 
 <div class="w-full max-w-lg mx-auto px-4 py-6 space-y-4 overflow-hidden">
   <div class="flex items-center justify-between">
-    <div>
-      <h2 class="text-lg font-semibold text-surface-50">Plugins</h2>
-      {#if plugins}
-        <p class="text-xs text-surface-300 mt-0.5">{enabledCount} of {plugins.length} enabled</p>
-      {/if}
-    </div>
+    {#if plugins}
+      <p class="text-sm text-surface-200">{enabledCount} of {plugins.length} enabled</p>
+    {/if}
     {#if needsReboot}
       <button
         class="px-3 py-1.5 text-xs rounded-lg bg-engage-green/15 text-engage-green hover:bg-engage-green/25 transition-colors"
@@ -109,6 +165,68 @@
     <div class="card p-4 border-engage-red/50">
       <p class="text-engage-red text-sm">{error}</p>
       <button class="btn-ghost text-xs mt-2" onclick={() => { error = null }}>Dismiss</button>
+    </div>
+  {/if}
+
+  <!-- Plugin Source -->
+  {#if repo}
+    <div class="card p-4 space-y-3">
+      <div class="text-xs font-medium text-surface-300 uppercase tracking-wide">Plugin Source</div>
+      <div class="flex items-center gap-2">
+        {#if editingUrl}
+          <input
+            type="text"
+            bind:value={urlDraft}
+            class="flex-1 bg-surface-700 text-surface-100 text-xs rounded px-2 py-1.5 border border-surface-600 focus:border-engage-blue/50 outline-none"
+            onkeydown={(e) => e.key === 'Enter' && saveUrl()}
+          />
+          <button
+            class="px-2 py-1 text-xs rounded bg-engage-blue/15 text-engage-blue hover:bg-engage-blue/25 transition-colors"
+            disabled={savingUrl}
+            onclick={saveUrl}
+          >{savingUrl ? '...' : 'Save'}</button>
+          <button
+            class="px-2 py-1 text-xs rounded bg-surface-700 text-surface-300 hover:bg-surface-600 transition-colors"
+            onclick={() => { editingUrl = false }}
+          >Cancel</button>
+        {:else}
+          <span class="flex-1 text-xs text-surface-200 truncate" title={repo.url}>{repo.url}</span>
+          <button
+            class="text-surface-400 hover:text-surface-200 transition-colors"
+            onclick={startEditUrl}
+            title="Edit repo URL"
+          >
+            <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
+              <path d="m5.433 13.917 1.262-3.155A4 4 0 0 1 7.58 9.42l6.92-6.918a2.121 2.121 0 0 1 3 3l-6.92 6.918c-.383.383-.84.685-1.343.886l-3.154 1.262a.5.5 0 0 1-.65-.65Z" />
+              <path d="M3.5 5.75c0-.69.56-1.25 1.25-1.25H10A.75.75 0 0 0 10 3H4.75A2.75 2.75 0 0 0 2 5.75v9.5A2.75 2.75 0 0 0 4.75 18h9.5A2.75 2.75 0 0 0 17 15.25V10a.75.75 0 0 0-1.5 0v5.25c0 .69-.56 1.25-1.25 1.25h-9.5c-.69 0-1.25-.56-1.25-1.25v-9.5Z" />
+            </svg>
+          </button>
+        {/if}
+      </div>
+      {#if repo.last_updated}
+        <p class="text-[10px] text-surface-400">Last updated: {formatTime(repo.last_updated)}</p>
+      {:else if repo.installed}
+        <p class="text-[10px] text-surface-400">Installed (update time unknown)</p>
+      {:else}
+        <p class="text-[10px] text-surface-400">Not installed</p>
+      {/if}
+      <button
+        class="w-full px-3 py-2 text-xs rounded-lg transition-colors {installing ? 'bg-surface-700 text-surface-400' : 'bg-engage-blue/15 text-engage-blue hover:bg-engage-blue/25'}"
+        disabled={installing}
+        onclick={handleInstall}
+      >
+        {#if installing}
+          <span class="inline-flex items-center gap-2">
+            <Spinner size="sm" />
+            {repo.installed ? 'Updating...' : 'Installing...'}
+          </span>
+        {:else}
+          {repo.installed ? 'Update Plugins' : 'Install Plugins'}
+        {/if}
+      </button>
+      {#if installOutput}
+        <pre class="text-[10px] text-surface-400 bg-surface-800 rounded p-2 max-h-24 overflow-auto whitespace-pre-wrap">{installOutput}</pre>
+      {/if}
     </div>
   {/if}
 
@@ -160,7 +278,7 @@
           </button>
           <Toggle
             checked={plugin.enabled}
-            disabled={togglingPlugin === plugin.id}
+            disabled={plugin.locked || togglingPlugin === plugin.id}
             label={plugin.name}
             onCheckedChange={() => handleToggle(plugin.id)}
           />
@@ -172,24 +290,30 @@
               <ModelPanel />
             </div>
           {/if}
+          {#if plugin.id === 'mapd'}
+            <div class="pt-4 border-t border-surface-700 mt-4">
+              <MapdPanel />
+            </div>
+          {/if}
           {#if plugin.settings?.length}
             <div class="pt-4 border-t border-surface-700 mt-4 space-y-4">
               {#each plugin.settings as setting}
+                {@const pluginDepDisabled = setting.requiresPlugin ? !plugins?.find(p => p.id === setting.requiresPlugin)?.enabled : false}
                 {#if setting.type === 'bool'}
-                  <div class="flex items-center justify-between gap-4">
+                  <div class="flex items-center justify-between gap-4 {pluginDepDisabled ? 'opacity-40' : ''}">
                     <div>
                       <div class="text-sm text-surface-100">{setting.label}</div>
-                      <div class="text-xs text-surface-300 mt-0.5">{setting.desc}</div>
+                      <div class="text-xs text-surface-300 mt-0.5">{setting.desc}{#if pluginDepDisabled} (requires Mapd){/if}</div>
                     </div>
                     <Toggle
                       checked={paramValues[plugin.id]?.[setting.key] ?? false}
-                      disabled={savingParam === setting.key}
+                      disabled={pluginDepDisabled || savingParam === setting.key}
                       label={setting.label}
                       onCheckedChange={() => handleParamToggle(plugin.id, setting.key)}
                     />
                   </div>
                 {:else if setting.type === 'pills'}
-                  {@const depDisabled = setting.dependsOn ? !paramValues[plugin.id]?.[setting.dependsOn] : false}
+                  {@const depDisabled = pluginDepDisabled || (setting.dependsOn ? !paramValues[plugin.id]?.[setting.dependsOn] : false)}
                   <div class="{depDisabled ? 'opacity-40 pointer-events-none' : ''}">
                     <div class="flex items-center gap-2">
                       <div class="text-sm text-surface-100">{setting.label}</div>

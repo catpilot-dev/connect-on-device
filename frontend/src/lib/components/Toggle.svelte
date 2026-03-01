@@ -4,7 +4,8 @@
 </script>
 <Switch.Root bind:checked {disabled} {onCheckedChange}
   class="shrink-0 w-11 h-6 rounded-full transition-colors
-    data-[state=checked]:bg-engage-blue data-[state=unchecked]:bg-surface-600"
+    data-[state=checked]:bg-engage-blue data-[state=unchecked]:bg-surface-600
+    disabled:opacity-40 disabled:cursor-not-allowed"
   aria-label={label}
 >
   <Switch.Thumb
