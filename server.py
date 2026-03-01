@@ -34,6 +34,12 @@ from handlers import (
     handle_hud_prerender,
     handle_hud_progress,
     handle_hud_stream_serve,
+    handle_screencast_start,
+    handle_screencast_seek,
+    handle_screencast_pause,
+    handle_screencast_resume,
+    handle_screencast_stop,
+    handle_screencast_status,
     handle_hud_stream_start,
     handle_hud_stream_status,
     handle_hud_stream_stop,
@@ -78,7 +84,8 @@ from handlers import (
     handle_routes_list,
     handle_routes_segments,
     handle_camera_segment,
-    handle_qcamera_continuous,
+    handle_qcamera_hls_manifest,
+    handle_qcamera_hls_segment,
     handle_frame,
     handle_screenshot,
     handle_share_signature,
@@ -208,7 +215,8 @@ def create_app(data_dir: str, static_dir: str) -> web.Application:
     app.router.add_post("/v1/route/{routeName}/screenshot", handle_screenshot)
     app.router.add_get("/v1/route/{routeName}/frame", handle_frame)
     app.router.add_get("/v1/route/{routeName}/camera/{camera_type}/{segment}", handle_camera_segment)
-    app.router.add_get("/v1/route/{routeName}/qcamera_continuous.ts", handle_qcamera_continuous)
+    app.router.add_get("/v1/route/{routeName}/qcamera.m3u8", handle_qcamera_hls_manifest)
+    app.router.add_get("/v1/route/{routeName}/qcamera_hls/{filename}", handle_qcamera_hls_segment)
 
     # HUD video rendering (pre-render to MP4)
     app.router.add_post("/v1/route/{routeName}/hud/prerender", handle_hud_prerender)
@@ -221,6 +229,14 @@ def create_app(data_dir: str, static_dir: str) -> web.Application:
     app.router.add_post("/v1/hud/stream/stop", handle_hud_stream_stop)
     app.router.add_get("/v1/hud/stream/status", handle_hud_stream_status)
     app.router.add_get("/v1/hud/stream/{filename}", handle_hud_stream_serve)
+
+    # Screencast: play fcamera on C3 screen, controlled from mobile
+    app.router.add_post("/v1/screencast/start", handle_screencast_start)
+    app.router.add_post("/v1/screencast/seek", handle_screencast_seek)
+    app.router.add_post("/v1/screencast/pause", handle_screencast_pause)
+    app.router.add_post("/v1/screencast/resume", handle_screencast_resume)
+    app.router.add_post("/v1/screencast/stop", handle_screencast_stop)
+    app.router.add_get("/v1/screencast/status", handle_screencast_status)
 
     # Stubs for endpoints the frontend may query
     app.router.add_get("/v1/devices/{dongleId}/athena_offline_queue", handle_stub_empty_array)

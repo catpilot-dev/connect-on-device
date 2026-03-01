@@ -1,7 +1,9 @@
 import asyncio
 import json
 import logging
+import os
 import re
+import shutil
 
 from aiohttp import web
 
@@ -130,3 +132,55 @@ async def handle_software_uninstall(request: web.Request) -> web.Response:
         logger.error("Failed to set DoUninstall: %s", e)
         return error_response(str(e), 500)
     return web.json_response({"status": "uninstalling"})
+
+
+# ─── Plugin bootstrap for branch upgrades ────────────────────────────
+
+STAGING_PATHS = [
+    "/data/safe_staging/finalized/plugins",  # post-finalize (some updater versions)
+    "/data/safe_staging/upper/plugins",       # overlay upper layer (0.10.x updater)
+]
+PLUGINS_DIR = "/data/plugins"
+
+
+def _get_device_type() -> str:
+    """Detect comma device type from devicetree."""
+    try:
+        with open("/sys/firmware/devicetree/base/model") as f:
+            return f.read().strip('\x00').split('comma ')[-1]
+    except FileNotFoundError:
+        return "unknown"
+
+
+async def handle_software_prepare_plugins(request: web.Request) -> web.Response:
+    """POST /v1/software/prepare-plugins — copy plugins from staged update, auto-enable c3_compat."""
+    staged_plugins = next((p for p in STAGING_PATHS if os.path.isdir(p)), None)
+    if not staged_plugins:
+        return web.json_response({"status": "no_plugins", "message": "No plugins/ in staged update"})
+
+    # Copy staged plugins to /data/plugins/
+    if os.path.exists(PLUGINS_DIR):
+        shutil.rmtree(PLUGINS_DIR)
+    shutil.copytree(staged_plugins, PLUGINS_DIR)
+
+    result = {"status": "ok", "plugins_copied": True, "c3_compat_enabled": False}
+
+    # Auto-enable c3_compat for tici (C3 on AGNOS 12.8)
+    device_type = _get_device_type()
+    c3_compat_dir = os.path.join(PLUGINS_DIR, "c3_compat")
+    if device_type == "tici" and os.path.isdir(c3_compat_dir):
+        disabled_marker = os.path.join(c3_compat_dir, ".disabled")
+        if os.path.exists(disabled_marker):
+            os.remove(disabled_marker)
+        result["c3_compat_enabled"] = True
+        logger.info("Auto-enabled c3_compat for tici device (AGNOS 12.8)")
+
+    # Force plugin builder rebuild on next boot
+    try:
+        os.remove("/tmp/plugin_build_hash")
+    except FileNotFoundError:
+        pass
+
+    logger.info("Plugins prepared: copied from staging, device=%s, c3_compat=%s",
+                device_type, result["c3_compat_enabled"])
+    return web.json_response(result)

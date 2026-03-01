@@ -367,37 +367,13 @@ async def handle_route_files(request: web.Request) -> web.Response:
 
 
 async def handle_route_manifest(request: web.Request) -> web.Response:
-    """GET /v1/route/{routeName}/manifest.m3u8 — HLS manifest for qcamera segments"""
-    route_name, route, store = get_route_or_404(request)
+    """GET /v1/route/{routeName}/manifest.m3u8 — redirect to proper HLS manifest.
 
-    dongle_id = route["dongle_id"]
-    route_date = route["fullname"].split("/")[-1]
-    max_seg = route["maxqlog"]
-    seg_set = {s["number"]: s for s in route["_segments"]}
-
-    lines = [
-        "#EXTM3U",
-        "#EXT-X-VERSION:3",
-        "#EXT-X-TARGETDURATION:61",
-        "#EXT-X-MEDIA-SEQUENCE:0",
-        "#EXT-X-PLAYLIST-TYPE:VOD",
-    ]
-    for i in range(max_seg + 1):
-        seg = seg_set.get(i)
-        if i > 0:
-            # Each segment has independent PTS timestamps
-            lines.append("#EXT-X-DISCONTINUITY")
-        if seg and "qcamera.ts" in seg["files"]:
-            lines.append("#EXTINF:60.0,")
-            lines.append(f"/connectdata/{dongle_id}/{route_date}/{i}/qcamera.ts")
-        else:
-            lines.extend(["#EXT-X-GAP", "#EXTINF:60.0,", "gap"])
-    lines.append("#EXT-X-ENDLIST")
-
-    return web.Response(
-        text="\n".join(lines),
-        content_type="application/vnd.apple.mpegurl",
-    )
+    Backward compatibility: redirects to the new qcamera.m3u8 endpoint which
+    generates proper ~4s HLS segments for smooth playback.
+    """
+    route_name = request.match_info["routeName"]
+    raise web.HTTPFound(f"/v1/route/{route_name}/qcamera.m3u8")
 
 
 async def handle_share_signature(request: web.Request) -> web.Response:

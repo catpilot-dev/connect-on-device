@@ -30,6 +30,153 @@ def _decimal_to_dms(decimal):
 
 
 FCAMERA_CACHE_DIR = "/data/connect_on_device/cache"
+HLS_CACHE_DIR = Path("/data/connect_on_device/cache/qcamera_hls")
+
+
+def _generate_hls_segments(store, fullname: str) -> Path | None:
+    """Split all qcamera.ts into ~4s HLS segments via ffmpeg codec copy.
+
+    Creates: {HLS_CACHE_DIR}/{local_id}/index.m3u8 + seg000.ts, seg001.ts, ...
+    Uses ffmpeg concat demuxer -> HLS muxer with -c copy (~60ms/segment on C3).
+    """
+    local_id = store.get_local_id(fullname)
+    if not local_id:
+        return None
+
+    out_dir = HLS_CACHE_DIR / local_id
+    manifest = out_dir / "index.m3u8"
+    if manifest.exists():
+        return out_dir  # Already cached
+
+    # Collect all existing qcamera.ts segment paths
+    ts_paths = []
+    seg = 0
+    while True:
+        p = store.data_dir / f"{local_id}--{seg}" / "qcamera.ts"
+        if not p.exists():
+            break
+        ts_paths.append(str(p))
+        seg += 1
+
+    if not ts_paths:
+        return None
+
+    # Create output directory and concat list
+    out_dir.mkdir(parents=True, exist_ok=True)
+    list_path = out_dir / "concat.txt"
+    with open(list_path, 'w') as f:
+        for p in ts_paths:
+            f.write(f"file '{p}'\n")
+
+    # ffmpeg: concat -> HLS split (codec copy, ~4s segments)
+    tmp_manifest = out_dir / "index.m3u8.tmp"
+    try:
+        subprocess.run([
+            'ffmpeg', '-y', '-hide_banner', '-loglevel', 'error',
+            '-f', 'concat', '-safe', '0', '-i', str(list_path),
+            '-c', 'copy',
+            '-movflags', '+frag_keyframe+empty_moov+default_base_moof',
+            '-hls_time', '30',
+            '-hls_segment_type', 'fmp4',
+            '-hls_playlist_type', 'vod',
+            '-hls_segment_filename', str(out_dir / 'seg%03d.m4s'),
+            '-hls_fmp4_init_filename', 'init.mp4',
+            '-f', 'hls',
+            str(tmp_manifest),
+        ], check=True, timeout=300)
+        tmp_manifest.rename(manifest)
+    except Exception:
+        # Clean up on failure
+        if tmp_manifest.exists():
+            tmp_manifest.unlink()
+        import shutil
+        if out_dir.exists() and not manifest.exists():
+            shutil.rmtree(out_dir, ignore_errors=True)
+        raise
+    finally:
+        if list_path.exists():
+            list_path.unlink()
+
+    return out_dir
+
+
+async def handle_qcamera_hls_manifest(request: web.Request) -> web.Response:
+    """GET /v1/route/{routeName}/qcamera.m3u8
+
+    Generate proper HLS manifest with ~4s segments via ffmpeg codec copy.
+    Rewrites segment URLs to include the route prefix for correct routing.
+    """
+    route_name, route, store = get_route_or_404(request)
+    fullname = route["fullname"]
+
+    loop = asyncio.get_event_loop()
+    try:
+        out_dir = await loop.run_in_executor(
+            None, _generate_hls_segments, store, fullname
+        )
+    except Exception as e:
+        logger.warning("HLS segment generation failed: %s", e)
+        return web.Response(status=500, text=str(e))
+
+    if not out_dir:
+        return web.Response(status=404, text="No qcamera segments found")
+
+    # Read the generated manifest and rewrite segment URLs
+    manifest_text = (out_dir / "index.m3u8").read_text()
+    lines = []
+    for line in manifest_text.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith('#'):
+            # Rewrite bare filenames (seg000.m4s, init.mp4) to routed URLs
+            lines.append(f"/v1/route/{route_name}/qcamera_hls/{stripped}")
+        elif stripped.startswith('#EXT-X-TARGETDURATION'):
+            lines.append('#EXT-X-START:TIME-OFFSET=0,PRECISE=YES')
+            lines.append(stripped)
+        elif stripped.startswith('#EXT-X-MAP'):
+            # Rewrite init segment URI
+            lines.append(f'#EXT-X-MAP:URI="/v1/route/{route_name}/qcamera_hls/init.mp4"')
+        else:
+            lines.append(stripped)
+
+    return web.Response(
+        text="\n".join(lines),
+        content_type="application/vnd.apple.mpegurl",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+_HLS_CONTENT_TYPES = {
+    '.m4s': 'video/iso.segment',
+    '.mp4': 'video/mp4',
+    '.ts': 'video/mp2t',
+}
+
+
+async def handle_qcamera_hls_segment(request: web.Request) -> web.Response:
+    """GET /v1/route/{routeName}/qcamera_hls/{filename}
+
+    Serve individual cached HLS files (init.mp4, seg000.m4s, seg001.m4s, ...).
+    """
+    route_name, route, store = get_route_or_404(request)
+    filename = request.match_info["filename"]
+
+    # Validate filename to prevent path traversal
+    ext = os.path.splitext(filename)[1]
+    if '/' in filename or '..' in filename or ext not in _HLS_CONTENT_TYPES:
+        return web.Response(status=400, text="Invalid segment filename")
+
+    local_id = store.get_local_id(route["fullname"])
+    if not local_id:
+        return web.Response(status=404, text="Route not found")
+
+    seg_path = HLS_CACHE_DIR / local_id / filename
+    if not seg_path.exists():
+        return web.Response(status=404, text=f"Segment {filename} not found")
+
+    return web.FileResponse(seg_path, headers={
+        "Content-Type": _HLS_CONTENT_TYPES[ext],
+        "Cache-Control": "public, max-age=604800",
+    })
 
 
 def _mux_fcamera(hevc_path: str) -> str:

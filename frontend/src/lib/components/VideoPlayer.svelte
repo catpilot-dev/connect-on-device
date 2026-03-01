@@ -42,7 +42,6 @@
   let hdVideoEl = $state(null)
   let hls = null
   let hudHls = null
-  let manifestUrl = null
   let isPlaying = $state(false)
   let isMuted = $state(true)
   let buffering = $state(true)   // Show spinner until first frame ready
@@ -58,49 +57,45 @@
 
   const posterUrl = $derived(route ? spriteUrl(route, 0) : null)
 
-  // Build M3U8 playlist from qcamera URLs
-  function buildManifest(qcameraUrls) {
-    const lines = [
-      '#EXTM3U',
-      '#EXT-X-VERSION:3',
-      '#EXT-X-TARGETDURATION:61',
-      '#EXT-X-MEDIA-SEQUENCE:0',
-      '#EXT-X-PLAYLIST-TYPE:VOD',
-    ]
-    for (let i = 0; i < qcameraUrls.length; i++) {
-      if (i > 0) lines.push('#EXT-X-DISCONTINUITY')
-      const url = qcameraUrls[i]
-      if (!url) {
-        lines.push('#EXT-X-GAP', '#EXTINF:60.0,', 'gap')
-      } else {
-        lines.push('#EXTINF:60.0,', url)
-      }
-    }
-    lines.push('#EXT-X-ENDLIST')
-    return lines.join('\n')
-  }
-
   function initPlayer() {
     if (!videoEl || !files?.qcameras) return
 
     buffering = true
     cleanupHls()
 
-    const manifest = buildManifest(files.qcameras)
-    const blob = new Blob([manifest], { type: 'application/vnd.apple.mpegurl' })
-    manifestUrl = URL.createObjectURL(blob)
+    // Server-generated HLS manifest with ~4s segments for smooth playback
+    const routeName = route.local_id || route.fullname
+    const hlsManifestUrl = `/v1/route/${routeName}/qcamera.m3u8`
 
-    if (Hls.isSupported()) {
+    if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
+      // Native HLS (Safari/iOS): always prefer over hls.js — smoother on mobile
+      videoEl.src = hlsManifestUrl
+      videoEl.addEventListener('loadedmetadata', () => {
+        if (!showingHud && !frozen) videoEl.play().catch(() => {})
+      }, { once: true })
+    } else if (Hls.isSupported()) {
+      // hls.js fallback (Firefox/Chrome desktop without native HLS)
       hls = new Hls({
         enableWorker: true,
-        maxBufferLength: 60,
-        maxMaxBufferLength: 180,
+        lowLatencyMode: false,
+        progressive: true,
         startLevel: 0,
-        fragLoadingTimeOut: 20000,
-        fragLoadingMaxRetry: 6,
+        maxBufferLength: 90,
+        maxMaxBufferLength: 300,
+        backBufferLength: 60,
+        maxBufferHole: 0.1,
+        nudgeOffset: 0.05,
+        nudgeMaxRetry: 10,
+        startFragPrefetch: true,
+        highBufferWatchdogPeriod: 1,
+        abrEwmaDefaultEstimate: 10_000_000,
+        testBandwidth: false,
+        forceKeyFrameOnDiscontinuity: false,
+        fragLoadingTimeOut: 30000,
+        fragLoadingMaxRetry: 5,
         levelLoadingTimeOut: 10000,
       })
-      hls.loadSource(manifestUrl)
+      hls.loadSource(hlsManifestUrl)
       hls.attachMedia(videoEl)
 
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
@@ -109,37 +104,13 @@
 
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (data.fatal) {
-          switch (data.type) {
-            case Hls.ErrorTypes.NETWORK_ERROR:
-              console.warn('HLS network error, attempting recovery...')
-              hls.startLoad()
-              break
-            case Hls.ErrorTypes.MEDIA_ERROR:
-              console.warn('HLS media error, attempting recovery...')
-              hls.recoverMediaError()
-              break
-            default:
-              console.error('HLS fatal error:', data)
-              hls.destroy()
-              break
+          if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+            hls.recoverMediaError()
+          } else if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+            hls.startLoad()
           }
         }
       })
-    } else if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
-      // Safari native HLS — use server-side manifest (blob URLs not supported)
-      const routeId = (route.local_id || route.fullname).replace('/', '|')
-      videoEl.src = `/v1/route/${routeId}/manifest.m3u8`
-      videoEl.addEventListener('loadedmetadata', () => {
-        if (!showingHud) videoEl.play().catch(() => {})
-      }, { once: true })
-    } else {
-      const firstUrl = files.qcameras?.find(u => u)
-      if (firstUrl) {
-        videoEl.src = firstUrl
-        videoEl.addEventListener('loadedmetadata', () => {
-          if (!showingHud) videoEl.play().catch(() => {})
-        }, { once: true })
-      }
     }
   }
 
@@ -147,10 +118,6 @@
     if (hls) {
       hls.destroy()
       hls = null
-    }
-    if (manifestUrl) {
-      URL.revokeObjectURL(manifestUrl)
-      manifestUrl = null
     }
   }
 
@@ -167,31 +134,27 @@
   }
 
   // ── HLS video event handlers ──────────────────────────────
-  function handleHlsTimeUpdate() {
+  function handleSdTimeUpdate() {
     if (!videoEl || showingHud || showingHd) return
     currentTime = videoEl.currentTime
     onTimeUpdate?.(videoEl.currentTime)
   }
 
-  function handleHlsDurationChange() {
+  function handleSdDurationChange() {
     if (!videoEl || showingHud) return
-    // Always set duration from HLS — it knows total route length from manifest.
-    // HD player only loads individual 60s segments and can't determine total duration.
     duration = videoEl.duration
     onDurationChange?.(videoEl.duration)
   }
 
-  function handleHlsPlay() {
+  function handleSdPlay() {
     if (showingHud || showingHd) return
     if (frozen) { videoEl?.pause(); return }
-    // HLS.js fires spurious play events after seeking across segments.
-    // If user explicitly paused, suppress the auto-play.
     if (userWantsPause) { videoEl?.pause(); return }
     isPlaying = true
     onPlay?.()
   }
 
-  function handleHlsPause() {
+  function handleSdPause() {
     if (showingHud || showingHd) return
     isPlaying = false
     onPause?.()
@@ -387,11 +350,9 @@
       return
     }
     if (videoEl) {
+      userWantsPause = false
       const wasPlaying = !videoEl.paused
-      userWantsPause = false  // Seeking implies user wants playback
       videoEl.currentTime = time
-      // HLS.js may pause when seeking across segment discontinuities —
-      // explicitly resume if video was playing (fixes loop-back stall)
       if (wasPlaying) videoEl.play().catch(() => {})
     }
   }
@@ -448,11 +409,11 @@
     webkit-playsinline
     x5-video-player-type="h5"
     preload="auto"
-    ontimeupdate={handleHlsTimeUpdate}
-    ondurationchange={handleHlsDurationChange}
-    onplay={handleHlsPlay}
-    onpause={handleHlsPause}
-    onended={handleHlsPause}
+    ontimeupdate={handleSdTimeUpdate}
+    ondurationchange={handleSdDurationChange}
+    onplay={handleSdPlay}
+    onpause={handleSdPause}
+    onended={handleSdPause}
     onwaiting={() => { if (!showingHud && !showingHd) buffering = true }}
     onplaying={() => { if (!showingHud && !showingHd) buffering = false }}
     oncanplay={() => { if (!showingHud && !showingHd) buffering = false }}
@@ -507,8 +468,8 @@
       <p class="text-surface-400 text-sm">No video available</p>
     </div>
   {:else if buffering && !showingHud}
-    <div class="absolute inset-0 z-10 flex items-center justify-center pointer-events-none bg-black/40">
-      <div class="w-8 h-8 border-3 border-white/30 border-t-white rounded-full animate-spin"></div>
+    <div class="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
+      <div class="w-8 h-8 border-3 border-white/30 border-t-white rounded-full animate-spin drop-shadow-lg"></div>
     </div>
   {/if}
 

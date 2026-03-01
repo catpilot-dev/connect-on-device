@@ -173,6 +173,10 @@
     const localId = $selectedRoute
     if (!localId) return
 
+    // Pre-warm HLS cache: fire-and-forget fetch triggers server-side ffmpeg
+    // segmentation (~1-2s). By the time VideoPlayer initializes, it's cached.
+    fetch(`/v1/route/${localId}/qcamera.m3u8`).catch(() => {})
+
     try {
       const [r, f] = await Promise.all([
         fetchRoute(localId),

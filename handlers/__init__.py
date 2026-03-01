@@ -42,7 +42,8 @@ from .media import (
     handle_screenshot,
     handle_frame,
     handle_camera_segment,
-    handle_qcamera_continuous,
+    handle_qcamera_hls_manifest,
+    handle_qcamera_hls_segment,
 )
 
 from .hud import (
@@ -54,6 +55,12 @@ from .hud import (
     handle_hud_stream_stop,
     handle_hud_stream_status,
     handle_hud_stream_serve,
+    handle_screencast_start,
+    handle_screencast_seek,
+    handle_screencast_pause,
+    handle_screencast_resume,
+    handle_screencast_stop,
+    handle_screencast_status,
 )
 
 from .software import (

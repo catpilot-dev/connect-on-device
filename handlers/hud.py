@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import socket
 import subprocess
 import time
 from pathlib import Path
@@ -523,3 +524,158 @@ async def handle_hud_stream_serve(request: web.Request) -> web.Response:
                 "Cache-Control": "public, max-age=60",
             },
         )
+
+
+# ─── Screencast: play fcamera on C3 screen ───────────────────────────
+
+SCREENCAST_SCRIPT = Path(__file__).parent.parent / "screencast.py"
+SCREENCAST_CONTROL_PORT = 8090
+
+# Module-level state for the screencast subprocess
+_screencast_proc: subprocess.Popen | None = None
+
+
+def _send_screencast_cmd(cmd: str):
+    """Send a UDP control command to the screencast process."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.sendto(cmd.encode(), ("127.0.0.1", SCREENCAST_CONTROL_PORT))
+    finally:
+        sock.close()
+
+
+def _screencast_alive() -> bool:
+    global _screencast_proc
+    return _screencast_proc is not None and _screencast_proc.poll() is None
+
+
+async def handle_screencast_start(request: web.Request) -> web.Response:
+    """POST /v1/screencast/start — play fcamera on C3 screen.
+
+    Body: {"route": "local_id", "time": 123.4}
+    """
+    global _screencast_proc
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    route_name = body.get("route", "")
+    if not route_name:
+        raise web.HTTPBadRequest(text=json.dumps({"error": "Missing route"}))
+
+    route_name = route_name.replace("|", "/")
+    store = request.app["store"]
+    route = store.get_route(route_name)
+    if not route:
+        raise web.HTTPNotFound(text=json.dumps({"error": f"Route {route_name} not found"}))
+
+    t = float(body.get("time", 0))
+    segment = int(t // 60)
+    offset = t % 60
+    local_id = route["_local_id"]
+
+    if _screencast_alive():
+        # Already running — just send seek command
+        _send_screencast_cmd(f"PLAY {local_id} {segment} {offset:.2f}")
+        return web.json_response({"status": "playing", "route": local_id, "time": t})
+
+    # Launch screencast process
+    python_bin = PYTHON_BIN if os.path.isfile(PYTHON_BIN) else "python3"
+    env = os.environ.copy()
+    env["PYTHONPATH"] = f"{OPENPILOT_DIR}:/data/pip_packages"
+    env["PATH"] = "/usr/local/venv/bin:/usr/local/bin:/usr/bin:/bin"
+
+    _screencast_proc = subprocess.Popen(
+        [python_bin, str(SCREENCAST_SCRIPT)],
+        env=env,
+        stdout=open("/tmp/screencast.log", "w"),
+        stderr=subprocess.STDOUT,
+    )
+
+    # Wait for screencast to stop production UI and start listening (~4s)
+    await asyncio.sleep(4)
+
+    if not _screencast_alive():
+        return web.json_response({"status": "error", "error": "Screencast process failed to start"}, status=500)
+
+    # Send the initial PLAY command
+    _send_screencast_cmd(f"PLAY {local_id} {segment} {offset:.2f}")
+
+    return web.json_response({"status": "playing", "route": local_id, "time": t})
+
+
+async def handle_screencast_seek(request: web.Request) -> web.Response:
+    """POST /v1/screencast/seek — seek to time in current screencast.
+
+    Body: {"route": "local_id", "time": 123.4}
+    """
+    if not _screencast_alive():
+        return web.json_response({"status": "idle"})
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    route_name = body.get("route", "")
+    t = float(body.get("time", 0))
+    segment = int(t // 60)
+    offset = t % 60
+
+    # Resolve local_id
+    if route_name:
+        route_name = route_name.replace("|", "/")
+        store = request.app["store"]
+        route = store.get_route(route_name)
+        local_id = route["_local_id"] if route else route_name
+    else:
+        local_id = ""
+
+    if local_id:
+        _send_screencast_cmd(f"PLAY {local_id} {segment} {offset:.2f}")
+    else:
+        _send_screencast_cmd(f"PLAY _ {segment} {offset:.2f}")
+
+    return web.json_response({"status": "playing", "time": t})
+
+
+async def handle_screencast_pause(request: web.Request) -> web.Response:
+    """POST /v1/screencast/pause"""
+    if _screencast_alive():
+        _send_screencast_cmd("PAUSE")
+    return web.json_response({"status": "paused"})
+
+
+async def handle_screencast_resume(request: web.Request) -> web.Response:
+    """POST /v1/screencast/resume"""
+    if _screencast_alive():
+        _send_screencast_cmd("RESUME")
+    return web.json_response({"status": "playing"})
+
+
+async def handle_screencast_stop(request: web.Request) -> web.Response:
+    """POST /v1/screencast/stop — stop screencast and restore production UI."""
+    global _screencast_proc
+
+    if _screencast_alive():
+        _send_screencast_cmd("STOP")
+        try:
+            _screencast_proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            _screencast_proc.kill()
+        _screencast_proc = None
+    else:
+        # Process already dead — make sure production UI is restored
+        _screencast_proc = None
+        asyncio.create_task(_ensure_production_ui(max_retries=1, delay=1.0))
+
+    return web.json_response({"status": "idle"})
+
+
+async def handle_screencast_status(request: web.Request) -> web.Response:
+    """GET /v1/screencast/status"""
+    if _screencast_alive():
+        return web.json_response({"status": "playing"})
+    return web.json_response({"status": "idle"})
