@@ -92,7 +92,7 @@ class TestRouteList:
         if len(all_routes) >= 1:
             # Use the first route's counter as cursor
             counter = all_routes[0].get("route_counter", 999999)
-            resp = await c.get(f"/v1/devices/test123/routes?before_counter={counter}")
+            resp = await c.get(f"/v1/devices/test123/routes?filter=all&before_counter={counter}")
             data = await resp.json()
             # Should have fewer routes (or same if only one)
             for r in data:
@@ -299,3 +299,244 @@ class TestSPA:
         assert resp.status == 200
         body = await resp.text()
         assert "test" in body
+
+
+# ─── Route notes ────────────────────────────────────────────────────
+
+class TestRouteNotes:
+    @pytest.mark.asyncio
+    async def test_set_note(self, client, mock_store):
+        c = await client
+        routes = mock_store.scan()
+        fullname = next(iter(routes))
+        route_name = fullname.replace("/", "|")
+        resp = await c.post(
+            f"/v1/route/{route_name}/note",
+            json={"note": "Test note"},
+        )
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["status"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_empty_note(self, client, mock_store):
+        c = await client
+        routes = mock_store.scan()
+        fullname = next(iter(routes))
+        route_name = fullname.replace("/", "|")
+        resp = await c.post(
+            f"/v1/route/{route_name}/note",
+            json={"note": ""},
+        )
+        assert resp.status == 200
+
+    @pytest.mark.asyncio
+    async def test_note_persists(self, client, mock_store):
+        c = await client
+        routes = mock_store.scan()
+        fullname = next(iter(routes))
+        route_name = fullname.replace("/", "|")
+
+        await c.post(f"/v1/route/{route_name}/note", json={"note": "My note"})
+
+        # Verify via route detail
+        resp = await c.get(f"/v1/route/{route_name}/")
+        data = await resp.json()
+        assert data.get("notes") == "My note"
+
+
+# ─── Route bookmarks ───────────────────────────────────────────────
+
+class TestRouteBookmarks:
+    @pytest.mark.asyncio
+    async def test_add_bookmark(self, client, mock_store):
+        c = await client
+        routes = mock_store.scan()
+        fullname = next(iter(routes))
+        route_name = fullname.replace("/", "|")
+        resp = await c.post(
+            f"/v1/route/{route_name}/bookmark",
+            json={"time_sec": 30.5, "label": "Good merge"},
+        )
+        assert resp.status == 200
+        data = await resp.json()
+        assert len(data["bookmarks"]) == 1
+        assert data["bookmarks"][0]["label"] == "Good merge"
+
+    @pytest.mark.asyncio
+    async def test_add_bookmark_no_label(self, client, mock_store):
+        c = await client
+        routes = mock_store.scan()
+        fullname = next(iter(routes))
+        route_name = fullname.replace("/", "|")
+        resp = await c.post(
+            f"/v1/route/{route_name}/bookmark",
+            json={"time_sec": 10.0, "label": ""},
+        )
+        assert resp.status == 400
+
+    @pytest.mark.asyncio
+    async def test_update_bookmark(self, client, mock_store):
+        c = await client
+        routes = mock_store.scan()
+        fullname = next(iter(routes))
+        route_name = fullname.replace("/", "|")
+
+        # Add first
+        await c.post(f"/v1/route/{route_name}/bookmark", json={"time_sec": 10.0, "label": "Original"})
+
+        # Update
+        resp = await c.put(
+            f"/v1/route/{route_name}/bookmark/0",
+            json={"label": "Updated"},
+        )
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["bookmarks"][0]["label"] == "Updated"
+
+    @pytest.mark.asyncio
+    async def test_delete_bookmark(self, client, mock_store):
+        c = await client
+        routes = mock_store.scan()
+        fullname = next(iter(routes))
+        route_name = fullname.replace("/", "|")
+
+        # Add
+        await c.post(f"/v1/route/{route_name}/bookmark", json={"time_sec": 10.0, "label": "Delete me"})
+
+        # Delete
+        resp = await c.delete(f"/v1/route/{route_name}/bookmark/0")
+        assert resp.status == 200
+        data = await resp.json()
+        assert len(data["bookmarks"]) == 0
+
+
+# ─── Route list filters ────────────────────────────────────────────
+
+class TestRouteListFilters:
+    @pytest.mark.asyncio
+    async def test_saved_filter(self, client, mock_store):
+        c = await client
+        routes = mock_store.scan()
+        fullname = next(iter(routes))
+        route_name = fullname.replace("/", "|")
+
+        # Preserve a route
+        await c.post(f"/v1/route/{route_name}/preserve")
+
+        # Query saved tab
+        resp = await c.get("/v1/devices/test123/routes?filter=saved")
+        assert resp.status == 200
+        data = await resp.json()
+        assert all(r.get("is_preserved") for r in data)
+
+    @pytest.mark.asyncio
+    async def test_recycled_filter(self, client, mock_store):
+        c = await client
+        routes = mock_store.scan()
+        fullname = next(iter(routes))
+        route_name = fullname.replace("/", "|")
+
+        # Delete a route
+        await c.delete(f"/v1/route/{route_name}/")
+
+        # Query recycled tab
+        resp = await c.get("/v1/devices/test123/routes?filter=recycled")
+        assert resp.status == 200
+        data = await resp.json()
+        assert isinstance(data, list)
+
+    @pytest.mark.asyncio
+    async def test_all_filter(self, client):
+        c = await client
+        resp = await c.get("/v1/devices/test123/routes?filter=all")
+        assert resp.status == 200
+        data = await resp.json()
+        assert isinstance(data, list)
+
+    @pytest.mark.asyncio
+    async def test_limit_parameter(self, client):
+        c = await client
+        resp = await c.get("/v1/devices/test123/routes?limit=1")
+        assert resp.status == 200
+        data = await resp.json()
+        assert len(data) <= 1
+
+
+# ─── Route segments endpoint ───────────────────────────────────────
+
+class TestRouteSegments:
+    @pytest.mark.asyncio
+    async def test_routes_segments(self, client, mock_store):
+        c = await client
+        resp = await c.get("/v1/devices/test123/routes_segments")
+        assert resp.status == 200
+        data = await resp.json()
+        assert isinstance(data, list)
+        if data:
+            seg = data[0]
+            assert "segment_numbers" in seg
+            assert "segment_start_times" in seg
+            assert "segment_end_times" in seg
+            assert "start_time_utc_millis" in seg
+            assert "end_time_utc_millis" in seg
+
+    @pytest.mark.asyncio
+    async def test_routes_segments_with_filter(self, client, mock_store):
+        c = await client
+        routes = mock_store.scan()
+        fullname = next(iter(routes))
+        resp = await c.get(f"/v1/devices/test123/routes_segments?route_str={fullname}")
+        assert resp.status == 200
+        data = await resp.json()
+        assert isinstance(data, list)
+
+
+# ─── Stubs ──────────────────────────────────────────────────────────
+
+class TestStubs:
+    @pytest.mark.asyncio
+    async def test_bootlogs_returns_empty_array(self, client):
+        c = await client
+        resp = await c.get("/v1/devices/test123/bootlogs")
+        assert resp.status == 200
+        data = await resp.json()
+        assert data == []
+
+    @pytest.mark.asyncio
+    async def test_crashlogs_returns_empty_array(self, client):
+        c = await client
+        resp = await c.get("/v1/devices/test123/crashlogs")
+        assert resp.status == 200
+        data = await resp.json()
+        assert data == []
+
+
+# ─── Route manifest redirect ───────────────────────────────────────
+
+class TestManifest:
+    @pytest.mark.asyncio
+    async def test_manifest_redirects(self, client, mock_store):
+        c = await client
+        routes = mock_store.scan()
+        fullname = next(iter(routes))
+        route_name = fullname.replace("/", "|")
+        resp = await c.get(f"/v1/route/{route_name}/manifest.m3u8", allow_redirects=False)
+        assert resp.status == 302
+        assert "qcamera.m3u8" in resp.headers["Location"]
+
+
+# ─── Share signature ────────────────────────────────────────────────
+
+class TestShareSignature:
+    @pytest.mark.asyncio
+    async def test_returns_dummy_signature(self, client, mock_store):
+        c = await client
+        routes = mock_store.scan()
+        fullname = next(iter(routes))
+        route_name = fullname.replace("/", "|")
+        resp = await c.get(f"/v1/route/{route_name}/share_signature")
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["exp"] == "9999999999"
+        assert data["sig"] == "local"

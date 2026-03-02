@@ -7,7 +7,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from rlog_parser import AttributeDict, _haversine_dist
+from rlog_parser import _haversine_dist, _sanitize_for_json
 
 
 # ─── _haversine_dist ─────────────────────────────────────────────────
@@ -32,30 +32,33 @@ class TestHaversineDist:
         assert 20000_000 < d < 20100_000
 
 
-# ─── AttributeDict ──────────────────────────────────────────────────
+# ─── _sanitize_for_json ────────────────────────────────────────────
 
-class TestAttributeDict:
-    def test_basic_access(self):
-        d = AttributeDict({"x": 1, "y": 2})
-        assert d.x == 1
-        assert d.y == 2
+class TestSanitizeForJson:
+    def test_short_bytes(self):
+        result = _sanitize_for_json(b"\xde\xad")
+        assert result == "dead"
 
-    def test_nested_wrap(self):
-        d = AttributeDict.wrap({"outer": {"inner": 42}})
-        assert d.outer.inner == 42
+    def test_long_bytes(self):
+        data = b"\x00" * 100
+        result = _sanitize_for_json(data)
+        assert result == "<100 bytes>"
 
-    def test_list_wrap(self):
-        d = AttributeDict.wrap({"points": [{"a": 1}, {"a": 2}]})
-        assert d.points[0].a == 1
-        assert d.points[1].a == 2
+    def test_nan(self):
+        assert _sanitize_for_json(float("nan")) is None
 
-    def test_missing_key_raises(self):
-        d = AttributeDict({"x": 1})
-        with pytest.raises(AttributeError, match="no key"):
-            _ = d.missing
+    def test_inf(self):
+        assert _sanitize_for_json(float("inf")) is None
 
-    def test_setattr(self):
-        d = AttributeDict()
-        d.foo = "bar"
-        assert d["foo"] == "bar"
-        assert d.foo == "bar"
+    def test_normal_values(self):
+        assert _sanitize_for_json(42) == 42
+        assert _sanitize_for_json("hello") == "hello"
+        assert _sanitize_for_json(3.14) == 3.14
+
+    def test_dict(self):
+        result = _sanitize_for_json({"key": b"\xab"})
+        assert result == {"key": "ab"}
+
+    def test_list(self):
+        result = _sanitize_for_json([float("nan"), "ok"])
+        assert result == [None, "ok"]

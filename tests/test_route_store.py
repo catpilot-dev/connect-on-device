@@ -17,8 +17,9 @@ from route_store import RouteStore, _route_counter, CACHE_TTL
 # ─── _route_counter ──────────────────────────────────────────────────
 
 class TestRouteCounter:
-    def test_normal(self):
-        assert _route_counter("00000114--abc") == 114
+    def test_normal_hex(self):
+        # Openpilot uses hex counters: 0x114 = 276
+        assert _route_counter("00000114--abc") == 0x114
 
     def test_leading_zeros(self):
         assert _route_counter("00000001--xyz") == 1
@@ -29,18 +30,21 @@ class TestRouteCounter:
     def test_no_separator(self):
         assert _route_counter("noseparator") == 0
 
-    def test_large(self):
-        assert _route_counter("99999999--abc") == 99999999
+    def test_hex_chars(self):
+        # 0x0000001d = 29
+        assert _route_counter("0000001d--abc") == 0x1d
+
+    def test_large_hex(self):
+        assert _route_counter("0000ffff--abc") == 0xffff
 
 
 # ─── _wall_time_to_route_date ────────────────────────────────────────
 
 class TestWallTimeToRouteDate:
     def _make_store(self, tmp_path):
-        with patch("route_store.run_cleanup", return_value={"free_pct": 50, "deleted": []}):
-            with patch.object(RouteStore, "_detect_dongle_id"), \
-                 patch.object(RouteStore, "_detect_agnos_version"):
-                return RouteStore(str(tmp_path))
+        with patch.object(RouteStore, "_detect_dongle_id"), \
+             patch.object(RouteStore, "_detect_agnos_version"):
+            return RouteStore(str(tmp_path))
 
     def test_utc_conversion(self, tmp_path):
         store = self._make_store(tmp_path)
@@ -63,13 +67,12 @@ class TestWallTimeToRouteDate:
 
 class TestMetaToInternal:
     def _make_store(self, tmp_path, metadata=None):
-        with patch("route_store.run_cleanup", return_value={"free_pct": 50, "deleted": []}):
-            with patch.object(RouteStore, "_detect_dongle_id"), \
-                 patch.object(RouteStore, "_detect_agnos_version"):
-                store = RouteStore(str(tmp_path))
-                if metadata:
-                    store._metadata = metadata
-                return store
+        with patch.object(RouteStore, "_detect_dongle_id"), \
+             patch.object(RouteStore, "_detect_agnos_version"):
+            store = RouteStore(str(tmp_path))
+            if metadata:
+                store._metadata = metadata
+            return store
 
     def test_full_metadata(self, tmp_path):
         meta = {
@@ -120,13 +123,12 @@ class TestMetaToInternal:
 
 class TestNeedsEnrich:
     def _make_store(self, tmp_path, metadata=None):
-        with patch("route_store.run_cleanup", return_value={"free_pct": 50, "deleted": []}):
-            with patch.object(RouteStore, "_detect_dongle_id"), \
-                 patch.object(RouteStore, "_detect_agnos_version"):
-                store = RouteStore(str(tmp_path))
-                if metadata:
-                    store._metadata = metadata
-                return store
+        with patch.object(RouteStore, "_detect_dongle_id"), \
+             patch.object(RouteStore, "_detect_agnos_version"):
+            store = RouteStore(str(tmp_path))
+            if metadata:
+                store._metadata = metadata
+            return store
 
     def test_missing_metadata(self, tmp_path):
         store = self._make_store(tmp_path)
@@ -156,6 +158,8 @@ class TestNeedsEnrich:
                 "gps_coordinates": [31.23, 121.47],
                 "total_distance_m": 5000.0,
                 "creation_time": "2025-11-15T10:30:00+08:00",
+                "enriched": True,
+                "gps_time": 1731649800.0,
             }
         })
         assert store._needs_enrich("r") is False
@@ -176,12 +180,11 @@ class TestScan:
         # Create non-route directory
         (populated_data_dir / "random_dir").mkdir()
         (populated_data_dir / "notaroute").mkdir()
-        with patch("route_store.run_cleanup", return_value={"free_pct": 50, "deleted": []}):
-            with patch.object(RouteStore, "_detect_dongle_id"), \
-                 patch.object(RouteStore, "_detect_agnos_version"):
-                store = RouteStore(str(populated_data_dir))
-                store._dongle_id = "test123"
-                store.scan(force=True)
+        with patch.object(RouteStore, "_detect_dongle_id"), \
+             patch.object(RouteStore, "_detect_agnos_version"):
+            store = RouteStore(str(populated_data_dir))
+            store._dongle_id = "test123"
+            store.scan(force=True)
         assert "random_dir" not in store._raw
         assert "notaroute" not in store._raw
 
@@ -225,21 +228,21 @@ class TestBuildRoute:
         """Without create_time in metadata, fall back to counter."""
         meta_path = populated_data_dir / ".route_metadata.json"
         data = json.loads(meta_path.read_text())
-        # Remove creation_time from a route
+        # Remove creation_time and gps_time from a route so counter is used
         del data["routes"]["00000100--def456"]["creation_time"]
+        data["routes"]["00000100--def456"].pop("gps_time", None)
         meta_path.write_text(json.dumps(data))
 
-        with patch("route_store.run_cleanup", return_value={"free_pct": 50, "deleted": []}):
-            with patch.object(RouteStore, "_detect_dongle_id"), \
-                 patch.object(RouteStore, "_detect_agnos_version"):
-                store = RouteStore(str(populated_data_dir))
-                store._dongle_id = "test123"
-                store.scan(force=True)
+        with patch.object(RouteStore, "_detect_dongle_id"), \
+             patch.object(RouteStore, "_detect_agnos_version"):
+            store = RouteStore(str(populated_data_dir))
+            store._dongle_id = "test123"
+            store.scan(force=True)
 
         for r in store._routes.values():
             if r["_local_id"] == "00000100--def456":
-                # create_time should be the counter (100)
-                assert r["create_time"] == 100
+                # create_time should be the counter (0x100 = 256)
+                assert r["create_time"] == 0x100
                 break
 
     def test_stub_filtering(self, tmp_path):
@@ -249,12 +252,11 @@ class TestBuildRoute:
         d.mkdir()
         (d / "rlog.zst").write_bytes(b"")
         # No metadata, no distance
-        with patch("route_store.run_cleanup", return_value={"free_pct": 50, "deleted": []}):
-            with patch.object(RouteStore, "_detect_dongle_id"), \
-                 patch.object(RouteStore, "_detect_agnos_version"):
-                store = RouteStore(str(tmp_path))
-                store._dongle_id = "test123"
-                store.scan(force=True)
+        with patch.object(RouteStore, "_detect_dongle_id"), \
+             patch.object(RouteStore, "_detect_agnos_version"):
+            store = RouteStore(str(tmp_path))
+            store._dongle_id = "test123"
+            store.scan(force=True)
         # Single segment = maxqlog 0, no distance -> should be filtered
         for r in store._routes.values():
             assert r["_local_id"] != "00000001--stub"
@@ -323,14 +325,13 @@ class TestMetadata:
         mock_store._save_metadata()
 
         # Reload
-        with patch("route_store.run_cleanup", return_value={"free_pct": 50, "deleted": []}):
-            with patch.object(RouteStore, "_detect_dongle_id"), \
-                 patch.object(RouteStore, "_detect_agnos_version"):
-                store2 = RouteStore(str(mock_store.data_dir))
+        with patch.object(RouteStore, "_detect_dongle_id"), \
+             patch.object(RouteStore, "_detect_agnos_version"):
+            store2 = RouteStore(str(mock_store.data_dir))
         assert "00000042--abc123" in store2._preserved
         assert "00000042--abc123" in store2._metadata
 
-    def test_rlog_to_metadata_entry(self, mock_store):
+    def test_log_to_metadata_entry(self, mock_store):
         rlog_meta = {
             "dongle_id": "test123",
             "wall_time_nanos": 1700000000000000000,
@@ -342,7 +343,7 @@ class TestMetadata:
             "device_type": "tici",
             "total_distance_m": 5000.0,
         }
-        entry = mock_store._rlog_to_metadata_entry("00000042--abc123", rlog_meta)
+        entry = mock_store._log_to_metadata_entry("00000042--abc123", rlog_meta)
         assert entry["route_id"] == "00000042--abc123"
         assert entry["dongle_id"] == "test123"
         assert entry["car_fingerprint"] == "BMW_E90"
@@ -382,3 +383,326 @@ class TestDistance:
                 assert r["distance"] is not None
                 assert r["distance"] > 0
                 break
+
+
+# ─── Notes ──────────────────────────────────────────────────────────
+
+class TestNotes:
+    def test_set_note(self, mock_store):
+        lid = "00000042--abc123"
+        mock_store.set_note(lid, "Test drive on highway")
+        assert mock_store._metadata[lid]["notes"] == "Test drive on highway"
+
+    def test_update_note(self, mock_store):
+        lid = "00000042--abc123"
+        mock_store.set_note(lid, "first")
+        mock_store.set_note(lid, "updated")
+        assert mock_store._metadata[lid]["notes"] == "updated"
+
+    def test_set_note_creates_metadata(self, mock_store):
+        # Use a route with no metadata entry
+        lid = "nonexistent--route"
+        mock_store.set_note(lid, "note for new route")
+        assert lid in mock_store._metadata
+        assert mock_store._metadata[lid]["notes"] == "note for new route"
+
+    def test_empty_note(self, mock_store):
+        lid = "00000042--abc123"
+        mock_store.set_note(lid, "")
+        assert mock_store._metadata[lid]["notes"] == ""
+
+    def test_note_appears_in_route(self, mock_store):
+        lid = "00000042--abc123"
+        mock_store.set_note(lid, "highway test")
+        routes = mock_store.scan(force=True)
+        for r in routes.values():
+            if r["_local_id"] == lid:
+                assert r.get("notes") == "highway test"
+                break
+
+
+# ─── Bookmarks ──────────────────────────────────────────────────────
+
+class TestBookmarks:
+    def test_add_bookmark(self, mock_store):
+        lid = "00000042--abc123"
+        result = mock_store.add_bookmark(lid, 30.5, "Good merge")
+        assert len(result) == 1
+        assert result[0]["time_sec"] == 30.5
+        assert result[0]["label"] == "Good merge"
+
+    def test_add_multiple_sorted(self, mock_store):
+        lid = "00000042--abc123"
+        mock_store.add_bookmark(lid, 60.0, "Second")
+        result = mock_store.add_bookmark(lid, 10.0, "First")
+        assert len(result) == 2
+        assert result[0]["time_sec"] == 10.0
+        assert result[1]["time_sec"] == 60.0
+
+    def test_add_bookmark_creates_metadata(self, mock_store):
+        lid = "new--route"
+        result = mock_store.add_bookmark(lid, 5.0, "test")
+        assert lid in mock_store._metadata
+        assert len(result) == 1
+
+    def test_update_bookmark(self, mock_store):
+        lid = "00000042--abc123"
+        mock_store.add_bookmark(lid, 10.0, "Original")
+        result = mock_store.update_bookmark(lid, 0, "Updated")
+        assert result[0]["label"] == "Updated"
+        assert result[0]["time_sec"] == 10.0
+
+    def test_update_bookmark_nonexistent_route(self, mock_store):
+        result = mock_store.update_bookmark("nonexistent", 0, "label")
+        assert result == []
+
+    def test_update_bookmark_out_of_range(self, mock_store):
+        lid = "00000042--abc123"
+        mock_store.add_bookmark(lid, 10.0, "Only one")
+        result = mock_store.update_bookmark(lid, 99, "nope")
+        assert len(result) == 1
+        assert result[0]["label"] == "Only one"
+
+    def test_delete_bookmark(self, mock_store):
+        lid = "00000042--abc123"
+        mock_store.add_bookmark(lid, 10.0, "First")
+        mock_store.add_bookmark(lid, 20.0, "Second")
+        result = mock_store.delete_bookmark(lid, 0)
+        assert len(result) == 1
+        assert result[0]["label"] == "Second"
+
+    def test_delete_bookmark_nonexistent_route(self, mock_store):
+        result = mock_store.delete_bookmark("nonexistent", 0)
+        assert result == []
+
+    def test_delete_bookmark_out_of_range(self, mock_store):
+        lid = "00000042--abc123"
+        mock_store.add_bookmark(lid, 10.0, "Only")
+        result = mock_store.delete_bookmark(lid, 5)
+        assert len(result) == 1
+
+
+# ─── get_recycled_routes ────────────────────────────────────────────
+
+class TestRecycledRoutes:
+    def test_hidden_routes_in_recycled(self, mock_store):
+        lid = "00000042--abc123"
+        mock_store.hide_route(lid)
+        recycled = mock_store.get_recycled_routes()
+        hidden = [r for r in recycled if r["_local_id"] == lid]
+        assert len(hidden) == 1
+        assert hidden[0]["recycled_reason"] == "deleted"
+
+    def test_hidden_at_timestamp(self, mock_store):
+        lid = "00000042--abc123"
+        mock_store.hide_route(lid)
+        recycled = mock_store.get_recycled_routes()
+        hidden = [r for r in recycled if r["_local_id"] == lid]
+        assert "hidden_at" in hidden[0]
+        assert isinstance(hidden[0]["hidden_at"], float)
+
+    def test_empty_when_no_hidden(self, mock_store):
+        recycled = mock_store.get_recycled_routes()
+        # May have some "invalid" routes depending on metadata
+        hidden = [r for r in recycled if r["recycled_reason"] == "deleted"]
+        assert len(hidden) == 0
+
+    def test_sorted_newest_first(self, mock_store):
+        mock_store.hide_route("00000042--abc123")
+        mock_store.hide_route("00000100--def456")
+        recycled = mock_store.get_recycled_routes()
+        counters = [_route_counter(r["_local_id"]) for r in recycled]
+        assert counters == sorted(counters, reverse=True)
+
+
+# ─── clear_derived ──────────────────────────────────────────────────
+
+class TestClearDerived:
+    def test_clears_events_and_coords(self, mock_store):
+        routes = mock_store.scan()
+        for r in routes.values():
+            if r["_local_id"] == "00000042--abc123" and r["_segments"]:
+                seg_path = Path(r["_segments"][0]["path"])
+                (seg_path / "events.json").write_text("[]")
+                (seg_path / "coords.json").write_text("[]")
+                deleted = mock_store.clear_derived("00000042--abc123")
+                assert deleted >= 2
+                assert not (seg_path / "events.json").exists()
+                assert not (seg_path / "coords.json").exists()
+                break
+
+    def test_returns_zero_for_unknown_route(self, mock_store):
+        assert mock_store.clear_derived("nonexistent--route") == 0
+
+    def test_returns_zero_when_no_derived(self, mock_store):
+        deleted = mock_store.clear_derived("00000042--abc123")
+        assert deleted == 0
+
+
+# ─── get_pending_route_ids ──────────────────────────────────────────
+
+class TestGetPendingRouteIds:
+    def test_no_pending_when_all_enriched(self, mock_store):
+        mock_store.scan()
+        pending = mock_store.get_pending_route_ids()
+        # All routes in mock_store have metadata, so no pending
+        assert len(pending) == 0
+
+    def test_pending_route_without_metadata(self, populated_data_dir):
+        # Create a route on disk with no metadata entry
+        for seg in range(3):
+            d = populated_data_dir / f"00000200--newroute--{seg}"
+            d.mkdir()
+            (d / "rlog.zst").write_bytes(b"")
+
+        with patch.object(RouteStore, "_detect_dongle_id"), \
+             patch.object(RouteStore, "_detect_agnos_version"):
+            store = RouteStore(str(populated_data_dir))
+            store._dongle_id = "test123"
+            store.scan(force=True)
+
+        pending = store.get_pending_route_ids()
+        assert any(p["local_id"] == "00000200--newroute" for p in pending)
+
+    def test_pending_skips_hidden(self, populated_data_dir):
+        for seg in range(3):
+            d = populated_data_dir / f"00000200--newroute--{seg}"
+            d.mkdir()
+            (d / "rlog.zst").write_bytes(b"")
+
+        # Add to hidden
+        meta_path = populated_data_dir / ".route_metadata.json"
+        import json
+        data = json.loads(meta_path.read_text())
+        data["hidden_routes"] = {"00000200--newroute": time.time()}
+        meta_path.write_text(json.dumps(data))
+
+        with patch.object(RouteStore, "_detect_dongle_id"), \
+             patch.object(RouteStore, "_detect_agnos_version"):
+            store = RouteStore(str(populated_data_dir))
+            store._dongle_id = "test123"
+            store.scan(force=True)
+
+        pending = store.get_pending_route_ids()
+        assert not any(p["local_id"] == "00000200--newroute" for p in pending)
+
+    def test_pending_skips_single_segment(self, populated_data_dir):
+        # Single-segment route should be filtered as stub
+        d = populated_data_dir / "00000300--single00--0"
+        d.mkdir()
+        (d / "rlog.zst").write_bytes(b"")
+
+        with patch.object(RouteStore, "_detect_dongle_id"), \
+             patch.object(RouteStore, "_detect_agnos_version"):
+            store = RouteStore(str(populated_data_dir))
+            store._dongle_id = "test123"
+            store.scan(force=True)
+
+        pending = store.get_pending_route_ids()
+        assert not any(p["local_id"] == "00000300--single00" for p in pending)
+
+    def test_pending_sorted_newest_first(self, populated_data_dir):
+        for lid in ("00000200--aaa00000", "00000300--bbb00000"):
+            for seg in range(3):
+                d = populated_data_dir / f"{lid}--{seg}"
+                d.mkdir()
+                (d / "rlog.zst").write_bytes(b"")
+
+        with patch.object(RouteStore, "_detect_dongle_id"), \
+             patch.object(RouteStore, "_detect_agnos_version"):
+            store = RouteStore(str(populated_data_dir))
+            store._dongle_id = "test123"
+            store.scan(force=True)
+
+        pending = store.get_pending_route_ids()
+        counters = [p["counter"] for p in pending]
+        assert counters == sorted(counters, reverse=True)
+
+
+# ─── _find_rlog / _find_qlog ───────────────────────────────────────
+
+class TestFindLogFiles:
+    def test_find_rlog_zst(self, tmp_path):
+        seg = tmp_path / "seg"
+        seg.mkdir()
+        (seg / "rlog.zst").write_bytes(b"data")
+        assert RouteStore._find_rlog(str(seg)) == str(seg / "rlog.zst")
+
+    def test_find_rlog_uncompressed(self, tmp_path):
+        seg = tmp_path / "seg"
+        seg.mkdir()
+        (seg / "rlog").write_bytes(b"data")
+        assert RouteStore._find_rlog(str(seg)) == str(seg / "rlog")
+
+    def test_find_rlog_prefers_zst(self, tmp_path):
+        seg = tmp_path / "seg"
+        seg.mkdir()
+        (seg / "rlog.zst").write_bytes(b"zst")
+        (seg / "rlog").write_bytes(b"raw")
+        assert RouteStore._find_rlog(str(seg)) == str(seg / "rlog.zst")
+
+    def test_find_rlog_none(self, tmp_path):
+        seg = tmp_path / "seg"
+        seg.mkdir()
+        assert RouteStore._find_rlog(str(seg)) is None
+
+    def test_find_qlog_zst(self, tmp_path):
+        seg = tmp_path / "seg"
+        seg.mkdir()
+        (seg / "qlog.zst").write_bytes(b"data")
+        assert RouteStore._find_qlog(str(seg)) == str(seg / "qlog.zst")
+
+    def test_find_qlog_uncompressed(self, tmp_path):
+        seg = tmp_path / "seg"
+        seg.mkdir()
+        (seg / "qlog").write_bytes(b"data")
+        assert RouteStore._find_qlog(str(seg)) == str(seg / "qlog")
+
+    def test_find_qlog_none(self, tmp_path):
+        seg = tmp_path / "seg"
+        seg.mkdir()
+        assert RouteStore._find_qlog(str(seg)) is None
+
+
+# ─── _log_to_metadata_entry / _log_to_metadata_entry ───────────────
+
+class TestLogToMetadataEntry:
+    def _make_store(self, tmp_path):
+        with patch.object(RouteStore, "_detect_dongle_id"), \
+             patch.object(RouteStore, "_detect_agnos_version"):
+            return RouteStore(str(tmp_path))
+
+    def test_full_entry(self, tmp_path):
+        store = self._make_store(tmp_path)
+        log_meta = {
+            "dongle_id": "test123",
+            "wall_time_nanos": 1700000000000000000,
+            "start_lat": 31.23,
+            "start_lng": 121.47,
+            "git_commit": "abc123",
+            "git_branch": "main",
+            "version": "0.9.8",
+            "car_fingerprint": "BMW_E90",
+            "device_type": "tici",
+            "gps_time": 1700000100.0,
+            "total_distance_m": 5000.0,
+        }
+        entry = store._log_to_metadata_entry("test--route", log_meta)
+        assert entry["route_id"] == "test--route"
+        assert entry["dongle_id"] == "test123"
+        assert entry["car_fingerprint"] == "BMW_E90"
+        assert entry["gps_coordinates"] == [31.23, 121.47]
+        assert entry["enriched"] is True
+        assert entry["gps_time"] == 1700000100.0
+
+    def test_missing_gps(self, tmp_path):
+        store = self._make_store(tmp_path)
+        log_meta = {"dongle_id": "test"}
+        entry = store._log_to_metadata_entry("test--route", log_meta)
+        assert entry["gps_coordinates"] is None
+
+    def test_no_wall_time(self, tmp_path):
+        store = self._make_store(tmp_path)
+        log_meta = {"dongle_id": "test"}
+        entry = store._log_to_metadata_entry("test--route", log_meta)
+        assert entry["creation_time"] is None

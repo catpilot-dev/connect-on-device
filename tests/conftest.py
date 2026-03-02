@@ -49,6 +49,8 @@ def sample_metadata():
                 "git_remote": "https://github.com/test/openpilot.git",
                 "device_type": "tici",
                 "total_distance_m": 5200.0,
+                "gps_time": 1731649800.0,
+                "enriched": True,
                 "source": "connect_server",
             },
             "00000100--def456": {
@@ -62,6 +64,8 @@ def sample_metadata():
                 "car_fingerprint": "BMW_E90",
                 "device_type": "tici",
                 "total_distance_m": 12300.0,
+                "gps_time": 1732082400.0,
+                "enriched": True,
                 "source": "connect_server",
             },
         },
@@ -79,14 +83,13 @@ def populated_data_dir(fake_data_dir, sample_metadata):
 @pytest.fixture
 def mock_store(populated_data_dir):
     """RouteStore with patched detection methods."""
-    with patch("route_store.run_cleanup", return_value={"free_pct": 50.0, "deleted": []}):
-        from route_store import RouteStore
-        with patch.object(RouteStore, "_detect_dongle_id") as mock_did, \
-             patch.object(RouteStore, "_detect_agnos_version") as mock_av:
-            store = RouteStore(str(populated_data_dir))
-            store._dongle_id = "test123"
-            store._agnos_version = "12.4"
-            store.scan(force=True)
+    from route_store import RouteStore
+    with patch.object(RouteStore, "_detect_dongle_id") as mock_did, \
+         patch.object(RouteStore, "_detect_agnos_version") as mock_av:
+        store = RouteStore(str(populated_data_dir))
+        store._dongle_id = "test123"
+        store._agnos_version = "12.4"
+        store.scan(force=True)
     return store
 
 
@@ -94,18 +97,17 @@ def mock_store(populated_data_dir):
 def app(mock_store):
     """aiohttp Application with mock store, enrichment disabled."""
     from server import create_app
-    with patch("route_store.run_cleanup", return_value={"free_pct": 50.0, "deleted": []}):
-        application = create_app(str(mock_store.data_dir), str(mock_store.data_dir / "_static"))
-        # Replace the store with our mock
-        application["store"] = mock_store
-        # Remove enrichment hooks (they require cereal)
-        application.on_startup.clear()
-        application.on_cleanup.clear()
-        # Create minimal static dir
-        static_dir = mock_store.data_dir / "_static"
-        static_dir.mkdir(exist_ok=True)
-        (static_dir / "index.html").write_text("<html><body>test</body></html>")
-        application["static_dir"] = static_dir
+    application = create_app(str(mock_store.data_dir), str(mock_store.data_dir / "_static"))
+    # Replace the store with our mock
+    application["store"] = mock_store
+    # Remove enrichment hooks (they require cereal)
+    application.on_startup.clear()
+    application.on_cleanup.clear()
+    # Create minimal static dir
+    static_dir = mock_store.data_dir / "_static"
+    static_dir.mkdir(exist_ok=True)
+    (static_dir / "index.html").write_text("<html><body>test</body></html>")
+    application["static_dir"] = static_dir
     return application
 
 
