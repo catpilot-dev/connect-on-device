@@ -1,4 +1,4 @@
-# Connect on Device
+# COD — Connect on Device
 
 A self-hosted web companion for [openpilot](https://github.com/commaai/openpilot). Runs directly on your comma device — browse routes, watch dashcam footage, manage plugins, and tune settings from any browser on your local network. No cloud, no account, no internet required.
 
