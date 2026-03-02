@@ -19,7 +19,7 @@ logger = logging.getLogger("connect")
 
 COD_DIR = '/data/connect_on_device'
 VERSION_FILE = os.path.join(COD_DIR, 'VERSION')
-GITHUB_REPO = 'OxygenLiu/connect_on_device'
+GITHUB_REPO = 'catpilot-dev/connect'
 GITHUB_API = f'https://api.github.com/repos/{GITHUB_REPO}/releases/latest'
 
 PLUGIN_REPO_DIR = '/data/openpilot-plugins'
