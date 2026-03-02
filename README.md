@@ -2,6 +2,12 @@
 
 A self-hosted web companion for [openpilot](https://github.com/commaai/openpilot). Runs directly on your comma device — browse routes, watch dashcam footage, manage plugins, and tune settings from any browser on your local network. No cloud, no account, no internet required.
 
+**Why?** Without a comma PRIME subscription, [connect.comma.ai](https://connect.comma.ai) only retains routes for 7 days. Older routes disappear from the list — you lose all track record for studying past drives. COD reads directly from the device's local storage, so your routes are available as long as they're on disk.
+
+COD also enables data collection workflows not possible with connect.comma.ai — scrub through video frame-by-frame, export high-resolution images with EXIF metadata, and annotate events with notes. We use this to collect speed limit sign training data for YOLO and verify OSM map contributions. Or simply bookmark moments worth remembering — wildlife sightings, scenic views, or road incidents.
+
+For developers, COD provides a signal browser for quick CAN/cereal message inspection using qlog, and lets you download rlog, qcamera, and other segment files to your local machine for offline analysis. Every route includes device metadata — openpilot version, git commit, AGNOS version — so you always know which software produced a given drive. COD can also render the openpilot HUD overlay onto dashcam footage as a live preview or downloadable MP4 with EXIF metadata — useful for reporting issues to comma.ai or sharing driving scenarios.
+
 Integrated into [catpilot](https://github.com/catpilot-dev/catpilot) releases starting from `v0.10.3` — automatically installed on first boot.
 
 ## Access
