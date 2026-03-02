@@ -609,6 +609,20 @@ export async function installPluginRepo() {
   return res.json()
 }
 
+// ── COD + plugin updates ─────────────────────────────────
+
+export async function fetchUpdates() {
+  const res = await fetch('/v1/updates/check')
+  if (!res.ok) throw new Error(`fetchUpdates: ${res.status}`)
+  return res.json()
+}
+
+export async function applyUpdates() {
+  const res = await fetch('/v1/updates/apply', { method: 'POST' })
+  if (!res.ok) throw new Error(`applyUpdates: ${res.status}`)
+  return res.json()
+}
+
 // ── Mapd binary update ──────────────────────────────────
 
 export async function mapdCheckUpdate() {

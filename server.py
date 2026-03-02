@@ -107,6 +107,8 @@ from handlers import (
     handle_plugin_repo_get,
     handle_plugin_repo_set,
     handle_plugin_repo_install,
+    handle_updates_check,
+    handle_updates_apply,
     handle_ssh_keys_get,
     handle_ssh_keys_set,
     handle_ssh_keys_delete,
@@ -303,6 +305,10 @@ def create_app(data_dir: str, static_dir: str) -> web.Application:
     app.router.add_get("/v1/plugins", handle_plugins_get)
     app.router.add_post("/v1/plugins/{plugin_id}/toggle", handle_plugin_toggle)
     app.router.add_post("/v1/plugins/{plugin_id}/param", handle_plugin_param)
+
+    # COD + plugin update notifications
+    app.router.add_get("/v1/updates/check", handle_updates_check)
+    app.router.add_post("/v1/updates/apply", handle_updates_apply)
 
     # WebRTC signaling proxy (to local webrtcd on port 5001)
     # SSH keys

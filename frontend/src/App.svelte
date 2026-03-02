@@ -1,8 +1,9 @@
 <script>
   import { onMount } from 'svelte'
   import { dongleId, selectedRoute, isMetric } from './lib/stores.js'
-  import { fetchDevices, fetchIsOnroad, fetchParams } from './lib/api.js'
+  import { fetchDevices, fetchIsOnroad, fetchParams, fetchUpdates, applyUpdates } from './lib/api.js'
   import DeviceHeader from './lib/components/DeviceHeader.svelte'
+  import UpdateBanner from './lib/components/UpdateBanner.svelte'
   import RouteListPage from './lib/pages/RouteListPage.svelte'
   import RouteDetailPage from './lib/pages/RouteDetailPage.svelte'
   import TileManager from './lib/pages/TileManager.svelte'
@@ -13,6 +14,8 @@
 
   let error = $state(null)
   let isOnroad = $state(false)
+  let updates = $state(null)
+  let updatesDismissed = $state(false)
   function parsePage() {
     const parts = location.pathname.split('/').filter(Boolean)
     if (parts[0] === 'tiles') return 'tiles'
@@ -34,10 +37,11 @@
 
   onMount(async () => {
     // Fetch all startup data in parallel
-    const [onroadResult, devicesResult, paramsResult] = await Promise.allSettled([
+    const [onroadResult, devicesResult, paramsResult, updatesResult] = await Promise.allSettled([
       fetchIsOnroad(),
       fetchDevices(),
       fetchParams(),
+      fetchUpdates(),
     ])
     isOnroad = onroadResult.status === 'fulfilled' ? onroadResult.value : false
     if (devicesResult.status === 'fulfilled' && devicesResult.value?.length > 0) {
@@ -47,6 +51,9 @@
     }
     if (paramsResult.status === 'fulfilled') {
       isMetric.set(paramsResult.value.IsMetric !== '0')
+    }
+    if (updatesResult.status === 'fulfilled') {
+      updates = updatesResult.value
     }
 
     // Restore state from URL on load
@@ -104,6 +111,15 @@
     selectedRoute.set(null)
     history.pushState(null, '', '/plugins')
   }
+
+  async function handleUpdate() {
+    const data = await applyUpdates()
+    if (data.cod_updated) {
+      // Server will restart — reload page after delay
+      setTimeout(() => location.reload(), 4000)
+    }
+    return data
+  }
 </script>
 
 {#if page === 'signals'}
@@ -147,6 +163,10 @@
         </div>
       {/snippet}
     </DeviceHeader>
+
+    {#if updates && !updatesDismissed && (updates.cod?.available || updates.plugins?.available)}
+      <UpdateBanner {updates} {isOnroad} onDismiss={() => updatesDismissed = true} onUpdate={handleUpdate} />
+    {/if}
 
     <main class="flex-1 flex flex-col">
       {#if error}

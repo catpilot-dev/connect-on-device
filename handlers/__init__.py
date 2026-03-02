@@ -127,6 +127,11 @@ from .plugins import (
     handle_plugin_repo_install,
 )
 
+from .updates import (
+    handle_updates_check,
+    handle_updates_apply,
+)
+
 from .stubs import (
     handle_stub_empty_array,
     handle_stub_error,
