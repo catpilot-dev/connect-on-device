@@ -2,7 +2,7 @@
 
 A self-hosted web companion for [openpilot](https://github.com/commaai/openpilot). Runs directly on your comma device — browse routes, watch dashcam footage, manage plugins, and tune settings from any browser on your local network. No cloud, no account, no internet required.
 
-Integrated into catpilot releases starting from `v0.10.3` — automatically installed on first boot.
+Integrated into [catpilot](https://github.com/catpilot-dev/catpilot) releases starting from `v0.10.3` — automatically installed on first boot.
 
 ## Access
 
