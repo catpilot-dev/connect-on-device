@@ -22,7 +22,7 @@ VERSION_FILE = os.path.join(COD_DIR, 'VERSION')
 GITHUB_REPO = 'catpilot-dev/connect'
 GITHUB_API = f'https://api.github.com/repos/{GITHUB_REPO}/releases/latest'
 
-PLUGIN_REPO_DIR = '/data/openpilot-plugins'
+PLUGIN_REPO_DIR = '/data/catpilot-plugins'
 OPENPILOT_DIR = '/data/openpilot'
 BUILD_HASH_FILE = '/tmp/plugin_build_hash'
 

@@ -14,9 +14,9 @@ logger = logging.getLogger("connect")
 PLUGINS_DIR = '/data/plugins'
 IS_C3 = os.path.exists('/TICI')
 BUILD_HASH_FILE = '/tmp/plugin_build_hash'
-PLUGIN_REPO_DIR = '/data/openpilot-plugins'
+PLUGIN_REPO_DIR = '/data/catpilot-plugins'
 OPENPILOT_DIR = '/data/openpilot'
-DEFAULT_PLUGIN_REPO_URL = 'https://github.com/OxygenLiu/openpilot-plugins'
+DEFAULT_PLUGIN_REPO_URL = 'https://github.com/catpilot-dev/plugins'
 
 
 def _read_plugin_params(manifest):
