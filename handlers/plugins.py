@@ -139,8 +139,8 @@ def _scan_plugins():
       if device_type not in device_filter:
         continue
 
-    # c3_compat is always enabled on C3, not toggleable
-    locked = (name == 'c3_compat' and IS_C3)
+    # Enforced plugins are always enabled, not toggleable
+    locked = os.path.exists(os.path.join(plugin_dir, '.enforced'))
     enabled = True if locked else not os.path.exists(os.path.join(plugin_dir, '.disabled'))
 
     plugins.append({
