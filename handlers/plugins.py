@@ -12,11 +12,40 @@ from .params import MAPD_PARAM_KEYS, update_mapd_settings, _read_mapd_settings, 
 logger = logging.getLogger("connect")
 
 PLUGINS_DIR = '/data/plugins'
+PIDS_DIR = os.path.join(PLUGINS_DIR, '.pids')
 IS_C3 = os.path.exists('/TICI')
 BUILD_HASH_FILE = '/tmp/plugin_build_hash'
 PLUGIN_REPO_DIR = '/data/catpilot-plugins'
 OPENPILOT_DIR = '/data/openpilot'
 DEFAULT_PLUGIN_REPO_URL = 'https://github.com/catpilot-dev/plugins'
+
+
+def _check_process_running(pid_name):
+  """Check if a plugin process is running by reading its PID file."""
+  pid_file = os.path.join(PIDS_DIR, f'{pid_name}.pid')
+  try:
+    with open(pid_file) as f:
+      pid = int(f.read().strip())
+    os.kill(pid, 0)
+    # Check it's not a zombie
+    with open(f'/proc/{pid}/status') as f:
+      for line in f:
+        if line.startswith('State:'):
+          return 'Z' not in line
+    return True
+  except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError, OSError):
+    return False
+
+
+def _get_process_status(manifest):
+  """Return list of {name, running} for each declared process."""
+  processes = manifest.get('processes', [])
+  if not processes:
+    return []
+  return [
+    {'name': p['name'], 'running': _check_process_running(p['name'])}
+    for p in processes
+  ]
 
 
 def _read_plugin_params(manifest):
@@ -120,11 +149,13 @@ def _scan_plugins():
       'version': manifest.get('version', ''),
       'type': manifest.get('type', 'plugin'),
       'description': manifest.get('description', ''),
+      'author': manifest.get('author', ''),
       'enabled': enabled,
       'locked': locked,
       'dependencies': manifest.get('dependencies', []),
       'panel': manifest.get('panel', False),
       'settings': _read_plugin_params(manifest),
+      'processes': _get_process_status(manifest) if enabled else [],
     })
 
   # Sort order: model_selector first, bmw and c3_compat at bottom

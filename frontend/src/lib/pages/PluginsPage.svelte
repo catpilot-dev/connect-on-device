@@ -258,20 +258,27 @@
               {#if plugin.version}
                 <span class="text-[10px] text-surface-300">{plugin.version}</span>
               {/if}
+              {#if plugin.enabled && plugin.processes?.length}
+                {#each plugin.processes as proc}
+                  <span class="text-[10px] px-1.5 py-0.5 rounded {proc.running ? 'bg-engage-green/15 text-engage-green' : 'bg-surface-700 text-surface-400'}">{proc.running ? 'running' : 'stopped'}</span>
+                {/each}
+              {/if}
               {#if (plugin.panel || plugin.settings?.length) && plugin.enabled}
-                <svg class="w-4 h-4 text-surface-100" viewBox="0 0 20 20" fill="currentColor">
-                  <path fill-rule="evenodd" d="M7.84 1.804A1 1 0 0 1 8.82 1h2.36a1 1 0 0 1 .98.804l.331 1.652a6.993 6.993 0 0 1 1.929 1.115l1.598-.54a1 1 0 0 1 1.186.447l1.18 2.044a1 1 0 0 1-.205 1.251l-1.267 1.113a7.047 7.047 0 0 1 0 2.228l1.267 1.113a1 1 0 0 1 .206 1.25l-1.18 2.045a1 1 0 0 1-1.187.447l-1.598-.54a6.993 6.993 0 0 1-1.929 1.115l-.33 1.652a1 1 0 0 1-.98.804H8.82a1 1 0 0 1-.98-.804l-.331-1.652a6.993 6.993 0 0 1-1.929-1.115l-1.598.54a1 1 0 0 1-1.186-.447l-1.18-2.044a1 1 0 0 1 .205-1.251l1.267-1.114a7.05 7.05 0 0 1 0-2.227L1.821 7.773a1 1 0 0 1-.206-1.25l1.18-2.045a1 1 0 0 1 1.187-.447l1.598.54A6.992 6.992 0 0 1 7.51 3.456l.33-1.652ZM10 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" clip-rule="evenodd" />
-                </svg>
+                <ChevronIcon rotated={expandedPlugin === plugin.id} />
               {/if}
             </div>
             {#if plugin.description}
               <p class="text-xs text-surface-300 mt-1">{plugin.description}</p>
             {/if}
+            {#if plugin.author}
+              <p class="text-[10px] text-surface-400 mt-0.5">by {plugin.author}</p>
+            {/if}
             {#if plugin.dependencies?.length > 0}
               <div class="flex items-center gap-1 mt-1.5">
                 <span class="text-[10px] text-surface-400">deps:</span>
                 {#each plugin.dependencies as dep}
-                  <span class="text-[10px] px-1 py-0.5 rounded bg-surface-700 text-surface-300">{dep}</span>
+                  {@const depPlugin = plugins?.find(p => p.id === dep)}
+                  <span class="text-[10px] px-1 py-0.5 rounded {depPlugin?.enabled ? 'bg-surface-700 text-surface-300' : 'bg-engage-red/15 text-engage-red'}">{dep}</span>
                 {/each}
               </div>
             {/if}
@@ -303,7 +310,7 @@
                   <div class="flex items-center justify-between gap-4 {pluginDepDisabled ? 'opacity-40' : ''}">
                     <div>
                       <div class="text-sm text-surface-100">{setting.label}</div>
-                      <div class="text-xs text-surface-300 mt-0.5">{setting.desc}{#if pluginDepDisabled} (requires Mapd){/if}</div>
+                      <div class="text-xs text-surface-300 mt-0.5">{setting.desc}{#if pluginDepDisabled} (requires {plugins?.find(p => p.id === setting.requiresPlugin)?.name || setting.requiresPlugin}){/if}</div>
                     </div>
                     <Toggle
                       checked={paramValues[plugin.id]?.[setting.key] ?? false}
