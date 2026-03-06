@@ -4,7 +4,7 @@ import sys
 
 from aiohttp import web
 
-from handler_helpers import PARAMS_DIR, error_response, parse_json, read_param, write_param
+from handler_helpers import PARAMS_DIR, error_response, parse_json, read_param, write_param, read_plugin_param
 
 logger = logging.getLogger("connect")
 
@@ -87,37 +87,38 @@ async def handle_toggles_set(request: web.Request) -> web.Response:
 
 PARAMS = {
     "LongitudinalPersonality": {"type": "int", "label": "Driving Personality", "default": 2},
-    "MapdVersion": {"type": "str", "label": "Mapd Version"},
 }
 
 MAPD_PARAM_KEYS = {"MapdSpeedLimitControlEnabled", "MapdSpeedLimitOffsetPercent", "MapdCurveTargetLatAccel"}
 
+OFFSET_VALUES = [0, 5, 10, 15]            # indexed by pill selection
+LAT_ACCEL_VALUES = [1.5, 2.0, 2.5, 3.0]   # indexed by pill selection
+
 
 def update_mapd_settings():
-    """Regenerate MapdSettings JSON from individual params (snake_case keys for mapd Go daemon)."""
-    # Master toggle
-    enabled = read_param("MapdSpeedLimitControlEnabled") == "1"
+    """Regenerate MapdSettings JSON from plugin params (snake_case keys for mapd Go daemon).
 
-    # Offset: raw percentage value (0, 5, 10, 15) -> decimal
-    try:
-        offset_pct = int(read_param("MapdSpeedLimitOffsetPercent", "10"))
-    except ValueError:
-        offset_pct = 10  # default +10%
-    offset = offset_pct / 100.0
+    Reads from /data/plugins/speedlimitd/data/, writes to /data/params/d/MapdSettings.
+    """
+    enabled = read_plugin_param("speedlimitd", "MapdSpeedLimitControlEnabled") == "1"
 
-    # Curve comfort: button index -> lat accel value
     try:
-        lat_idx = int(read_param("MapdCurveTargetLatAccel", "1"))
+        offset_idx = int(read_plugin_param("speedlimitd", "MapdSpeedLimitOffsetPercent", "2"))
     except ValueError:
-        lat_idx = 1  # default 2.0
-    lat_vals = [1.5, 2.0, 2.5, 3.0]
-    lat_accel = lat_vals[lat_idx] if 0 <= lat_idx < 4 else 2.0
+        offset_idx = 2
+    offset_pct = OFFSET_VALUES[offset_idx] if 0 <= offset_idx < len(OFFSET_VALUES) else 10
+
+    try:
+        lat_idx = int(read_plugin_param("speedlimitd", "MapdCurveTargetLatAccel", "0"))
+    except ValueError:
+        lat_idx = 0
+    lat_accel = LAT_ACCEL_VALUES[lat_idx] if 0 <= lat_idx < len(LAT_ACCEL_VALUES) else 1.5
 
     settings = {
         "speed_limit_control_enabled": enabled,
         "map_curve_speed_control_enabled": enabled,
         "vision_curve_speed_control_enabled": enabled,
-        "speed_limit_offset": offset,
+        "speed_limit_offset": offset_pct / 100.0,
         "map_curve_target_lat_a": lat_accel,
         "vision_curve_target_lat_a": lat_accel,
     }
@@ -125,60 +126,11 @@ def update_mapd_settings():
     write_param("MapdSettings", json.dumps(settings))
 
 
-def _read_mapd_settings() -> dict:
-    """Read MapdSettings JSON, returning {} on missing/invalid."""
-    raw = read_param("MapdSettings")
-    if not raw:
-        return {}
-    try:
-        return json.loads(raw)
-    except (json.JSONDecodeError, ValueError):
-        return {}
-
-
-# Mapping from individual param keys to MapdSettings JSON fields
-_MAPD_SETTINGS_MAP = {
-    "MapdSpeedLimitControlEnabled": ("speed_limit_control_enabled", "bool"),
-    "MapdSpeedLimitOffsetPercent": ("speed_limit_offset", "offset_pct"),  # decimal → percentage
-    "MapdCurveTargetLatAccel": ("map_curve_target_lat_a", "lat_idx"),     # value → button index
-}
-
-
 async def handle_params_get(request: web.Request) -> web.Response:
-    """GET /v1/params — read all BMW params from /data/params/d/
-
-    For mapd params, falls back to MapdSettings JSON if individual param
-    files don't exist (user may have configured mapd directly).
-    """
-    mapd_settings = None  # lazy-loaded
-
+    """GET /v1/params — read openpilot params from /data/params/d/."""
     result = {}
     for key, meta in PARAMS.items():
         raw = read_param(key)
-
-        # Fallback: if individual param missing, read from MapdSettings JSON
-        if not raw and key in _MAPD_SETTINGS_MAP:
-            if mapd_settings is None:
-                mapd_settings = _read_mapd_settings()
-            json_key, conv = _MAPD_SETTINGS_MAP[key]
-            json_val = mapd_settings.get(json_key)
-            if json_val is not None:
-                if conv == "bool":
-                    result[key] = bool(json_val)
-                    continue
-                elif conv == "offset_pct":
-                    # MapdSettings stores decimal (0.1) → UI wants percentage (10)
-                    result[key] = round(float(json_val) * 100)
-                    continue
-                elif conv == "lat_idx":
-                    # MapdSettings stores value (2.0) → UI wants button index (1)
-                    lat_vals = [1.5, 2.0, 2.5, 3.0]
-                    try:
-                        result[key] = lat_vals.index(float(json_val))
-                    except ValueError:
-                        result[key] = 1  # default 2.0
-                    continue
-
         if meta["type"] == "bool":
             result[key] = raw == "1"
         elif meta["type"] == "int":

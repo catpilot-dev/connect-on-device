@@ -44,6 +44,9 @@ def resolve_route_name(request):
     return request.match_info["routeName"].replace("|", "/")
 
 
+PLUGINS_DIR = "/data/plugins"
+
+
 def read_param(key, default=""):
     """Read an openpilot param file, returning default if missing."""
     try:
@@ -55,3 +58,18 @@ def read_param(key, default=""):
 def write_param(key, value):
     """Write a value to an openpilot param file."""
     Path(f"{PARAMS_DIR}/{key}").write_text(str(value))
+
+
+def read_plugin_param(plugin_id, key, default=""):
+    """Read a plugin param from /data/plugins/<id>/data/<key>."""
+    try:
+        return Path(f"{PLUGINS_DIR}/{plugin_id}/data/{key}").read_text().strip()
+    except (FileNotFoundError, OSError):
+        return default
+
+
+def write_plugin_param(plugin_id, key, value):
+    """Write a plugin param to /data/plugins/<id>/data/<key>."""
+    data_dir = Path(f"{PLUGINS_DIR}/{plugin_id}/data")
+    data_dir.mkdir(parents=True, exist_ok=True)
+    (data_dir / key).write_text(str(value))

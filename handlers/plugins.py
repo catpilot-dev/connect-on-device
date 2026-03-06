@@ -6,8 +6,8 @@ import os
 
 from aiohttp import web
 
-from handler_helpers import error_response, read_param, write_param
-from .params import MAPD_PARAM_KEYS, update_mapd_settings, _read_mapd_settings, _MAPD_SETTINGS_MAP
+from handler_helpers import error_response, read_param, write_param, read_plugin_param, write_plugin_param
+from .params import MAPD_PARAM_KEYS, update_mapd_settings
 
 logger = logging.getLogger("connect")
 
@@ -48,10 +48,12 @@ def _get_process_status(manifest):
   ]
 
 
-def _read_plugin_params(manifest):
-  """Read UI-visible params (those with a 'desc' field) and their current values."""
+def _read_plugin_params(plugin_id, manifest):
+  """Read UI-visible params (those with a 'desc' field) and their current values.
+
+  Params are stored in /data/plugins/<id>/data/<key>.
+  """
   params_def = manifest.get('params', {})
-  mapd_settings = None  # lazy-loaded
 
   settings = []
   for key, meta in params_def.items():
@@ -73,28 +75,8 @@ def _read_plugin_params(manifest):
     if 'requiresPlugin' in meta:
       entry['requiresPlugin'] = meta['requiresPlugin']
 
-    # Read current value
-    raw = read_param(key)
-
-    # Fallback: if individual param missing, read from MapdSettings JSON
-    if not raw and key in _MAPD_SETTINGS_MAP:
-      if mapd_settings is None:
-        mapd_settings = _read_mapd_settings()
-      json_key, conv = _MAPD_SETTINGS_MAP[key]
-      json_val = mapd_settings.get(json_key)
-      if json_val is not None:
-        if conv == "bool":
-          entry['value'] = bool(json_val)
-        elif conv == "offset_pct":
-          entry['value'] = round(float(json_val) * 100)
-        elif conv == "lat_idx":
-          lat_vals = [1.5, 2.0, 2.5, 3.0]
-          try:
-            entry['value'] = lat_vals.index(float(json_val))
-          except ValueError:
-            entry['value'] = 1
-        settings.append(entry)
-        continue
+    # Read current value from plugin data dir
+    raw = read_plugin_param(plugin_id, key)
 
     # Parse value based on type
     ptype = meta.get('type', 'string')
@@ -154,7 +136,7 @@ def _scan_plugins():
       'locked': locked,
       'dependencies': manifest.get('dependencies', []),
       'panel': manifest.get('panel', False),
-      'settings': _read_plugin_params(manifest),
+      'settings': _read_plugin_params(name, manifest),
       'processes': _get_process_status(manifest) if enabled else [],
     })
 
@@ -237,7 +219,7 @@ async def handle_plugin_param(request: web.Request) -> web.Response:
   else:
     raw = str(value)
 
-  write_param(key, raw)
+  write_plugin_param(plugin_id, key, raw)
 
   # Sync MapdSettings JSON if this is a mapd param
   if key in MAPD_PARAM_KEYS:
