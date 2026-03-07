@@ -87,9 +87,8 @@ def _route_counter(local_id: str) -> int:
         return 0
 
 # Add openpilot to path for LogReader
-for _p in ["/data/openpilot", "/home/oxygen/openpilot"]:
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
+if "/data/openpilot" not in sys.path:
+    sys.path.insert(0, "/data/openpilot")
 
 
 class RouteStore:
