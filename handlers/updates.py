@@ -19,7 +19,7 @@ logger = logging.getLogger("connect")
 
 COD_DIR = '/data/connect_on_device'
 VERSION_FILE = os.path.join(COD_DIR, 'VERSION')
-GITHUB_REPO = 'catpilot-dev/connect_on_device'
+GITHUB_REPO = 'catpilot-dev/connect-on-device'
 GITHUB_API = f'https://api.github.com/repos/{GITHUB_REPO}/releases/latest'
 
 PLUGIN_REPO_DIR = '/data/plugins'
