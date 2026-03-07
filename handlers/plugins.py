@@ -16,7 +16,7 @@ PIDS_DIR = os.path.join(PLUGINS_DIR, '.pids')
 IS_C3 = os.path.exists('/TICI')
 BUILD_HASH_FILE = '/tmp/plugin_build_hash'
 PLUGIN_REPO_DIR = '/data/plugins'
-OPENPILOT_DIR = '/data/catpilot'
+OPENPILOT_DIR = '/data/openpilot'
 DEFAULT_PLUGIN_REPO_URL = 'https://github.com/catpilot-dev/plugins'
 
 

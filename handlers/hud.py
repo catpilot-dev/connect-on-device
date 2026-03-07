@@ -22,7 +22,7 @@ HUD_CACHE_DIR = Path("/data/connect-on-device/hud_cache")
 RENDER_HLS_DIR = Path("/data/connect-on-device/hud_hls_tmp")
 RENDER_SCRIPT_DRM = Path(__file__).parent.parent / "render_clip_drm.py"
 PYTHON_BIN = "/usr/local/venv/bin/python"
-OPENPILOT_DIR = Path("/data/catpilot")
+OPENPILOT_DIR = Path("/data/openpilot")
 REPLAY_BIN = OPENPILOT_DIR / "tools/replay/replay"
 DRM_RAYLIB_PATH = Path("/data/pip_packages/raylib")
 

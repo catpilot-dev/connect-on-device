@@ -18,7 +18,7 @@ async def handle_lateral_delay(request: web.Request) -> web.Response:
         return web.json_response({"status": "no data"})
 
     try:
-        sys.path.insert(0, "/data/catpilot") if "/data/catpilot" not in sys.path else None
+        sys.path.insert(0, "/data/openpilot") if "/data/openpilot" not in sys.path else None
         from cereal import log
         with log.Event.from_bytes(raw) as msg:
             ld = msg.liveDelay

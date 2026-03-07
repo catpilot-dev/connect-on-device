@@ -32,7 +32,7 @@ from subprocess import Popen
 # Handle SIGTERM gracefully — raises SystemExit so finally blocks run
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(1))
 
-OPENPILOT_DIR = "/data/catpilot"
+OPENPILOT_DIR = "/data/openpilot"
 if OPENPILOT_DIR not in sys.path:
     sys.path.insert(0, OPENPILOT_DIR)
 

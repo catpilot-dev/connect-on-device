@@ -23,7 +23,7 @@ GITHUB_REPO = 'catpilot-dev/connect-on-device'
 GITHUB_API = f'https://api.github.com/repos/{GITHUB_REPO}/releases/latest'
 
 PLUGIN_REPO_DIR = '/data/plugins'
-OPENPILOT_DIR = '/data/catpilot'
+OPENPILOT_DIR = '/data/openpilot'
 BUILD_HASH_FILE = '/tmp/plugin_build_hash'
 
 CACHE_TTL = 600  # 10 minutes
