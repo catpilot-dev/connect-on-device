@@ -17,7 +17,7 @@ import sys
 import threading
 import time
 
-OPENPILOT_DIR = "/data/openpilot"
+OPENPILOT_DIR = "/data/catpilot"
 REALDATA_DIR = "/data/media/0/realdata"
 CONTROL_PORT = 8090
 FPS = 20

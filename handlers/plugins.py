@@ -11,12 +11,12 @@ from .params import MAPD_PARAM_KEYS, update_mapd_settings
 
 logger = logging.getLogger("connect")
 
-PLUGINS_DIR = '/data/plugins'
+PLUGINS_DIR = '/data/plugins-runtime'
 PIDS_DIR = os.path.join(PLUGINS_DIR, '.pids')
 IS_C3 = os.path.exists('/TICI')
 BUILD_HASH_FILE = '/tmp/plugin_build_hash'
-PLUGIN_REPO_DIR = '/data/catpilot-plugins'
-OPENPILOT_DIR = '/data/openpilot'
+PLUGIN_REPO_DIR = '/data/plugins'
+OPENPILOT_DIR = '/data/catpilot'
 DEFAULT_PLUGIN_REPO_URL = 'https://github.com/catpilot-dev/plugins'
 
 
@@ -51,7 +51,7 @@ def _get_process_status(manifest):
 def _read_plugin_params(plugin_id, manifest):
   """Read UI-visible params (those with a 'desc' field) and their current values.
 
-  Params are stored in /data/plugins/<id>/data/<key>.
+  Params are stored in /data/plugins-runtime/<id>/data/<key>.
   """
   params_def = manifest.get('params', {})
 
@@ -96,7 +96,7 @@ def _read_plugin_params(plugin_id, manifest):
 
 
 def _scan_plugins():
-  """Scan /data/plugins/ and return list of plugin info dicts."""
+  """Scan /data/plugins-runtime/ and return list of plugin info dicts."""
   if not os.path.isdir(PLUGINS_DIR):
     return []
 

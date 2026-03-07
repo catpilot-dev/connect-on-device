@@ -19,11 +19,11 @@ logger = logging.getLogger("connect")
 
 COD_DIR = '/data/connect_on_device'
 VERSION_FILE = os.path.join(COD_DIR, 'VERSION')
-GITHUB_REPO = 'catpilot-dev/connect'
+GITHUB_REPO = 'catpilot-dev/connect_on_device'
 GITHUB_API = f'https://api.github.com/repos/{GITHUB_REPO}/releases/latest'
 
-PLUGIN_REPO_DIR = '/data/catpilot-plugins'
-OPENPILOT_DIR = '/data/openpilot'
+PLUGIN_REPO_DIR = '/data/plugins'
+OPENPILOT_DIR = '/data/catpilot'
 BUILD_HASH_FILE = '/tmp/plugin_build_hash'
 
 CACHE_TTL = 600  # 10 minutes

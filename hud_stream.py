@@ -24,7 +24,7 @@ from pathlib import Path
 logger = logging.getLogger("hud_stream")
 
 # C3 binary paths
-OPENPILOT_DIR = "/data/openpilot"
+OPENPILOT_DIR = "/data/catpilot"
 REPLAY_BIN = os.path.join(OPENPILOT_DIR, "tools/replay/replay")
 
 # DRM mode constants

@@ -15,7 +15,7 @@ logger = logging.getLogger("connect")
 PYTHON_BIN = "/usr/local/venv/bin/python"
 
 MODELS_BASE = Path("/data/models")
-PLUGINS_DIR = Path("/data/plugins")
+PLUGINS_DIR = Path("/data/plugins-runtime")
 PLUGIN_ID = "model_selector"
 
 

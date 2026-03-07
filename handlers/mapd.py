@@ -20,9 +20,9 @@ _tile_download_thread = None
 
 # ─── Mapd binary update ──────────────────────────────────────────────
 
-OPENPILOT_DIR = Path("/data/openpilot")
+OPENPILOT_DIR = Path("/data/catpilot")
 PYTHON_BIN = "/usr/local/venv/bin/python"
-MAPD_MANAGER = Path("/data/plugins/mapd/mapd_manager.py")
+MAPD_MANAGER = Path("/data/plugins-runtime/mapd/mapd_manager.py")
 _MAPD_ENV = {**os.environ, "PYTHONPATH": str(OPENPILOT_DIR), "PWD": str(OPENPILOT_DIR)}
 
 

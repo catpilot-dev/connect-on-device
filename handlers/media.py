@@ -287,8 +287,8 @@ def _load_calibration(seg_dir: Path) -> dict | None:
     try:
         # Lazy import — only needed on C3 where openpilot is installed
         import sys
-        if "/data/openpilot" not in sys.path:
-            sys.path.insert(0, "/data/openpilot")
+        if "/data/catpilot" not in sys.path:
+            sys.path.insert(0, "/data/catpilot")
         from tools.lib.logreader import LogReader
 
         calib = None

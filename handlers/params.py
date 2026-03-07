@@ -18,7 +18,7 @@ async def handle_lateral_delay(request: web.Request) -> web.Response:
         return web.json_response({"status": "no data"})
 
     try:
-        sys.path.insert(0, "/data/openpilot") if "/data/openpilot" not in sys.path else None
+        sys.path.insert(0, "/data/catpilot") if "/data/catpilot" not in sys.path else None
         from cereal import log
         with log.Event.from_bytes(raw) as msg:
             ld = msg.liveDelay
@@ -98,7 +98,7 @@ LAT_ACCEL_VALUES = [1.5, 2.0, 2.5, 3.0]   # indexed by pill selection
 def update_mapd_settings():
     """Regenerate MapdSettings JSON from plugin params (snake_case keys for mapd Go daemon).
 
-    Reads from /data/plugins/speedlimitd/data/, writes to /data/params/d/MapdSettings.
+    Reads from /data/plugins-runtime/speedlimitd/data/, writes to /data/params/d/MapdSettings.
     """
     enabled = read_plugin_param("speedlimitd", "MapdSpeedLimitControlEnabled") == "1"
 

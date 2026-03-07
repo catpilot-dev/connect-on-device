@@ -130,7 +130,7 @@ STAGING_PATHS = [
     "/data/safe_staging/finalized/plugins",  # post-finalize (some updater versions)
     "/data/safe_staging/upper/plugins",       # overlay upper layer (0.10.x updater)
 ]
-PLUGINS_DIR = "/data/plugins"
+PLUGINS_DIR = "/data/plugins-runtime"
 
 
 def _get_device_type() -> str:
@@ -148,7 +148,7 @@ async def handle_software_prepare_plugins(request: web.Request) -> web.Response:
     if not staged_plugins:
         return web.json_response({"status": "no_plugins", "message": "No plugins/ in staged update"})
 
-    # Copy staged plugins to /data/plugins/
+    # Copy staged plugins to /data/plugins-runtime/
     if os.path.exists(PLUGINS_DIR):
         shutil.rmtree(PLUGINS_DIR)
     shutil.copytree(staged_plugins, PLUGINS_DIR)
@@ -184,7 +184,7 @@ async def handle_software_prepare_plugins(request: web.Request) -> web.Response:
 
 # ─── Venv sync ────────────────────────────────────────────────────────
 
-VENV_SYNC_SCRIPT = "/data/plugins/c3_compat/venv_sync.py"
+VENV_SYNC_SCRIPT = "/data/plugins-runtime/c3_compat/venv_sync.py"
 VENV_SYNC_PYTHON = "/usr/local/venv/bin/python"
 
 
