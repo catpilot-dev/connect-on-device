@@ -1,4 +1,4 @@
-// API layer for connect_on_device
+// API layer for connect-on-device
 // All fetch functions target the comma-compatible /v1 endpoints
 
 /** Route identifier for API URLs — local_id is the canonical key (e.g. "00000123--ecd17bc154") */

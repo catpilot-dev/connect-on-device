@@ -53,7 +53,7 @@ DRM_RAYLIB_PATH = "/data/pip_packages"
 RECORD_FPS = 2
 REPLAY_SPEED = 0.2
 SPEEDUP_FACTOR = 1.0 / REPLAY_SPEED  # 5x
-HLS_DIR = "/data/connect_on_device/hud_hls_tmp"
+HLS_DIR = "/data/connect-on-device/hud_hls_tmp"
 SECONDS_TO_WARM = 2
 
 
@@ -478,7 +478,7 @@ def main():
                     "-metadata", f"title={meta_title}",
                     "-metadata", f"comment={meta_comment}",
                     "-metadata", f"artist={meta_artist}",
-                    "-metadata", "encoder=connect_on_device render_clip_drm",
+                    "-metadata", "encoder=connect-on-device render_clip_drm",
                     "-c:v", "libx264",
                     "-preset", "ultrafast",
                     "-crf", "18",

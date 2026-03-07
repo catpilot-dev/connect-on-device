@@ -1,12 +1,12 @@
 #!/bin/bash
-# Deploy connect_on_device to C3 via GitHub release tarball
+# Deploy connect-on-device to C3 via GitHub release tarball
 # Usage: ./deploy.sh [host]
 set -e
 
 HOST="${1:-comma@10.0.0.160}"
-REMOTE_DIR="/data/connect_on_device"
+REMOTE_DIR="/data/connect-on-device"
 LOCAL_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO="catpilot-dev/connect"
+REPO="catpilot-dev/connect-on-device"
 VERSION="$(cat "$LOCAL_DIR/VERSION")"
 TARBALL="cod-v${VERSION}.tar.gz"
 RELEASE_URL="https://github.com/${REPO}/releases/download/v${VERSION}/${TARBALL}"

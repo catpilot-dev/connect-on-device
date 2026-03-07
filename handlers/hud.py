@@ -18,8 +18,8 @@ logger = logging.getLogger("connect")
 # fullname -> {proc, status_file, output, start, end}
 _hud_prerender_tasks: dict = {}
 
-HUD_CACHE_DIR = Path("/data/connect_on_device/hud_cache")
-RENDER_HLS_DIR = Path("/data/connect_on_device/hud_hls_tmp")
+HUD_CACHE_DIR = Path("/data/connect-on-device/hud_cache")
+RENDER_HLS_DIR = Path("/data/connect-on-device/hud_hls_tmp")
 RENDER_SCRIPT_DRM = Path(__file__).parent.parent / "render_clip_drm.py"
 PYTHON_BIN = "/usr/local/venv/bin/python"
 OPENPILOT_DIR = Path("/data/catpilot")

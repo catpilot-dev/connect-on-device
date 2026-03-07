@@ -17,7 +17,7 @@ from aiohttp import web
 
 logger = logging.getLogger("connect")
 
-COD_DIR = '/data/connect_on_device'
+COD_DIR = '/data/connect-on-device'
 VERSION_FILE = os.path.join(COD_DIR, 'VERSION')
 GITHUB_REPO = 'catpilot-dev/connect-on-device'
 GITHUB_API = f'https://api.github.com/repos/{GITHUB_REPO}/releases/latest'
@@ -246,7 +246,7 @@ async def _apply_cod_update(release_info):
         with tarfile.open(tarball_path, 'r:gz') as tar:
             tar.extractall(staging)
 
-        # GitHub tarballs extract to a subdirectory (e.g., OxygenLiu-connect_on_device-abc1234/)
+        # GitHub tarballs extract to a subdirectory (e.g., catpilot-dev-connect-on-device-abc1234/)
         # Custom release assets may extract directly. Find the right root.
         extracted_dirs = [
             d for d in os.listdir(staging)

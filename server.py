@@ -6,7 +6,7 @@ Implements the same REST API as api.comma.ai so the asiusai/connect React
 frontend works unchanged. Serves route data from /data/media/0/realdata/.
 
 Usage:
-  On C3:  /usr/local/venv/bin/python /data/connect_on_device/server.py
+  On C3:  /usr/local/venv/bin/python /data/connect-on-device/server.py
   Local:  python server.py --data-dir ~/driving_data/data
 """
 
@@ -143,7 +143,7 @@ async def _startup(app: web.Application):
     logger.info("Route scan complete, %d routes found", len(store._routes))
 
     # Clean up stale render HLS temp dir (persists on /data across reboots)
-    hls_tmp = Path("/data/connect_on_device/hud_hls_tmp")
+    hls_tmp = Path("/data/connect-on-device/hud_hls_tmp")
     if hls_tmp.exists():
         import shutil
         shutil.rmtree(hls_tmp, ignore_errors=True)

@@ -29,8 +29,8 @@ def _decimal_to_dms(decimal):
     return (IFDRational(d), IFDRational(m), IFDRational(int(s * 100), 100))
 
 
-FCAMERA_CACHE_DIR = "/data/connect_on_device/cache"
-HLS_CACHE_DIR = Path("/data/connect_on_device/cache/qcamera_hls")
+FCAMERA_CACHE_DIR = "/data/connect-on-device/cache"
+HLS_CACHE_DIR = Path("/data/connect-on-device/cache/qcamera_hls")
 
 
 def _generate_hls_segments(store, fullname: str) -> Path | None:
