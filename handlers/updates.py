@@ -144,12 +144,20 @@ async def _git_log_summary(repo_dir, branch, max_lines=5):
     return stdout.decode().strip()
 
 
+async def _get_target_branch():
+    """Get the target branch for plugins — aligned to catpilot's branch."""
+    if os.path.isdir(os.path.join(OPENPILOT_DIR, '.git')):
+        catpilot_branch = await _git_current_branch(OPENPILOT_DIR)
+        return catpilot_branch
+    return await _git_current_branch(PLUGIN_REPO_DIR)
+
+
 async def _check_plugins():
     """Check plugin git repo for updates. Returns status dict or None."""
     if not os.path.isdir(os.path.join(PLUGIN_REPO_DIR, '.git')):
         return None
 
-    branch = await _git_current_branch(PLUGIN_REPO_DIR)
+    branch = await _get_target_branch()
 
     if not await _git_fetch(PLUGIN_REPO_DIR):
         current = await _git_rev_parse(PLUGIN_REPO_DIR, 'HEAD')
@@ -280,12 +288,12 @@ async def _apply_cod_update(release_info):
 # ─── Plugin apply: git reset + install.sh ────────────────────────────
 
 async def _apply_plugin_update():
-    """Pull plugin updates: reset to origin/<branch> + run install.sh.
+    """Pull plugin updates: align to catpilot branch, reset + run install.sh.
 
     Returns dict with ok, changed keys.
     """
     head_before = await _git_rev_parse(PLUGIN_REPO_DIR, 'HEAD')
-    branch = await _git_current_branch(PLUGIN_REPO_DIR)
+    branch = await _get_target_branch()
 
     proc = await asyncio.create_subprocess_exec(
         'git', '-C', PLUGIN_REPO_DIR, 'reset', '--hard', f'origin/{branch}',
