@@ -14,6 +14,7 @@ Only one stream can be active at a time since DRM requires exclusive display acc
 import asyncio
 import logging
 import os
+import queue
 import shutil
 import signal
 import stat
@@ -151,9 +152,8 @@ class HudStreamManager:
         self._prefix = None
         self._lock = asyncio.Lock()
         self._mode = None       # "hls" | "ws"
-        # WebSocket streaming state
-        self._ws_queue: asyncio.Queue | None = None
-        self._ws_loop: asyncio.AbstractEventLoop | None = None
+        # WebSocket streaming state (thread-safe queue for cross-thread FIFO→WS delivery)
+        self._ws_queue: queue.Queue | None = None
         self._fifo_thread: threading.Thread | None = None
         self._fifo_stop = threading.Event()
 
@@ -204,8 +204,7 @@ class HudStreamManager:
 
         loop = asyncio.get_event_loop()
         if mode == "ws":
-            self._ws_queue = asyncio.Queue(maxsize=200)
-            self._ws_loop = loop
+            self._ws_queue = queue.Queue(maxsize=200)
             loop.run_in_executor(
                 None, self._start_sync_ws, route_name, local_id, dongle_id,
                 data_dir, start_sec, max_seg, hd,
@@ -404,42 +403,42 @@ class HudStreamManager:
     def _fifo_reader(self, fifo_path: str):
         """Thread: reads fMP4 chunks from FIFO and enqueues for WebSocket delivery."""
         try:
+            logger.info("FIFO reader opening %s", fifo_path)
             with open(fifo_path, "rb") as f:
+                logger.info("FIFO reader connected")
                 while not self._fifo_stop.is_set():
                     chunk = f.read(WS_CHUNK_SIZE)
                     if not chunk:
                         break
-                    if self._ws_loop and self._ws_queue:
-                        self._ws_loop.call_soon_threadsafe(
-                            self._ws_queue_put, chunk)
+                    if self._ws_queue is not None:
+                        try:
+                            self._ws_queue.put_nowait(chunk)
+                        except queue.Full:
+                            # Drop oldest to prevent backpressure stall
+                            try:
+                                self._ws_queue.get_nowait()
+                            except queue.Empty:
+                                pass
+                            try:
+                                self._ws_queue.put_nowait(chunk)
+                            except queue.Full:
+                                pass
+            logger.info("FIFO reader finished (EOF)")
         except Exception as e:
             if not self._fifo_stop.is_set():
                 logger.error("FIFO reader error: %s", e)
-
-    def _ws_queue_put(self, chunk: bytes):
-        """Put chunk into queue, dropping oldest if full."""
-        if self._ws_queue is None:
-            return
-        try:
-            self._ws_queue.put_nowait(chunk)
-        except asyncio.QueueFull:
-            # Drop oldest chunk to prevent backpressure stall
-            try:
-                self._ws_queue.get_nowait()
-            except asyncio.QueueEmpty:
-                pass
-            try:
-                self._ws_queue.put_nowait(chunk)
-            except asyncio.QueueFull:
-                pass
 
     async def ws_get_chunk(self, timeout: float = 5.0) -> bytes | None:
         """Get next fMP4 chunk for WebSocket delivery. Returns None on timeout/closed."""
         if not self._ws_queue:
             return None
+        loop = asyncio.get_event_loop()
         try:
-            return await asyncio.wait_for(self._ws_queue.get(), timeout=timeout)
-        except (asyncio.TimeoutError, asyncio.CancelledError):
+            return await asyncio.wait_for(
+                loop.run_in_executor(None, self._ws_queue.get, True, timeout),
+                timeout=timeout + 1,
+            )
+        except (asyncio.TimeoutError, asyncio.CancelledError, queue.Empty):
             return None
 
     def _start_sync_drm(self, route_name, local_id, dongle_id, data_dir, start_sec, max_seg, hd=False):
@@ -544,7 +543,6 @@ class HudStreamManager:
             self._fifo_thread.join(timeout=3)
         self._fifo_thread = None
         self._ws_queue = None
-        self._ws_loop = None
 
         # Terminate child processes
         for p in self._procs:
