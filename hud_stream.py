@@ -156,6 +156,13 @@ class HudStreamManager:
         self._ws_queue: queue.Queue | None = None
         self._fifo_thread: threading.Thread | None = None
         self._fifo_stop = threading.Event()
+        # Replay watchdog state
+        self._replay_proc = None
+        self._replay_cmd = None
+        self._replay_env = None
+        self._replay_start_sec = 0
+        self._replay_monitor_stop = threading.Event()
+        self._replay_monitor_thread: threading.Thread | None = None
 
     @property
     def status(self) -> dict:
@@ -266,10 +273,11 @@ class HudStreamManager:
         replay_env["TERM"] = "xterm"
         replay_env["OPENPILOT_PREFIX"] = self._prefix
 
+        self._replay_start_sec = int(max(start_sec, 0))
         replay_cmd = [
             REPLAY_BIN, "-c", "1",
             "--no-hw-decoder",
-            "-s", str(int(max(start_sec, 0))),
+            "-s", str(self._replay_start_sec),
             "-x", str(DRM_REPLAY_SPEED),
             "--data_dir", self._symlink_dir,
             "--prefix", self._prefix,
@@ -278,12 +286,34 @@ class HudStreamManager:
         if not hd:
             replay_cmd.insert(3, "--qcam")
 
+        self._replay_cmd = replay_cmd
+        self._replay_env = replay_env
+
+        if not self._launch_replay():
+            return False
+
+        cam_mode = "fcamera+SW" if hd else "qcam+SW"
+        logger.info("Replay ready for %s (%s, %.1fx)", route_name, cam_mode, DRM_REPLAY_SPEED)
+        return True
+
+    def _launch_replay(self, start_sec: int | None = None) -> bool:
+        """Launch (or re-launch) the replay process. Returns True if replay becomes ready."""
+        if start_sec is not None:
+            # Update -s flag in the command
+            self._replay_start_sec = start_sec
+            for i, arg in enumerate(self._replay_cmd):
+                if arg == "-s" and i + 1 < len(self._replay_cmd):
+                    self._replay_cmd[i + 1] = str(start_sec)
+                    break
+
         replay_proc = subprocess.Popen(
-            replay_cmd,
-            env=replay_env,
+            self._replay_cmd,
+            env=self._replay_env,
             stdout=subprocess.DEVNULL,
             stderr=open("/tmp/hud_replay.log", "w"),
         )
+        self._replay_proc = replay_proc
+        # Keep in _procs list for cleanup
         self._procs.append(replay_proc)
 
         # Wait for replay to create cereal sockets
@@ -304,10 +334,35 @@ class HudStreamManager:
             self._error = "Replay failed to start"
             self._cleanup_sync()
             return False
-
-        cam_mode = "fcamera+SW" if hd else "qcam+SW"
-        logger.info("Replay ready for %s (%s, %.1fx)", route_name, cam_mode, DRM_REPLAY_SPEED)
         return True
+
+    def _replay_monitor(self):
+        """Watchdog thread: restarts replay if it crashes on a corrupt segment."""
+        max_restarts = 5
+        restarts = 0
+        while not self._replay_monitor_stop.is_set():
+            if self._replay_proc is None:
+                break
+            ret = self._replay_proc.poll()
+            if ret is not None and ret != 0 and self._status == "streaming":
+                restarts += 1
+                if restarts > max_restarts:
+                    logger.error("Replay crashed %d times, giving up", restarts)
+                    break
+                # Skip ahead 60s past the corrupt segment
+                next_sec = self._replay_start_sec + 60
+                logger.warning("Replay crashed (exit %d), restarting at offset %ds (attempt %d/%d)",
+                               ret, next_sec, restarts, max_restarts)
+                try:
+                    self._launch_replay(start_sec=next_sec)
+                    logger.info("Replay restarted successfully at offset %ds", next_sec)
+                except Exception as e:
+                    logger.error("Failed to restart replay: %s", e)
+                    break
+            elif ret is not None:
+                # Clean exit or not streaming
+                break
+            self._replay_monitor_stop.wait(2.0)
 
     def _start_sync_ws(self, route_name, local_id, dongle_id, data_dir, start_sec, max_seg, hd=False):
         """WebSocket mode: replay(1x) → UI(RECORD_FRAG_MP4) → FIFO → WebSocket."""
@@ -383,6 +438,11 @@ class HudStreamManager:
                 quality = "HD" if hd else "SD"
                 logger.info("WebSocket streaming active for %s (%s, codec=%s)",
                             route_name, quality, codec)
+                # Start replay watchdog — auto-restarts on corrupt segment crashes
+                self._replay_monitor_stop.clear()
+                self._replay_monitor_thread = threading.Thread(
+                    target=self._replay_monitor, daemon=True)
+                self._replay_monitor_thread.start()
             else:
                 self._status = "error"
                 self._error = "fMP4 output not generated"
@@ -537,6 +597,15 @@ class HudStreamManager:
 
     def _cleanup_sync(self):
         """Kill all child processes, restore display, clean up temp files."""
+        # Stop replay monitor thread
+        self._replay_monitor_stop.set()
+        if self._replay_monitor_thread and self._replay_monitor_thread.is_alive():
+            self._replay_monitor_thread.join(timeout=3)
+        self._replay_monitor_thread = None
+        self._replay_proc = None
+        self._replay_cmd = None
+        self._replay_env = None
+
         # Stop FIFO reader thread
         self._fifo_stop.set()
         if self._fifo_thread and self._fifo_thread.is_alive():
