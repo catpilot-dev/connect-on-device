@@ -122,13 +122,19 @@ def _find_rlog(data_dir: str, local_id: str) -> str | None:
 
 
 def _hw_encoder_available() -> bool:
-    """Check if h264_v4l2m2m hardware encoder is available."""
+    """Check if h264_v4l2m2m hardware encoder actually works (not just listed).
+
+    The encoder may appear in ffmpeg -encoders but fail to open the V4L2 device
+    (e.g. kernel 4.9 on Snapdragon 845 has VIDC but not full M2M support).
+    """
     try:
         r = subprocess.run(
-            ["ffmpeg", "-hide_banner", "-encoders"],
-            capture_output=True, text=True, timeout=5,
+            ["ffmpeg", "-y", "-f", "lavfi", "-i", "nullsrc=s=320x240:d=0.1:r=1",
+             "-vf", "format=yuv420p", "-c:v", "h264_v4l2m2m",
+             "-f", "null", "/dev/null"],
+            capture_output=True, text=True, timeout=10,
         )
-        return "h264_v4l2m2m" in r.stdout
+        return r.returncode == 0
     except Exception:
         return False
 
@@ -324,10 +330,14 @@ class HudStreamManager:
             record_skip = 9 if hd else DRM_RECORD_SKIP
             ui_fps = 20 if hd else DRM_UI_FPS
 
+            # Downscale to 1080x540 for SW encoding — 4x less pixels to encode
+            vf_scale = "scale=1080:540" if codec == WS_SW_CODEC else ""
+
             ui_env = {
                 "RECORD": "1",
                 "RECORD_FRAG_MP4": "1",
                 "RECORD_CODEC": codec,
+                "RECORD_VF": vf_scale,
                 "RECORD_OUTPUT": fifo,
                 "FPS": str(ui_fps),
                 "RECORD_SKIP": str(record_skip),
