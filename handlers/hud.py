@@ -24,60 +24,25 @@ RENDER_SCRIPT_DRM = Path(__file__).parent.parent / "render_clip_drm.py"
 PYTHON_BIN = "/usr/local/venv/bin/python"
 OPENPILOT_DIR = Path("/data/openpilot")
 REPLAY_BIN = OPENPILOT_DIR / "tools/replay/replay"
-DRM_RAYLIB_PATH = Path("/data/pip_packages/raylib")
-
-DRM_RAYLIB_PATH_STR = "/data/pip_packages"
 
 
-def _is_ui_running() -> bool:
-    """Check if the production openpilot UI process is running."""
-    result = subprocess.run(["pgrep", "-f", "selfdrive.ui.ui"],
-                            capture_output=True)
+def _is_manager_running() -> bool:
+    """Check if openpilot manager is running."""
+    result = subprocess.run(["pgrep", "-f", "manager.py"], capture_output=True)
     return result.returncode == 0
 
 
-def _start_production_ui():
-    """Start the production openpilot UI process."""
-    ui_env = os.environ.copy()
-    ui_env["PYTHONPATH"] = f"{OPENPILOT_DIR}:{DRM_RAYLIB_PATH_STR}"
-    ui_env["PATH"] = "/usr/local/venv/bin:/usr/local/bin:/usr/bin:/bin"
-    ui_env["HOME"] = os.environ.get("HOME", "/root")
-    try:
-        subprocess.Popen(
-            [str(PYTHON_BIN), "-m", "selfdrive.ui.ui"],
-            cwd=str(OPENPILOT_DIR),
-            env=ui_env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
-        logger.info("Production UI started")
-    except Exception as e:
-        logger.error("Failed to start production UI: %s", e)
-
-
-async def _ensure_production_ui(max_retries: int = 3, delay: float = 2.0):
-    """Verify production UI is running after HUD cleanup; retry if not.
-
-    Called after cancel/stop to guarantee the C3 display is restored.
-    """
+async def _ensure_manager():
+    """Verify openpilot manager is running after HUD cleanup; restart if not."""
+    from hud_stream import _start_manager
     loop = asyncio.get_event_loop()
-    for attempt in range(max_retries):
-        await asyncio.sleep(delay)
-        running = await loop.run_in_executor(None, _is_ui_running)
-        if running:
-            logger.info("Production UI verified running (attempt %d)", attempt + 1)
-            return
-        logger.warning("Production UI not running (attempt %d/%d), restarting...",
-                        attempt + 1, max_retries)
-        await loop.run_in_executor(None, _start_production_ui)
-    # Final check
-    await asyncio.sleep(delay)
-    running = await loop.run_in_executor(None, _is_ui_running)
+    await asyncio.sleep(2)
+    running = await loop.run_in_executor(None, _is_manager_running)
     if running:
-        logger.info("Production UI restored after retries")
-    else:
-        logger.error("Failed to restore production UI after %d retries", max_retries)
+        logger.info("Manager verified running")
+        return
+    logger.warning("Manager not running, restarting...")
+    await loop.run_in_executor(None, _start_manager)
 
 
 async def _verify_replay_binary():
@@ -160,11 +125,13 @@ def _is_drm_available() -> bool:
     """Check if DRM backend is available for recording.
 
     DRM mode requires:
-    1. DRM raylib package installed (/data/pip_packages/raylib)
+    1. raylib package installed (system venv)
     2. The render_clip_drm.py script exists
     3. The raylib UI script exists (selfdrive/ui/ui.py)
     """
-    if not DRM_RAYLIB_PATH.is_dir():
+    try:
+        import raylib
+    except ImportError:
         return False
     if not RENDER_SCRIPT_DRM.exists():
         return False
@@ -372,7 +339,7 @@ async def handle_hud_cancel(request: web.Request) -> web.Response:
     task = _hud_prerender_tasks.get(fullname)
     if not task:
         # No active task — still verify UI is running (may have been orphaned)
-        asyncio.create_task(_ensure_production_ui(max_retries=1, delay=1.0))
+        asyncio.create_task(_ensure_manager())
         return web.json_response({"status": "idle"})
 
     proc = task.get("proc")
@@ -408,7 +375,7 @@ async def handle_hud_cancel(request: web.Request) -> web.Response:
     del _hud_prerender_tasks[fullname]
 
     # Verify production UI is restored (non-blocking — runs in background)
-    asyncio.create_task(_ensure_production_ui())
+    asyncio.create_task(_ensure_manager())
 
     return web.json_response({"status": "cancelled"})
 
@@ -487,7 +454,7 @@ async def handle_hud_stream_stop(request: web.Request) -> web.Response:
     if mgr:
         await mgr.stop()
         # Verify production UI is restored after stream cleanup
-        asyncio.create_task(_ensure_production_ui())
+        asyncio.create_task(_ensure_manager())
     return web.json_response({"status": "idle"})
 
 
@@ -584,7 +551,7 @@ async def handle_screencast_start(request: web.Request) -> web.Response:
     # Launch screencast process
     python_bin = PYTHON_BIN if os.path.isfile(PYTHON_BIN) else "python3"
     env = os.environ.copy()
-    env["PYTHONPATH"] = f"{OPENPILOT_DIR}:/data/pip_packages"
+    env["PYTHONPATH"] = str(OPENPILOT_DIR)
     env["PATH"] = "/usr/local/venv/bin:/usr/local/bin:/usr/bin:/bin"
 
     _screencast_proc = subprocess.Popen(
@@ -669,7 +636,7 @@ async def handle_screencast_stop(request: web.Request) -> web.Response:
     else:
         # Process already dead — make sure production UI is restored
         _screencast_proc = None
-        asyncio.create_task(_ensure_production_ui(max_retries=1, delay=1.0))
+        asyncio.create_task(_ensure_manager())
 
     return web.json_response({"status": "idle"})
 

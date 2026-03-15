@@ -43,7 +43,6 @@ from tools.clip.run import populate_car_params, wait_for_frames, check_for_failu
 REPLAY_BIN = str(Path(OPENPILOT_DIR, "tools/replay/replay").resolve())
 UI_SCRIPT = "selfdrive/ui/ui.py"
 PYTHON_BIN = "/usr/local/venv/bin/python"
-DRM_RAYLIB_PATH = "/data/pip_packages"
 
 # C3 GPU readback bottleneck: load_image_from_texture() + 9.3MB stdin write per frame
 # limits actual capture to ~2-3fps at 2160x1080. At 0.2x replay speed, each route-second
@@ -146,42 +145,49 @@ def find_rlog(data_dir: str, local_id: str) -> str | None:
     return None
 
 
-def stop_production_ui():
-    """Stop the production openpilot UI to free up DRM master."""
-    print("Stopping production UI...", file=sys.stderr)
-    subprocess.run(["pkill", "-f", "selfdrive.ui.ui"], capture_output=True)
+MANAGER_CWD = os.path.join(OPENPILOT_DIR, "system/manager")
+
+
+def stop_manager():
+    """Stop openpilot manager (and all children) to free DRM master."""
+    print("Stopping openpilot manager...", file=sys.stderr)
+    subprocess.run(["pkill", "-f", "manager.py"], capture_output=True)
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        r = subprocess.run(["pgrep", "-f", "manager.py"], capture_output=True)
+        if r.returncode != 0:
+            break
+        time.sleep(0.3)
+    else:
+        subprocess.run(["pkill", "-9", "-f", "manager.py"], capture_output=True)
+        time.sleep(0.5)
+    subprocess.run(["pkill", "-9", "-f", "selfdrive.ui.ui"], capture_output=True)
     time.sleep(1)
 
 
-def restart_production_ui():
-    """Restart the production UI after HUD rendering.
-
-    Manager uses multiprocessing.Process for UI — externally killed processes
-    leave a stale self.proc object, so manager can't detect the death and won't
-    restart it (UI has no watchdog_max_dt). We start the UI ourselves.
-    """
-    print("Restarting production UI...", file=sys.stderr)
+def start_manager():
+    """Restart openpilot manager after HUD rendering."""
+    print("Restarting openpilot manager...", file=sys.stderr)
     subprocess.run(["pkill", "-f", "selfdrive.ui.ui"], capture_output=True)
-    time.sleep(1)
+    time.sleep(0.5)
 
-    # Start UI directly — mirrors manager's PythonProcess("ui", "selfdrive.ui.ui")
-    ui_env = os.environ.copy()
-    ui_env["PYTHONPATH"] = f"{OPENPILOT_DIR}:{DRM_RAYLIB_PATH}"
-    ui_env["PATH"] = f"/usr/local/venv/bin:/usr/local/bin:/usr/bin:/bin"
-    ui_env["HOME"] = os.environ.get("HOME", "/root")
+    env = os.environ.copy()
+    env["PYTHONPATH"] = OPENPILOT_DIR
+    env["PATH"] = "/usr/local/venv/bin:/usr/local/bin:/usr/bin:/bin"
+    env["HOME"] = os.environ.get("HOME", "/root")
 
     try:
         Popen(
-            [PYTHON_BIN, "-m", "selfdrive.ui.ui"],
-            cwd=OPENPILOT_DIR,
-            env=ui_env,
+            [PYTHON_BIN, "./manager.py"],
+            cwd=MANAGER_CWD,
+            env=env,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            start_new_session=True,  # detach from our process group
+            start_new_session=True,
         )
-        print("Production UI started", file=sys.stderr)
+        print("Manager started", file=sys.stderr)
     except Exception as e:
-        print(f"Failed to start production UI: {e}", file=sys.stderr)
+        print(f"Failed to start manager: {e}", file=sys.stderr)
 
 
 def cleanup_procs(*procs):
@@ -280,7 +286,7 @@ def main():
             # Stop production UI to free DRM master
             write_status(args.status_file, {"status": "rendering", "elapsed_sec": 0,
                                             "total_sec": duration, "phase": "acquiring display"})
-            stop_production_ui()
+            stop_manager()
 
             # Start replay at 0.2x speed — slow enough for 2fps GPU capture to get 10 unique frames/route-sec
             # Warm up a few seconds early so UI has data when recording starts
@@ -329,7 +335,7 @@ def main():
                 "RECORD_CRF": "10",  # Near-lossless first pass; post-processing is the single lossy encode
                 "FPS": str(RECORD_FPS),
                 "BIG": "1",  # Force 2160x1080 layout
-                "PYTHONPATH": f"{OPENPILOT_DIR}:{DRM_RAYLIB_PATH}",
+                "PYTHONPATH": OPENPILOT_DIR,
                 "OPENPILOT_PREFIX": prefix,
                 "PATH": f"/usr/local/venv/bin:/usr/local/bin:/usr/bin:/bin",
                 "HOME": os.environ.get("HOME", "/root"),
@@ -521,7 +527,7 @@ def main():
     finally:
         sd_stop.set()
         cleanup_procs(replay_proc, ui_proc)
-        restart_production_ui()
+        start_manager()
         # Clean up temp files
         try:
             import shutil

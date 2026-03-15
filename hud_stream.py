@@ -28,25 +28,26 @@ OPENPILOT_DIR = "/data/openpilot"
 REPLAY_BIN = os.path.join(OPENPILOT_DIR, "tools/replay/replay")
 
 # DRM mode constants
-DRM_RAYLIB_PATH = "/data/pip_packages"
 PYTHON_BIN = "/usr/local/venv/bin/python"
 UI_SCRIPT = "selfdrive/ui/ui.py"
 DRM_REPLAY_SPEED = 1.0   # Real-time replay
-DRM_UI_FPS = 20          # UI renders at 20fps for smooth device display
-DRM_RECORD_SKIP = 3      # Capture every 4th frame → 5fps HLS output
+DRM_UI_FPS = 5           # UI renders at 5fps (C3 GPU limited to ~2.4fps)
+DRM_RECORD_SKIP = 0      # Capture every frame
 
 # HLS output
 HLS_DIR = Path("/tmp/hud_live")
-HLS_TIME = 0.2        # seconds per segment (1 frame at 5fps)
-HLS_LIST_SIZE = 15    # segments in playlist (~3s buffer)
+HLS_TIME = 2          # seconds per segment
+HLS_LIST_SIZE = 5     # segments in playlist (~10s buffer)
 
 
 def _is_drm_available() -> bool:
     """Check if DRM streaming mode can be used."""
-    return (
-        Path(DRM_RAYLIB_PATH, "raylib").is_dir() and
-        Path(OPENPILOT_DIR, UI_SCRIPT).is_file()
-    )
+    try:
+        import raylib
+        has_raylib = True
+    except ImportError:
+        has_raylib = False
+    return has_raylib and Path(OPENPILOT_DIR, UI_SCRIPT).is_file()
 
 
 def is_available() -> bool:
@@ -55,51 +56,54 @@ def is_available() -> bool:
 
 
 
-def _stop_production_ui():
-    """Stop the production openpilot UI to free up DRM master."""
-    logger.info("Stopping production UI...")
-    subprocess.run(["pkill", "-f", "selfdrive.ui.ui"], capture_output=True)
-    # Wait for process to fully exit and release DRM resources.
-    # SIGTERM may take time; escalate to SIGKILL if still alive.
-    deadline = time.monotonic() + 3
+MANAGER_CMD = [PYTHON_BIN, "./manager.py"]
+MANAGER_CWD = os.path.join(OPENPILOT_DIR, "system/manager")
+
+
+def _stop_manager():
+    """Stop openpilot manager (and all its children including UI) to free DRM master."""
+    logger.info("Stopping openpilot manager...")
+    # Kill the manager process tree — this stops UI, pandad, plugind, etc.
+    subprocess.run(["pkill", "-f", "manager.py"], capture_output=True)
+    deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
-        r = subprocess.run(["pgrep", "-f", "selfdrive.ui.ui"], capture_output=True)
+        r = subprocess.run(["pgrep", "-f", "manager.py"], capture_output=True)
         if r.returncode != 0:
             break
         time.sleep(0.3)
     else:
-        subprocess.run(["pkill", "-9", "-f", "selfdrive.ui.ui"], capture_output=True)
+        subprocess.run(["pkill", "-9", "-f", "manager.py"], capture_output=True)
         time.sleep(0.5)
-
-
-def _restart_production_ui():
-    """Restart the production UI after HUD streaming.
-
-    Manager uses multiprocessing.Process for UI - externally killed processes
-    leave a stale self.proc object, so manager can't detect the death and won't
-    restart it (UI has no watchdog_max_dt). We start the UI ourselves.
-    """
-    logger.info("Restarting production UI...")
-    subprocess.run(["pkill", "-f", "selfdrive.ui.ui"], capture_output=True)
+    # Also ensure UI is dead (child may linger)
+    subprocess.run(["pkill", "-9", "-f", "selfdrive.ui.ui"], capture_output=True)
     time.sleep(1)
+    logger.info("Manager stopped")
 
-    ui_env = os.environ.copy()
-    ui_env["PYTHONPATH"] = f"{OPENPILOT_DIR}:{DRM_RAYLIB_PATH}"
-    ui_env["PATH"] = "/usr/local/venv/bin:/usr/local/bin:/usr/bin:/bin"
-    ui_env["HOME"] = os.environ.get("HOME", "/root")
+
+def _start_manager():
+    """Restart openpilot manager after HUD operations."""
+    logger.info("Restarting openpilot manager...")
+    # Kill any leftover UI/replay processes
+    subprocess.run(["pkill", "-f", "selfdrive.ui.ui"], capture_output=True)
+    time.sleep(0.5)
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = OPENPILOT_DIR
+    env["PATH"] = "/usr/local/venv/bin:/usr/local/bin:/usr/bin:/bin"
+    env["HOME"] = os.environ.get("HOME", "/root")
 
     try:
         subprocess.Popen(
-            [PYTHON_BIN, "-m", "selfdrive.ui.ui"],
-            cwd=OPENPILOT_DIR,
-            env=ui_env,
+            MANAGER_CMD,
+            cwd=MANAGER_CWD,
+            env=env,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
-        logger.info("Production UI started")
+        logger.info("Manager started")
     except Exception as e:
-        logger.error("Failed to start production UI: %s", e)
+        logger.error("Failed to start manager: %s", e)
 
 
 def _find_rlog(data_dir: str, local_id: str) -> str | None:
@@ -220,7 +224,7 @@ class HudStreamManager:
             os.makedirs(f"/dev/shm/msgq_{self._prefix}", exist_ok=True)
 
             # Stop production UI to free DRM master
-            _stop_production_ui()
+            _stop_manager()
 
             # Start replay at 1x speed with qcam + SW decoder (reliable)
             canonical = f"{dongle_id}|{local_id}"
@@ -277,7 +281,7 @@ class HudStreamManager:
                 "FPS": str(DRM_UI_FPS),
                 "RECORD_SKIP": str(DRM_RECORD_SKIP),
                 "BIG": "1",  # Force 2160x1080 layout
-                "PYTHONPATH": f"{OPENPILOT_DIR}:{DRM_RAYLIB_PATH}",
+                "PYTHONPATH": OPENPILOT_DIR,
                 "OPENPILOT_PREFIX": self._prefix,
                 "PATH": "/usr/local/venv/bin:/usr/local/bin:/usr/bin:/bin",
                 "HOME": os.environ.get("HOME", "/root"),
@@ -302,7 +306,7 @@ class HudStreamManager:
 
             # Wait for first HLS segment to appear
             m3u8_path = HLS_DIR / "stream.m3u8"
-            deadline = time.monotonic() + 30
+            deadline = time.monotonic() + 60
             while time.monotonic() < deadline:
                 if m3u8_path.exists() and m3u8_path.stat().st_size > 20:
                     break
@@ -376,7 +380,7 @@ class HudStreamManager:
             self._op_prefix = None
 
         # Restart production UI
-        _restart_production_ui()
+        _start_manager()
 
         # Clean up symlink directory
         if self._symlink_dir:
