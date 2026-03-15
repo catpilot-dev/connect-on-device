@@ -17,8 +17,7 @@ import sys
 import threading
 import time
 
-OPENPILOT_DIR = "/data/openpilot"
-REALDATA_DIR = "/data/media/0/realdata"
+from config import OPENPILOT_DIR, REALDATA_DIR
 CONTROL_PORT = 8090
 FPS = 20
 SCREEN_W = 2160

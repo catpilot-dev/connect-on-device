@@ -29,8 +29,10 @@ def _decimal_to_dms(decimal):
     return (IFDRational(d), IFDRational(m), IFDRational(int(s * 100), 100))
 
 
-FCAMERA_CACHE_DIR = "/data/connect-on-device/cache"
-HLS_CACHE_DIR = Path("/data/connect-on-device/cache/qcamera_hls")
+from config import COD_CACHE_DIR, OPENPILOT_DIR as _OPENPILOT_DIR
+
+FCAMERA_CACHE_DIR = COD_CACHE_DIR
+HLS_CACHE_DIR = Path(COD_CACHE_DIR) / "qcamera_hls"
 
 
 def _generate_hls_segments(store, fullname: str) -> Path | None:
@@ -287,8 +289,8 @@ def _load_calibration(seg_dir: Path) -> dict | None:
     try:
         # Lazy import — only needed on C3 where openpilot is installed
         import sys
-        if "/data/openpilot" not in sys.path:
-            sys.path.insert(0, "/data/openpilot")
+        if _OPENPILOT_DIR not in sys.path:
+            sys.path.insert(0, _OPENPILOT_DIR)
         from tools.lib.logreader import LogReader
 
         calib = None

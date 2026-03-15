@@ -137,7 +137,8 @@ def run_cleanup(store) -> dict:
                 break
 
     # ── HLS cache eviction: keep only the most recent route ─────────────
-    hls_cache = Path("/data/connect-on-device/cache/qcamera_hls")
+    from config import COD_CACHE_DIR
+    hls_cache = Path(COD_CACHE_DIR) / "qcamera_hls"
     if hls_cache.exists():
         cached = sorted(hls_cache.iterdir(), key=lambda d: d.stat().st_mtime, reverse=True)
         for d in cached[1:]:  # evict all but newest

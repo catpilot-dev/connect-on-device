@@ -17,14 +17,12 @@ from aiohttp import web
 
 logger = logging.getLogger("connect")
 
-COD_DIR = '/data/connect-on-device'
+from config import (COD_DIR, PLUGINS_REPO_DIR as PLUGIN_REPO_DIR, OPENPILOT_DIR,
+                     BUILD_HASH_FILE)
+
 VERSION_FILE = os.path.join(COD_DIR, 'VERSION')
 GITHUB_REPO = 'catpilot-dev/connect-on-device'
 GITHUB_API = f'https://api.github.com/repos/{GITHUB_REPO}/releases/latest'
-
-PLUGIN_REPO_DIR = '/data/plugins'
-OPENPILOT_DIR = '/data/openpilot'
-BUILD_HASH_FILE = '/tmp/plugin_build_hash'
 
 CACHE_TTL = 600  # 10 minutes
 FETCH_TIMEOUT = 15  # seconds

@@ -32,7 +32,7 @@ from subprocess import Popen
 # Handle SIGTERM gracefully — raises SystemExit so finally blocks run
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(1))
 
-OPENPILOT_DIR = "/data/openpilot"
+from config import OPENPILOT_DIR, PYTHON_BIN, COD_HLS_TMP_DIR, PARAMS_BASE
 if OPENPILOT_DIR not in sys.path:
     sys.path.insert(0, OPENPILOT_DIR)
 
@@ -42,7 +42,6 @@ from tools.clip.run import populate_car_params, wait_for_frames, check_for_failu
 
 REPLAY_BIN = str(Path(OPENPILOT_DIR, "tools/replay/replay").resolve())
 UI_SCRIPT = "selfdrive/ui/ui.py"
-PYTHON_BIN = "/usr/local/venv/bin/python"
 
 # C3 GPU readback bottleneck: load_image_from_texture() + 9.3MB stdin write per frame
 # limits actual capture to ~2-3fps at 2160x1080. At 0.2x replay speed, each route-second
@@ -52,7 +51,7 @@ PYTHON_BIN = "/usr/local/venv/bin/python"
 RECORD_FPS = 2
 REPLAY_SPEED = 0.2
 SPEEDUP_FACTOR = 1.0 / REPLAY_SPEED  # 5x
-HLS_DIR = "/data/connect-on-device/hud_hls_tmp"
+HLS_DIR = COD_HLS_TMP_DIR
 SECONDS_TO_WARM = 2
 
 
@@ -534,7 +533,7 @@ def main():
             shutil.rmtree(symlink_dir, ignore_errors=True)
             shutil.rmtree(f"/dev/shm/{prefix}", ignore_errors=True)
             shutil.rmtree(f"/dev/shm/msgq_{prefix}", ignore_errors=True)
-            shutil.rmtree(f"/data/params/{prefix}", ignore_errors=True)
+            shutil.rmtree(f"{PARAMS_BASE}/{prefix}", ignore_errors=True)
             if os.path.isfile(raw_output):
                 os.unlink(raw_output)
             shutil.rmtree(HLS_DIR, ignore_errors=True)

@@ -4,7 +4,8 @@ import sys
 
 from aiohttp import web
 
-from handler_helpers import PARAMS_DIR, error_response, parse_json, read_param, write_param, read_plugin_param
+from config import OPENPILOT_DIR as _OPENPILOT_DIR, PARAMS_DIR
+from handler_helpers import error_response, parse_json, read_param, write_param, read_plugin_param
 
 logger = logging.getLogger("connect")
 
@@ -18,7 +19,7 @@ async def handle_lateral_delay(request: web.Request) -> web.Response:
         return web.json_response({"status": "no data"})
 
     try:
-        sys.path.insert(0, "/data/openpilot") if "/data/openpilot" not in sys.path else None
+        sys.path.insert(0, _OPENPILOT_DIR) if _OPENPILOT_DIR not in sys.path else None
         from cereal import log
         with log.Event.from_bytes(raw) as msg:
             ld = msg.liveDelay

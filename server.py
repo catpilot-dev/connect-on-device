@@ -143,7 +143,8 @@ async def _startup(app: web.Application):
     logger.info("Route scan complete, %d routes found", len(store._routes))
 
     # Clean up stale render HLS temp dir (persists on /data across reboots)
-    hls_tmp = Path("/data/connect-on-device/hud_hls_tmp")
+    from config import COD_HLS_TMP_DIR
+    hls_tmp = Path(COD_HLS_TMP_DIR)
     if hls_tmp.exists():
         import shutil
         shutil.rmtree(hls_tmp, ignore_errors=True)
