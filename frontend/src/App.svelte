@@ -21,7 +21,7 @@
     if (parts[0] === 'tiles') return 'tiles'
     if (parts[0] === 'settings') return 'settings'
     if (parts[0] === 'plugins') return 'plugins'
-    if (parts[0] === 'dashboard') return 'dashboard'
+    // if (parts[0] === 'dashboard') return 'dashboard'  // disabled for now
     if (parts[0] === 'signals') return 'signals'
     return 'routes'
   }
@@ -57,7 +57,7 @@
     }
 
     // Restore state from URL on load
-    page = isOnroad ? 'dashboard' : parsePage()
+    page = parsePage()
     const initialRoute = parseRoutePath()
     if (initialRoute) selectedRoute.set(initialRoute)
 
@@ -73,11 +73,11 @@
 
     window.addEventListener('popstate', () => {
       const p = parsePage()
-      if (isOnroad && (p === 'routes')) {
-        page = 'dashboard'
-        history.replaceState(null, '', '/dashboard')
-        return
-      }
+      // if (isOnroad && (p === 'routes')) {
+      //   page = 'dashboard'
+      //   history.replaceState(null, '', '/dashboard')
+      //   return
+      // }
       page = p
       const route = parseRoutePath()
       lastRoute = route
@@ -126,9 +126,10 @@
   <SignalBrowserPage />
 {:else if page === 'tiles'}
   <TileManager />
+<!-- Dashboard disabled for now
 {:else if isOnroad && page === 'dashboard'}
-  <!-- Fullscreen dashboard while driving — no header, no chrome -->
   <DashboardPage {isOnroad} />
+-->
 {:else}
   <div class="min-h-dvh flex flex-col">
     <DeviceHeader>
@@ -142,12 +143,14 @@
             Routes
           </button>
           {/if}
+          <!-- Dashboard button disabled for now
           <button
             class="px-3 py-1.5 text-sm rounded transition-colors {page === 'dashboard' ? 'bg-surface-700 text-surface-50' : 'text-surface-400 hover:text-surface-200'}"
             onclick={showDashboard}
           >
             Dashboard
           </button>
+          -->
           <button
             class="px-3 py-1.5 text-sm rounded transition-colors {page === 'settings' ? 'bg-surface-700 text-surface-50' : 'text-surface-400 hover:text-surface-200'}"
             onclick={showSettings}
@@ -179,8 +182,8 @@
             </button>
           </div>
         </div>
-      {:else if page === 'dashboard'}
-        <DashboardPage {isOnroad} />
+      <!-- {:else if page === 'dashboard'}
+        <DashboardPage {isOnroad} /> -->
       {:else if page === 'settings'}
         <SettingsPage {isOnroad} />
       {:else if page === 'plugins'}
