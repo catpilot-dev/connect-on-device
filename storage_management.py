@@ -136,6 +136,10 @@ def run_cleanup(store) -> dict:
             if free >= EMERGENCY_BYTES:
                 break
 
+    # ── Screenshots: cap at 500MB, delete oldest when exceeded ──────────
+    from handlers.screenshots import SCREENSHOTS_DIR
+    _cleanup_screenshots(SCREENSHOTS_DIR)
+
     # ── HLS cache eviction: keep only the most recent route ─────────────
     from config import COD_CACHE_DIR
     hls_cache = Path(COD_CACHE_DIR) / "qcamera_hls"
@@ -149,6 +153,42 @@ def run_cleanup(store) -> dict:
         store._save_metadata()
 
     return {"free_bytes": free, "deleted": deleted}
+
+
+SCREENSHOT_MAX_BYTES = 500 * 1024 * 1024  # 500 MB cap for screenshots
+
+
+def _cleanup_screenshots(screenshots_dir: str):
+    """Delete oldest screenshots when total size exceeds cap."""
+    if not os.path.isdir(screenshots_dir):
+        return
+    files = []
+    total = 0
+    for name in os.listdir(screenshots_dir):
+        if not name.lower().endswith('.png'):
+            continue
+        path = os.path.join(screenshots_dir, name)
+        try:
+            stat = os.stat(path)
+            files.append((path, stat.st_mtime, stat.st_size))
+            total += stat.st_size
+        except OSError:
+            continue
+
+    if total <= SCREENSHOT_MAX_BYTES:
+        return
+
+    # Sort oldest first
+    files.sort(key=lambda f: f[1])
+    for path, _, size in files:
+        if total <= SCREENSHOT_MAX_BYTES:
+            break
+        try:
+            os.remove(path)
+            total -= size
+            logger.info("Cleanup: deleted screenshot %s", os.path.basename(path))
+        except OSError:
+            pass
 
 
 def _delete_route_from_disk(store, local_id: str):
