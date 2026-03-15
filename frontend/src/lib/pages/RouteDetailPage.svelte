@@ -1,7 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte'
   import { selectedRoute, dongleId, isMetric } from '../stores.js'
-  import { fetchRoute, fetchRouteFiles, fetchAllCoords, fetchAllEventsWithProgress, enrichRoute, startHudStream, stopHudStream, hudStreamStatus, hudStreamUrl, prerenderHud, hudProgress, hudVideoUrl, cancelHudRender, saveNote, addBookmark, updateBookmark, deleteBookmark, takeScreenshot, fetchDashboardTelemetry } from '../api.js'
+  import { fetchRoute, fetchRouteFiles, fetchAllCoords, fetchAllEventsWithProgress, enrichRoute, startHudStream, stopHudStream, hudStreamStatus, hudStreamUrl, prerenderHud, hudProgress, hudVideoUrl, cancelHudRender, saveNote, addBookmark, updateBookmark, deleteBookmark, takeScreenshot, fetchScreenshotByTime, fetchDashboardTelemetry } from '../api.js'
   import { formatDate, formatDistance, formatDuration, getRouteDurationMs, formatAbsoluteTimeHM } from '../format.js'
   import { buildTimelineEvents } from '../derived.js'
   import snarkdown from 'snarkdown'
@@ -493,6 +493,43 @@
     if (!route) return
     metaBookmarks = metaBookmarks.filter((_, i) => i !== index)
     deleteBookmark(route.local_id, index).catch(() => {})
+  }
+
+  let bookmarkExportBusy = $state(-1)  // index of bookmark being exported, -1 = none
+
+  async function exportBookmarkFrame(index) {
+    if (!route || bookmarkExportBusy >= 0) return
+    bookmarkExportBusy = index
+    try {
+      const bm = metaBookmarks[index]
+      const epoch = (route.create_time || 0) + bm.time_sec
+
+      // Try HUD screenshot first (captured live with overlay)
+      let res, filename
+      try {
+        res = await fetchScreenshotByTime(epoch)
+        const cd = res.headers.get('Content-Disposition') || ''
+        const match = cd.match(/filename="?([^"]+)"?/)
+        filename = match ? match[1] : `hud_${Math.round(bm.time_sec)}s.png`
+      } catch {
+        // No HUD screenshot — fall back to plain fcamera JPEG with EXIF
+        res = await takeScreenshot(route.local_id, bm.time_sec, 'fcamera')
+        const cd = res.headers.get('Content-Disposition') || ''
+        const match = cd.match(/filename="?([^"]+)"?/)
+        filename = match ? match[1] : 'screenshot.jpg'
+      }
+
+      const blob = await res.blob()
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = filename
+      a.click()
+      URL.revokeObjectURL(a.href)
+    } catch (e) {
+      console.error('Bookmark export failed:', e)
+    } finally {
+      bookmarkExportBusy = -1
+    }
   }
 
   let activeTab = $state('map')
@@ -1252,6 +1289,16 @@
                             onclick={() => { editingBookmarkIdx = i; editingBookmarkLabel = bm.label }}
                           >{bm.label}</button>
                         {/if}
+                        <button
+                          class="shrink-0 text-surface-500/40 hover:text-surface-200 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer p-1 {bookmarkExportBusy === i ? 'animate-pulse' : ''}"
+                          title="Export HD frame with EXIF"
+                          onclick={() => exportBookmarkFrame(i)}
+                          disabled={bookmarkExportBusy >= 0}
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+                            <path fill-rule="evenodd" d="M1 8a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 018.07 3h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0016.07 6H17a2 2 0 012 2v7a2 2 0 01-2 2H3a2 2 0 01-2-2V8zm13.5 3a4.5 4.5 0 11-9 0 4.5 4.5 0 019 0zM10 14a3 3 0 100-6 3 3 0 000 6z" clip-rule="evenodd" />
+                          </svg>
+                        </button>
                         <button
                           class="shrink-0 text-red-500/40 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer p-1"
                           title="Delete bookmark"

@@ -107,6 +107,10 @@ from handlers import (
     handle_plugin_repo_get,
     handle_plugin_repo_set,
     handle_plugin_repo_install,
+    handle_screenshots_list,
+    handle_screenshot_serve,
+    handle_screenshot_delete,
+    handle_screenshot_by_time,
     handle_updates_check,
     handle_updates_apply,
     handle_ssh_keys_get,
@@ -327,6 +331,12 @@ def create_app(data_dir: str, static_dir: str) -> web.Application:
     app.router.add_get("/v1/route/{routeName}/signals/catalog", handle_signal_catalog)
     app.router.add_get("/v1/route/{routeName}/signals/data/{msgType}/{segments}", handle_signal_data)
     app.router.add_get("/v1/route/{routeName}/signals/all/{segments}", handle_signal_all)
+
+    # Screenshots (screen capture plugin images)
+    app.router.add_get("/v1/screenshots", handle_screenshots_list)
+    app.router.add_get("/v1/screenshots/at/{epoch}", handle_screenshot_by_time)
+    app.router.add_get("/v1/screenshots/{filename}", handle_screenshot_serve)
+    app.router.add_delete("/v1/screenshots/{filename}", handle_screenshot_delete)
 
     # Media file serving
     app.router.add_get("/connectdata/{path:.*}", handle_connectdata)

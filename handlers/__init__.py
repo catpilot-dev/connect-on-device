@@ -132,6 +132,13 @@ from .updates import (
     handle_updates_apply,
 )
 
+from .screenshots import (
+    handle_screenshots_list,
+    handle_screenshot_serve,
+    handle_screenshot_delete,
+    handle_screenshot_by_time,
+)
+
 from .stubs import (
     handle_stub_empty_array,
     handle_stub_error,

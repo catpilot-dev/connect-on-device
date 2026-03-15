@@ -560,6 +560,30 @@ export async function deleteTile(lat, lon) {
   return res.json()
 }
 
+// ── Screenshots ──────────────────────────────────────────
+
+export async function fetchScreenshots() {
+  const res = await fetch('/v1/screenshots')
+  if (!res.ok) throw new Error(`fetchScreenshots: ${res.status}`)
+  return res.json()
+}
+
+export function screenshotUrl(filename) {
+  return `/v1/screenshots/${encodeURIComponent(filename)}`
+}
+
+export async function deleteScreenshot(filename) {
+  const res = await fetch(`/v1/screenshots/${encodeURIComponent(filename)}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`deleteScreenshot: ${res.status}`)
+  return res.json()
+}
+
+export async function fetchScreenshotByTime(epoch) {
+  const res = await fetch(`/v1/screenshots/at/${epoch.toFixed(3)}`)
+  if (!res.ok) throw new Error(`fetchScreenshotByTime: ${res.status}`)
+  return res  // raw Response for blob download
+}
+
 // ── Plugins ──────────────────────────────────────────────
 
 export async function fetchPlugins() {

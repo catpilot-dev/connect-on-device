@@ -11,6 +11,7 @@
   import DashboardPage from './lib/pages/DashboardPage.svelte'
   import SignalBrowserPage from './lib/pages/SignalBrowserPage.svelte'
   import PluginsPage from './lib/pages/PluginsPage.svelte'
+  import ScreenshotsPage from './lib/pages/ScreenshotsPage.svelte'
 
   let error = $state(null)
   let isOnroad = $state(false)
@@ -21,6 +22,7 @@
     if (parts[0] === 'tiles') return 'tiles'
     if (parts[0] === 'settings') return 'settings'
     if (parts[0] === 'plugins') return 'plugins'
+    if (parts[0] === 'screenshots') return 'screenshots'
     // if (parts[0] === 'dashboard') return 'dashboard'  // disabled for now
     if (parts[0] === 'signals') return 'signals'
     return 'routes'
@@ -112,6 +114,12 @@
     history.pushState(null, '', '/plugins')
   }
 
+  function showScreenshots() {
+    page = 'screenshots'
+    selectedRoute.set(null)
+    history.pushState(null, '', '/screenshots')
+  }
+
   async function handleUpdate() {
     const data = await applyUpdates()
     if (data.cod_updated) {
@@ -163,6 +171,12 @@
           >
             Plugins
           </button>
+          <button
+            class="px-3 py-1.5 text-sm rounded transition-colors {page === 'screenshots' ? 'bg-surface-700 text-surface-50' : 'text-surface-400 hover:text-surface-200'}"
+            onclick={showScreenshots}
+          >
+            Captures
+          </button>
         </div>
       {/snippet}
     </DeviceHeader>
@@ -188,6 +202,8 @@
         <SettingsPage {isOnroad} />
       {:else if page === 'plugins'}
         <PluginsPage />
+      {:else if page === 'screenshots'}
+        <ScreenshotsPage />
       {:else if isOnroad}
         <div class="flex items-center justify-center h-64">
           <div class="text-center">
