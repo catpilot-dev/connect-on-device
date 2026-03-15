@@ -18,12 +18,15 @@ logger = logging.getLogger("connect")
 # fullname -> {proc, status_file, output, start, end}
 _hud_prerender_tasks: dict = {}
 
-HUD_CACHE_DIR = Path("/data/connect-on-device/hud_cache")
-RENDER_HLS_DIR = Path("/data/connect-on-device/hud_hls_tmp")
+from config import (COD_HUD_CACHE_DIR, COD_HLS_TMP_DIR,
+                     OPENPILOT_DIR as _OPENPILOT_DIR_STR,
+                     PYTHON_BIN, REPLAY_BIN as _REPLAY_BIN_STR)
+
+HUD_CACHE_DIR = Path(COD_HUD_CACHE_DIR)
+RENDER_HLS_DIR = Path(COD_HLS_TMP_DIR)
 RENDER_SCRIPT_DRM = Path(__file__).parent.parent / "render_clip_drm.py"
-PYTHON_BIN = "/usr/local/venv/bin/python"
-OPENPILOT_DIR = Path("/data/openpilot")
-REPLAY_BIN = OPENPILOT_DIR / "tools/replay/replay"
+OPENPILOT_DIR = Path(_OPENPILOT_DIR_STR)
+REPLAY_BIN = Path(_REPLAY_BIN_STR)
 
 
 def _is_manager_running() -> bool:
@@ -430,6 +433,7 @@ async def handle_hud_stream_start(request: web.Request) -> web.Response:
             text=json.dumps({"error": f"Route {route_name} not found"}))
 
     start_sec = body.get("start", 0)
+    hd = bool(body.get("hd", False))
 
     # Ensure replay binary is available (auto-rebuild from scons cache if needed)
     if not await _ensure_replay_binary():
@@ -443,6 +447,7 @@ async def handle_hud_stream_start(request: web.Request) -> web.Response:
         data_dir=str(store.data_dir),
         start_sec=start_sec,
         max_seg=route.get("maxqlog", -1),
+        hd=hd,
     )
 
     return web.json_response(mgr.status)

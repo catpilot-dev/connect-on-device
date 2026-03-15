@@ -346,7 +346,7 @@
     hudStreaming = false
     hudError = null
     try {
-      await startHudStream(route.local_id, currentTime)
+      await startHudStream(route.local_id, currentTime, !!hevcSupported)
       // Poll for streaming status
       hudPollTimer = setInterval(async () => {
         try {

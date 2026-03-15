@@ -23,12 +23,8 @@ from pathlib import Path
 
 logger = logging.getLogger("hud_stream")
 
-# C3 binary paths
-OPENPILOT_DIR = "/data/openpilot"
-REPLAY_BIN = os.path.join(OPENPILOT_DIR, "tools/replay/replay")
-
-# DRM mode constants
-PYTHON_BIN = "/usr/local/venv/bin/python"
+from config import (OPENPILOT_DIR, REPLAY_BIN, PYTHON_BIN, PARAMS_DIR,
+                     PARAMS_BASE, COD_HLS_TMP_DIR)
 UI_SCRIPT = "selfdrive/ui/ui.py"
 DRM_REPLAY_SPEED = 1.0   # Real-time replay
 DRM_UI_FPS = 5           # UI renders at 5fps (C3 GPU limited to ~2.4fps)
@@ -155,7 +151,8 @@ class HudStreamManager:
         return self._procs[-1].poll() is None
 
     async def start(self, route_name: str, local_id: str, dongle_id: str,
-                    data_dir: str, start_sec: float = 0, max_seg: int = -1):
+                    data_dir: str, start_sec: float = 0, max_seg: int = -1,
+                    hd: bool = False):
         """Start the HUD streaming pipeline. Returns immediately; frontend polls status."""
         async with self._lock:
             if self.is_active:
@@ -170,11 +167,15 @@ class HudStreamManager:
         loop = asyncio.get_event_loop()
         loop.run_in_executor(
             None, self._start_sync_drm, route_name, local_id, dongle_id,
-            data_dir, start_sec, max_seg,
+            data_dir, start_sec, max_seg, hd,
         )
 
-    def _start_sync_drm(self, route_name, local_id, dongle_id, data_dir, start_sec, max_seg):
-        """DRM mode: replay(1x, qcam+SW) → UI(RECORD_HLS, 5fps) → HLS output."""
+    def _start_sync_drm(self, route_name, local_id, dongle_id, data_dir, start_sec, max_seg, hd=False):
+        """DRM mode: replay(1x) → UI(RECORD_HLS) → HLS output.
+
+        hd=False: qcam + capture every frame (low quality, compatible)
+        hd=True:  fcamera + skip 9/10 frames (high quality, realtime)
+        """
         try:
             self._prefix = f"stream_{os.getpid()}_{int(time.time())}"
 
@@ -232,14 +233,20 @@ class HudStreamManager:
             replay_env["TERM"] = "xterm"
             replay_env["OPENPILOT_PREFIX"] = self._prefix
 
+            replay_cmd = [
+                REPLAY_BIN, "-c", "1",
+                "--no-hw-decoder",
+                "-s", str(int(max(start_sec, 0))),
+                "-x", str(DRM_REPLAY_SPEED),
+                "--data_dir", self._symlink_dir,
+                "--prefix", self._prefix,
+                canonical,
+            ]
+            if not hd:
+                replay_cmd.insert(3, "--qcam")
+
             replay_proc = subprocess.Popen(
-                [REPLAY_BIN, "-c", "1",
-                 "--qcam", "--no-hw-decoder",
-                 "-s", str(int(max(start_sec, 0))),
-                 "-x", str(DRM_REPLAY_SPEED),
-                 "--data_dir", self._symlink_dir,
-                 "--prefix", self._prefix,
-                 canonical],
+                replay_cmd,
                 env=replay_env,
                 stdout=subprocess.DEVNULL,
                 stderr=open("/tmp/hud_replay.log", "w"),
@@ -266,11 +273,16 @@ class HudStreamManager:
                 self._cleanup_sync()
                 return
 
-            logger.info("Replay ready for %s (qcam+SW, %.1fx)", route_name, DRM_REPLAY_SPEED)
+            cam_mode = "fcamera+SW" if hd else "qcam+SW"
+            logger.info("Replay ready for %s (%s, %.1fx)", route_name, cam_mode, DRM_REPLAY_SPEED)
 
             # Start UI with RECORD_HLS — renders to DRM screen + captures frames → HLS
-            # Note: replay publishes all cereal messages including selfdriveState
-            # with correct engagement state — no fake publisher needed.
+            # Note: RECORD=1 env disables "System Unresponsive" alert in alert_renderer.py
+            # HD mode: FPS=20, skip 9/10 → effective ~2fps to ffmpeg with fcamera.
+            # High FPS target lets GPU render fast (readback skipped 9/10 frames).
+            # SD mode: FPS=5, no skip → ~2fps capture with qcam.
+            record_skip = 9 if hd else DRM_RECORD_SKIP
+            ui_fps = 20 if hd else DRM_UI_FPS
             hls_output = str(HLS_DIR / "stream.m3u8")
             ui_env = {
                 "RECORD": "1",
@@ -278,8 +290,8 @@ class HudStreamManager:
                 "RECORD_OUTPUT": hls_output,
                 "RECORD_HLS_TIME": str(HLS_TIME),
                 "RECORD_HLS_LIST_SIZE": str(HLS_LIST_SIZE),
-                "FPS": str(DRM_UI_FPS),
-                "RECORD_SKIP": str(DRM_RECORD_SKIP),
+                "FPS": str(ui_fps),
+                "RECORD_SKIP": str(record_skip),
                 "BIG": "1",  # Force 2160x1080 layout
                 "PYTHONPATH": OPENPILOT_DIR,
                 "OPENPILOT_PREFIX": self._prefix,
@@ -316,7 +328,9 @@ class HudStreamManager:
 
             if m3u8_path.exists() and m3u8_path.stat().st_size > 20:
                 self._status = "streaming"
-                logger.info("HLS streaming active for %s (5fps, 1x)", route_name)
+                quality = "HD" if hd else "SD"
+                logger.info("HLS streaming active for %s (%s, skip=%d, 1x)",
+                            route_name, quality, record_skip)
             else:
                 self._status = "error"
                 self._error = "HLS output not generated"
@@ -351,7 +365,7 @@ class HudStreamManager:
 
     def _cleanup_sync(self):
         """Kill all child processes, restore display, clean up temp files."""
-        # Terminate child processes
+        # Terminate child processes (includes selfdriveState publisher)
         for p in self._procs:
             try:
                 if p.poll() is None:
@@ -395,7 +409,7 @@ class HudStreamManager:
         if self._prefix:
             shutil.rmtree(f"/dev/shm/{self._prefix}", ignore_errors=True)
             shutil.rmtree(f"/dev/shm/msgq_{self._prefix}", ignore_errors=True)
-            shutil.rmtree(f"/data/params/{self._prefix}", ignore_errors=True)
+            shutil.rmtree(f"{PARAMS_BASE}/{self._prefix}", ignore_errors=True)
             self._prefix = None
 
 
@@ -433,8 +447,8 @@ def _copy_user_params(prefix: str):
     Openpilot Params path: /data/params/{OPENPILOT_PREFIX}/
     Default prefix is 'd', so user params live at /data/params/d/.
     """
-    src_params = Path("/data/params/d")
-    dst_params = Path(f"/data/params/{prefix}")
+    src_params = Path(PARAMS_DIR)
+    dst_params = Path(f"{PARAMS_BASE}/{prefix}")
     dst_params.mkdir(parents=True, exist_ok=True)
 
     # Params that affect UI display

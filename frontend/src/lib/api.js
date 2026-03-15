@@ -187,11 +187,11 @@ export function hudVideoUrl(routeName) {
 
 // ── HUD live streaming ────────────────────────────────────
 
-export async function startHudStream(routeName, start = 0) {
+export async function startHudStream(routeName, start = 0, hd = false) {
   const res = await fetch('/v1/hud/stream/start', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ route: routeId(routeName), start }),
+    body: JSON.stringify({ route: routeId(routeName), start, hd }),
   })
   if (!res.ok) throw new Error(`startHudStream: ${res.status}`)
   return res.json()
