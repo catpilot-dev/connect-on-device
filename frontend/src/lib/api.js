@@ -187,11 +187,11 @@ export function hudVideoUrl(routeName) {
 
 // ── HUD live streaming ────────────────────────────────────
 
-export async function startHudStream(routeName, start = 0, hd = false) {
+export async function startHudStream(routeName, start = 0, hd = false, mode = 'ws') {
   const res = await fetch('/v1/hud/stream/start', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ route: routeId(routeName), start, hd }),
+    body: JSON.stringify({ route: routeId(routeName), start, hd, mode }),
   })
   if (!res.ok) throw new Error(`startHudStream: ${res.status}`)
   return res.json()
@@ -212,6 +212,12 @@ export async function hudStreamStatus() {
 /** HLS live stream playlist URL */
 export function hudStreamUrl() {
   return '/v1/hud/stream/stream.m3u8'
+}
+
+/** WebSocket URL for fMP4 HUD stream */
+export function hudStreamWsUrl() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+  return `${proto}//${location.host}/v1/hud/stream/ws`
 }
 
 // ── Connectdata URL builders ────────────────────────────────

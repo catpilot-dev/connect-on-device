@@ -440,6 +440,10 @@ async def handle_hud_stream_start(request: web.Request) -> web.Response:
         raise web.HTTPServiceUnavailable(
             text=json.dumps({"error": "Replay binary not available and rebuild failed"}))
 
+    mode = body.get("mode", "ws")  # "ws" (WebSocket fMP4) or "hls" (legacy HLS)
+    if mode not in ("ws", "hls"):
+        mode = "ws"
+
     await mgr.start(
         route_name=route["fullname"],
         local_id=route["_local_id"],
@@ -448,6 +452,7 @@ async def handle_hud_stream_start(request: web.Request) -> web.Response:
         start_sec=start_sec,
         max_seg=route.get("maxqlog", -1),
         hd=hd,
+        mode=mode,
     )
 
     return web.json_response(mgr.status)
@@ -496,6 +501,49 @@ async def handle_hud_stream_serve(request: web.Request) -> web.Response:
                 "Cache-Control": "public, max-age=60",
             },
         )
+
+
+async def handle_hud_stream_ws(request: web.Request) -> web.WebSocketResponse:
+    """GET /v1/hud/stream/ws — WebSocket endpoint for fMP4 HUD stream.
+
+    The client connects after POST /v1/hud/stream/start (mode=ws).
+    Server sends binary fMP4 chunks; client appends to MSE SourceBuffer.
+    Client can send "stop" text message to terminate the stream.
+    """
+    ws = web.WebSocketResponse()
+    await ws.prepare(request)
+
+    mgr: HudStreamManager = request.app.get("stream_manager")
+    if not mgr or mgr._mode != "ws":
+        await ws.send_json({"error": "No active WebSocket stream"})
+        await ws.close()
+        return ws
+
+    logger.info("HUD WebSocket client connected")
+
+    try:
+        # Send fMP4 chunks until stream ends or client disconnects
+        while not ws.closed and mgr.is_active and mgr._mode == "ws":
+            chunk = await mgr.ws_get_chunk(timeout=2.0)
+            if chunk is None:
+                # Timeout — check if stream is still alive
+                if not mgr.is_active:
+                    break
+                continue
+            try:
+                await ws.send_bytes(chunk)
+            except ConnectionResetError:
+                break
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        logger.error("HUD WebSocket error: %s", e)
+    finally:
+        logger.info("HUD WebSocket client disconnected")
+        if not ws.closed:
+            await ws.close()
+
+    return ws
 
 
 # ─── Screencast: play fcamera on C3 screen ───────────────────────────

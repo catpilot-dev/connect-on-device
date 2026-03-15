@@ -1,10 +1,12 @@
 """HUD live streaming pipeline manager for C3.
 
-DRM mode (production):
-  replay(1x, qcam+SW) -> UI(RECORD_HLS, 5fps) -> ffmpeg(HLS) -> browser
+Two streaming modes:
+  HLS:  replay(1x) → UI(RECORD_HLS, libx264) → ffmpeg(HLS) → browser(hls.js)
+  WS:   replay(1x) → UI(RECORD_FRAG_MP4, h264_v4l2m2m) → FIFO → WebSocket → browser(MSE)
 
-The device screen also shows the HUD (DRM render), but the primary output
-is HLS segments served to the browser — works for all devices including C4.
+WebSocket mode uses hardware H264 encoding (h264_v4l2m2m) and fragmented MP4 output,
+streamed over WebSocket to the browser's Media Source Extensions API.  This avoids the
+HLS segment accumulation delay and leverages the Snapdragon 845 hardware encoder.
 
 Only one stream can be active at a time since DRM requires exclusive display access.
 """
@@ -14,6 +16,7 @@ import logging
 import os
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -34,6 +37,12 @@ DRM_RECORD_SKIP = 0      # Capture every frame
 HLS_DIR = Path("/tmp/hud_live")
 HLS_TIME = 2          # seconds per segment
 HLS_LIST_SIZE = 5     # segments in playlist (~10s buffer)
+
+# WebSocket fMP4 output
+WS_FIFO_PATH = "/tmp/hud_ws.fifo"
+WS_CHUNK_SIZE = 32 * 1024   # 32KB chunks for WebSocket frames
+WS_HW_CODEC = "h264_v4l2m2m"  # Snapdragon 845 hardware H264 encoder
+WS_SW_CODEC = "libx264"       # Fallback software encoder
 
 
 def _is_drm_available() -> bool:
@@ -112,6 +121,18 @@ def _find_rlog(data_dir: str, local_id: str) -> str | None:
     return None
 
 
+def _hw_encoder_available() -> bool:
+    """Check if h264_v4l2m2m hardware encoder is available."""
+    try:
+        r = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-encoders"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return "h264_v4l2m2m" in r.stdout
+    except Exception:
+        return False
+
+
 class HudStreamManager:
     """Manages the HUD live streaming pipeline. Only one stream at a time."""
 
@@ -123,10 +144,16 @@ class HudStreamManager:
         self._symlink_dir = None
         self._prefix = None
         self._lock = asyncio.Lock()
+        self._mode = None       # "hls" | "ws"
+        # WebSocket streaming state
+        self._ws_queue: asyncio.Queue | None = None
+        self._ws_loop: asyncio.AbstractEventLoop | None = None
+        self._fifo_thread: threading.Thread | None = None
+        self._fifo_stop = threading.Event()
 
     @property
     def status(self) -> dict:
-        result = {"status": self._status}
+        result = {"status": self._status, "mode": self._mode or "none"}
         if self._route_name:
             result["route"] = self._route_name
         if self._error:
@@ -147,13 +174,17 @@ class HudStreamManager:
         """Check if key processes are still running."""
         if not self._procs:
             return False
-        # The UI process is the pipeline (it runs ffmpeg internally for HLS)
+        # The UI process is the pipeline
         return self._procs[-1].poll() is None
 
     async def start(self, route_name: str, local_id: str, dongle_id: str,
                     data_dir: str, start_sec: float = 0, max_seg: int = -1,
-                    hd: bool = False):
-        """Start the HUD streaming pipeline. Returns immediately; frontend polls status."""
+                    hd: bool = False, mode: str = "ws"):
+        """Start the HUD streaming pipeline.
+
+        mode="ws": WebSocket + fMP4 (preferred, uses HW encoder)
+        mode="hls": Legacy HLS mode (fallback)
+        """
         async with self._lock:
             if self.is_active:
                 if self._route_name == route_name:
@@ -163,124 +194,256 @@ class HudStreamManager:
             self._route_name = route_name
             self._status = "starting"
             self._error = None
+            self._mode = mode
 
         loop = asyncio.get_event_loop()
-        loop.run_in_executor(
-            None, self._start_sync_drm, route_name, local_id, dongle_id,
-            data_dir, start_sec, max_seg, hd,
+        if mode == "ws":
+            self._ws_queue = asyncio.Queue(maxsize=200)
+            self._ws_loop = loop
+            loop.run_in_executor(
+                None, self._start_sync_ws, route_name, local_id, dongle_id,
+                data_dir, start_sec, max_seg, hd,
+            )
+        else:
+            loop.run_in_executor(
+                None, self._start_sync_drm, route_name, local_id, dongle_id,
+                data_dir, start_sec, max_seg, hd,
+            )
+
+    def _setup_replay(self, route_name, local_id, dongle_id, data_dir, start_sec, max_seg, hd):
+        """Common setup: prefix, symlinks, CarParams, replay process.
+
+        Returns True on success, False on error (sets self._status/self._error).
+        """
+        self._prefix = f"stream_{os.getpid()}_{int(time.time())}"
+
+        # Find segments
+        if max_seg < 0:
+            max_seg = _find_max_segment(data_dir, local_id)
+        if max_seg < 0:
+            self._status = "error"
+            self._error = "No segments found"
+            return False
+
+        # Create symlinks for replay
+        self._symlink_dir = _create_symlink_dir(
+            data_dir, local_id, dongle_id, max_seg + 1)
+
+        # Populate CarParams from rlog
+        rlog_path = _find_rlog(data_dir, local_id)
+        if not rlog_path:
+            self._status = "error"
+            self._error = "No rlog found in segment 0"
+            return False
+
+        if OPENPILOT_DIR not in sys.path:
+            sys.path.insert(0, OPENPILOT_DIR)
+        from common.prefix import OpenpilotPrefix
+
+        self._op_prefix = OpenpilotPrefix(self._prefix, shared_download_cache=True)
+        self._op_prefix.__enter__()
+
+        from tools.lib.logreader import LogReader
+        from tools.clip.run import populate_car_params
+        lr = LogReader(rlog_path)
+        populate_car_params(lr)
+
+        _copy_user_params(self._prefix)
+
+        os.makedirs(f"/dev/shm/msgq_{self._prefix}", exist_ok=True)
+
+        # Stop production UI to free DRM master
+        _stop_manager()
+
+        # Start replay at 1x speed
+        canonical = f"{dongle_id}|{local_id}"
+        replay_env = os.environ.copy()
+        replay_env["TERM"] = "xterm"
+        replay_env["OPENPILOT_PREFIX"] = self._prefix
+
+        replay_cmd = [
+            REPLAY_BIN, "-c", "1",
+            "--no-hw-decoder",
+            "-s", str(int(max(start_sec, 0))),
+            "-x", str(DRM_REPLAY_SPEED),
+            "--data_dir", self._symlink_dir,
+            "--prefix", self._prefix,
+            canonical,
+        ]
+        if not hd:
+            replay_cmd.insert(3, "--qcam")
+
+        replay_proc = subprocess.Popen(
+            replay_cmd,
+            env=replay_env,
+            stdout=subprocess.DEVNULL,
+            stderr=open("/tmp/hud_replay.log", "w"),
         )
+        self._procs.append(replay_proc)
+
+        # Wait for replay to create cereal sockets
+        msgq_shm_dir = f"/dev/shm/msgq_{self._prefix}"
+        deadline = time.monotonic() + 15
+        replay_ready = False
+        while time.monotonic() < deadline:
+            if replay_proc.poll() is not None:
+                break
+            if (os.path.isdir(msgq_shm_dir) and
+                    os.path.exists(os.path.join(msgq_shm_dir, "modelV2"))):
+                replay_ready = True
+                break
+            time.sleep(0.3)
+
+        if not replay_ready:
+            self._status = "error"
+            self._error = "Replay failed to start"
+            self._cleanup_sync()
+            return False
+
+        cam_mode = "fcamera+SW" if hd else "qcam+SW"
+        logger.info("Replay ready for %s (%s, %.1fx)", route_name, cam_mode, DRM_REPLAY_SPEED)
+        return True
+
+    def _start_sync_ws(self, route_name, local_id, dongle_id, data_dir, start_sec, max_seg, hd=False):
+        """WebSocket mode: replay(1x) → UI(RECORD_FRAG_MP4) → FIFO → WebSocket."""
+        try:
+            if not self._setup_replay(route_name, local_id, dongle_id, data_dir,
+                                       start_sec, max_seg, hd):
+                return
+
+            # Determine codec — try HW encoder, fall back to SW
+            codec = WS_HW_CODEC if _hw_encoder_available() else WS_SW_CODEC
+            logger.info("WebSocket stream codec: %s", codec)
+
+            # Create FIFO for fMP4 output
+            fifo = WS_FIFO_PATH
+            if os.path.exists(fifo):
+                os.unlink(fifo)
+            os.mkfifo(fifo)
+
+            record_skip = 9 if hd else DRM_RECORD_SKIP
+            ui_fps = 20 if hd else DRM_UI_FPS
+
+            ui_env = {
+                "RECORD": "1",
+                "RECORD_FRAG_MP4": "1",
+                "RECORD_CODEC": codec,
+                "RECORD_OUTPUT": fifo,
+                "FPS": str(ui_fps),
+                "RECORD_SKIP": str(record_skip),
+                "BIG": "1",
+                "PYTHONPATH": OPENPILOT_DIR,
+                "OPENPILOT_PREFIX": self._prefix,
+                "PATH": "/usr/local/venv/bin:/usr/local/bin:/usr/bin:/bin",
+                "HOME": os.environ.get("HOME", "/root"),
+                "TERM": "xterm",
+            }
+
+            ui_cmd = [
+                PYTHON_BIN, "-c",
+                "import os; os.sched_setscheduler = lambda *a, **kw: None; "
+                "exec(open('selfdrive/ui/ui.py').read())",
+            ]
+
+            ui_proc = subprocess.Popen(
+                ui_cmd,
+                cwd=OPENPILOT_DIR,
+                env=ui_env,
+                stdout=open("/tmp/hud_ui_drm.log", "w"),
+                stderr=subprocess.STDOUT,
+            )
+            self._procs.append(ui_proc)
+
+            # Start FIFO reader thread — opens the FIFO (blocks until ffmpeg opens write end)
+            self._fifo_stop.clear()
+            self._fifo_thread = threading.Thread(
+                target=self._fifo_reader, args=(fifo,), daemon=True)
+            self._fifo_thread.start()
+
+            # Wait for first data on the queue (indicates ffmpeg opened the FIFO and is writing)
+            deadline = time.monotonic() + 60
+            while time.monotonic() < deadline:
+                if self._ws_queue and not self._ws_queue.empty():
+                    break
+                if ui_proc.poll() is not None:
+                    break
+                time.sleep(0.5)
+
+            if self._ws_queue and not self._ws_queue.empty():
+                self._status = "streaming"
+                quality = "HD" if hd else "SD"
+                logger.info("WebSocket streaming active for %s (%s, codec=%s)",
+                            route_name, quality, codec)
+            else:
+                self._status = "error"
+                self._error = "fMP4 output not generated"
+                try:
+                    log = Path("/tmp/hud_ui_drm.log").read_text()[-500:]
+                    if log.strip():
+                        self._error += f" (UI: {log.strip()[-200:]})"
+                except Exception:
+                    pass
+                self._cleanup_sync()
+
+        except Exception as e:
+            logger.exception("WebSocket stream start failed")
+            self._status = "error"
+            self._error = str(e)
+            self._cleanup_sync()
+
+    def _fifo_reader(self, fifo_path: str):
+        """Thread: reads fMP4 chunks from FIFO and enqueues for WebSocket delivery."""
+        try:
+            with open(fifo_path, "rb") as f:
+                while not self._fifo_stop.is_set():
+                    chunk = f.read(WS_CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    if self._ws_loop and self._ws_queue:
+                        self._ws_loop.call_soon_threadsafe(
+                            self._ws_queue_put, chunk)
+        except Exception as e:
+            if not self._fifo_stop.is_set():
+                logger.error("FIFO reader error: %s", e)
+
+    def _ws_queue_put(self, chunk: bytes):
+        """Put chunk into queue, dropping oldest if full."""
+        if self._ws_queue is None:
+            return
+        try:
+            self._ws_queue.put_nowait(chunk)
+        except asyncio.QueueFull:
+            # Drop oldest chunk to prevent backpressure stall
+            try:
+                self._ws_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+            try:
+                self._ws_queue.put_nowait(chunk)
+            except asyncio.QueueFull:
+                pass
+
+    async def ws_get_chunk(self, timeout: float = 5.0) -> bytes | None:
+        """Get next fMP4 chunk for WebSocket delivery. Returns None on timeout/closed."""
+        if not self._ws_queue:
+            return None
+        try:
+            return await asyncio.wait_for(self._ws_queue.get(), timeout=timeout)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            return None
 
     def _start_sync_drm(self, route_name, local_id, dongle_id, data_dir, start_sec, max_seg, hd=False):
-        """DRM mode: replay(1x) → UI(RECORD_HLS) → HLS output.
-
-        hd=False: qcam + capture every frame (low quality, compatible)
-        hd=True:  fcamera + skip 9/10 frames (high quality, realtime)
-        """
+        """HLS mode: replay(1x) → UI(RECORD_HLS) → HLS output."""
         try:
-            self._prefix = f"stream_{os.getpid()}_{int(time.time())}"
-
             # Prepare HLS output directory
             if HLS_DIR.exists():
                 shutil.rmtree(HLS_DIR)
             HLS_DIR.mkdir(parents=True)
 
-            # Find segments
-            if max_seg < 0:
-                max_seg = _find_max_segment(data_dir, local_id)
-            if max_seg < 0:
-                self._status = "error"
-                self._error = "No segments found"
+            if not self._setup_replay(route_name, local_id, dongle_id, data_dir,
+                                       start_sec, max_seg, hd):
                 return
 
-            # Create symlinks for replay
-            self._symlink_dir = _create_symlink_dir(
-                data_dir, local_id, dongle_id, max_seg + 1)
-
-            # Populate CarParams from rlog so UI knows the car platform
-            rlog_path = _find_rlog(data_dir, local_id)
-            if not rlog_path:
-                self._status = "error"
-                self._error = "No rlog found in segment 0"
-                return
-
-            if OPENPILOT_DIR not in sys.path:
-                sys.path.insert(0, OPENPILOT_DIR)
-            from common.prefix import OpenpilotPrefix
-
-            # Create isolated prefix and populate CarParams
-            self._op_prefix = OpenpilotPrefix(self._prefix, shared_download_cache=True)
-            self._op_prefix.__enter__()
-
-            from tools.lib.logreader import LogReader
-            from tools.clip.run import populate_car_params
-            lr = LogReader(rlog_path)
-            populate_car_params(lr)
-
-            # Copy user params (IsMetric etc.) into isolated prefix
-            _copy_user_params(self._prefix)
-
-            # Ensure shm prefix directory exists for msgq socket binding.
-            # C++ msgq uses /dev/shm/msgq_{prefix}/ path format, while
-            # OpenpilotPrefix creates /dev/shm/{prefix}/ — we need both.
-            os.makedirs(f"/dev/shm/msgq_{self._prefix}", exist_ok=True)
-
-            # Stop production UI to free DRM master
-            _stop_manager()
-
-            # Start replay at 1x speed with qcam + SW decoder (reliable)
-            canonical = f"{dongle_id}|{local_id}"
-            replay_env = os.environ.copy()
-            replay_env["TERM"] = "xterm"
-            replay_env["OPENPILOT_PREFIX"] = self._prefix
-
-            replay_cmd = [
-                REPLAY_BIN, "-c", "1",
-                "--no-hw-decoder",
-                "-s", str(int(max(start_sec, 0))),
-                "-x", str(DRM_REPLAY_SPEED),
-                "--data_dir", self._symlink_dir,
-                "--prefix", self._prefix,
-                canonical,
-            ]
-            if not hd:
-                replay_cmd.insert(3, "--qcam")
-
-            replay_proc = subprocess.Popen(
-                replay_cmd,
-                env=replay_env,
-                stdout=subprocess.DEVNULL,
-                stderr=open("/tmp/hud_replay.log", "w"),
-            )
-            self._procs.append(replay_proc)
-
-            # Wait for replay to create cereal sockets
-            # C++ msgq creates sockets at /dev/shm/msgq_{prefix}/{service}
-            msgq_shm_dir = f"/dev/shm/msgq_{self._prefix}"
-            deadline = time.monotonic() + 15
-            replay_ready = False
-            while time.monotonic() < deadline:
-                if replay_proc.poll() is not None:
-                    break
-                if (os.path.isdir(msgq_shm_dir) and
-                        os.path.exists(os.path.join(msgq_shm_dir, "modelV2"))):
-                    replay_ready = True
-                    break
-                time.sleep(0.3)
-
-            if not replay_ready:
-                self._status = "error"
-                self._error = "Replay failed to start"
-                self._cleanup_sync()
-                return
-
-            cam_mode = "fcamera+SW" if hd else "qcam+SW"
-            logger.info("Replay ready for %s (%s, %.1fx)", route_name, cam_mode, DRM_REPLAY_SPEED)
-
-            # Start UI with RECORD_HLS — renders to DRM screen + captures frames → HLS
-            # Note: RECORD=1 env disables "System Unresponsive" alert in alert_renderer.py
-            # HD mode: FPS=20, skip 9/10 → effective ~2fps to ffmpeg with fcamera.
-            # High FPS target lets GPU render fast (readback skipped 9/10 frames).
-            # SD mode: FPS=5, no skip → ~2fps capture with qcam.
             record_skip = 9 if hd else DRM_RECORD_SKIP
             ui_fps = 20 if hd else DRM_UI_FPS
             hls_output = str(HLS_DIR / "stream.m3u8")
@@ -292,7 +455,7 @@ class HudStreamManager:
                 "RECORD_HLS_LIST_SIZE": str(HLS_LIST_SIZE),
                 "FPS": str(ui_fps),
                 "RECORD_SKIP": str(record_skip),
-                "BIG": "1",  # Force 2160x1080 layout
+                "BIG": "1",
                 "PYTHONPATH": OPENPILOT_DIR,
                 "OPENPILOT_PREFIX": self._prefix,
                 "PATH": "/usr/local/venv/bin:/usr/local/bin:/usr/bin:/bin",
@@ -300,7 +463,6 @@ class HudStreamManager:
                 "TERM": "xterm",
             }
 
-            # Skip config_realtime_process (SCHED_FIFO requires root)
             ui_cmd = [
                 PYTHON_BIN, "-c",
                 "import os; os.sched_setscheduler = lambda *a, **kw: None; "
@@ -343,7 +505,7 @@ class HudStreamManager:
                 self._cleanup_sync()
 
         except Exception as e:
-            logger.exception("DRM stream start failed")
+            logger.exception("HLS stream start failed")
             self._status = "error"
             self._error = str(e)
             self._cleanup_sync()
@@ -362,10 +524,19 @@ class HudStreamManager:
         self._status = "idle"
         self._route_name = None
         self._error = None
+        self._mode = None
 
     def _cleanup_sync(self):
         """Kill all child processes, restore display, clean up temp files."""
-        # Terminate child processes (includes selfdriveState publisher)
+        # Stop FIFO reader thread
+        self._fifo_stop.set()
+        if self._fifo_thread and self._fifo_thread.is_alive():
+            self._fifo_thread.join(timeout=3)
+        self._fifo_thread = None
+        self._ws_queue = None
+        self._ws_loop = None
+
+        # Terminate child processes
         for p in self._procs:
             try:
                 if p.poll() is None:
@@ -405,6 +576,13 @@ class HudStreamManager:
         if HLS_DIR.exists():
             shutil.rmtree(HLS_DIR, ignore_errors=True)
 
+        # Clean up FIFO
+        if os.path.exists(WS_FIFO_PATH):
+            try:
+                os.unlink(WS_FIFO_PATH)
+            except OSError:
+                pass
+
         # Clean up shared memory and params
         if self._prefix:
             shutil.rmtree(f"/dev/shm/{self._prefix}", ignore_errors=True)
@@ -442,16 +620,11 @@ def _create_symlink_dir(data_dir: str, local_id: str, dongle_id: str,
 
 
 def _copy_user_params(prefix: str):
-    """Copy key user params (IsMetric, etc.) into the isolated prefix's params dir.
-
-    Openpilot Params path: /data/params/{OPENPILOT_PREFIX}/
-    Default prefix is 'd', so user params live at /data/params/d/.
-    """
+    """Copy key user params (IsMetric, etc.) into the isolated prefix's params dir."""
     src_params = Path(PARAMS_DIR)
     dst_params = Path(f"{PARAMS_BASE}/{prefix}")
     dst_params.mkdir(parents=True, exist_ok=True)
 
-    # Params that affect UI display
     copied = []
     for key in ("IsMetric", "LanguageSetting"):
         src = src_params / key

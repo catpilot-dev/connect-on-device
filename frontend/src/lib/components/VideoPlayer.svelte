@@ -8,13 +8,10 @@
    *
    * Three video elements:
    * 1. HLS video (qcamera segments) — always loaded, hidden when HUD active
-   * 2. HUD live stream video — shown when hudLiveUrl is set, plays live HLS from C3
+   * 2. HUD live stream video — shown when hudLiveUrl is set
+   *    - ws:// or wss:// URL → MSE + WebSocket (fMP4 chunks from h264_v4l2m2m)
+   *    - http:// URL → HLS via hls.js (legacy fallback)
    * 3. HD camera video (fcamera/ecamera/dcamera) — shown when hdSource is set
-   *
-   * Compatibility strategy:
-   * 1. hls.js (Chrome, Firefox, Edge, Opera, Android Chrome/Firefox/Samsung)
-   * 2. Native HLS (Safari macOS, Safari iOS, Chrome iOS — all WebKit)
-   * 3. Direct .ts fallback (single segment for any remaining edge cases)
    */
 
   /** @type {{ route: object, files: object, hudLiveUrl?: string|null, hdSource?: string|null, selectionStart?: number, selectionEnd?: number, currentTime?: number, duration?: number, onTimeUpdate?: (t: number) => void, onDurationChange?: (d: number) => void, onPlay?: () => void, onPause?: () => void }} */
@@ -49,6 +46,13 @@
 
   // HD (fcamera) state
   let hdSegment = $state(-1)          // currently loaded HD segment
+
+  // MSE/WebSocket state for HUD stream
+  let hudWs = null           // WebSocket connection
+  let hudMediaSource = null  // MediaSource instance
+  let hudSourceBuffer = null // SourceBuffer for H264 fMP4
+  let hudMseQueue = []       // Pending chunks while SourceBuffer is updating
+  let hudMseReady = false    // SourceBuffer is ready for appends
 
   // Track which video is active for control methods
   const showingHud = $derived(!!hudLiveUrl)
@@ -128,9 +132,116 @@
     }
   }
 
+  function cleanupHudMse() {
+    hudMseReady = false
+    hudMseQueue = []
+    if (hudWs) {
+      try { hudWs.close() } catch {}
+      hudWs = null
+    }
+    if (hudSourceBuffer && hudMediaSource) {
+      try {
+        if (hudMediaSource.readyState === 'open') {
+          hudSourceBuffer.abort()
+        }
+      } catch {}
+      hudSourceBuffer = null
+    }
+    if (hudMediaSource) {
+      try {
+        if (hudMediaSource.readyState === 'open') {
+          hudMediaSource.endOfStream()
+        }
+      } catch {}
+      hudMediaSource = null
+    }
+  }
+
+  function initHudMse(wsUrl) {
+    if (!hudVideoEl || !('MediaSource' in window)) return false
+
+    cleanupHudMse()
+    cleanupHudHls()
+
+    hudMediaSource = new MediaSource()
+    hudVideoEl.src = URL.createObjectURL(hudMediaSource)
+
+    hudMediaSource.addEventListener('sourceopen', () => {
+      // H264 High Profile Level 4.1 — matches common hardware encoder output
+      const mimeCodec = 'video/mp4; codecs="avc1.640029"'
+      if (!MediaSource.isTypeSupported(mimeCodec)) {
+        console.error('MSE codec not supported:', mimeCodec)
+        return
+      }
+      hudSourceBuffer = hudMediaSource.addSourceBuffer(mimeCodec)
+      hudSourceBuffer.mode = 'sequence'
+      hudSourceBuffer.addEventListener('updateend', flushMseQueue)
+      hudMseReady = true
+
+      // Open WebSocket to receive fMP4 chunks
+      hudWs = new WebSocket(wsUrl)
+      hudWs.binaryType = 'arraybuffer'
+      hudWs.onmessage = (ev) => {
+        if (ev.data instanceof ArrayBuffer) {
+          appendToSourceBuffer(new Uint8Array(ev.data))
+        }
+      }
+      hudWs.onclose = () => {
+        // Stream ended — end of stream if MSE still open
+        if (hudMediaSource && hudMediaSource.readyState === 'open') {
+          try {
+            // Wait for pending updates to finish before endOfStream
+            if (hudSourceBuffer && !hudSourceBuffer.updating && hudMseQueue.length === 0) {
+              hudMediaSource.endOfStream()
+            }
+          } catch {}
+        }
+      }
+      hudWs.onerror = () => {
+        console.error('HUD WebSocket error')
+      }
+
+      hudVideoEl.play().catch(() => {})
+    })
+
+    return true
+  }
+
+  function appendToSourceBuffer(data) {
+    if (!hudSourceBuffer || !hudMseReady) return
+    if (hudSourceBuffer.updating || hudMseQueue.length > 0) {
+      hudMseQueue.push(data)
+    } else {
+      try {
+        hudSourceBuffer.appendBuffer(data)
+      } catch (e) {
+        console.error('SourceBuffer append error:', e)
+        // QuotaExceededError — evict old data
+        if (e.name === 'QuotaExceededError' && hudSourceBuffer.buffered.length > 0) {
+          const start = hudSourceBuffer.buffered.start(0)
+          const end = hudSourceBuffer.buffered.end(0) - 5
+          if (end > start) {
+            try { hudSourceBuffer.remove(start, end) } catch {}
+          }
+        }
+      }
+    }
+  }
+
+  function flushMseQueue() {
+    if (!hudSourceBuffer || hudSourceBuffer.updating || hudMseQueue.length === 0) return
+    const chunk = hudMseQueue.shift()
+    try {
+      hudSourceBuffer.appendBuffer(chunk)
+    } catch (e) {
+      console.error('SourceBuffer flush error:', e)
+    }
+  }
+
   function cleanup() {
     cleanupHls()
     cleanupHudHls()
+    cleanupHudMse()
   }
 
   // ── HLS video event handlers ──────────────────────────────
@@ -274,9 +385,17 @@
       // Switching TO HUD live stream
       videoEl?.pause()
 
-      cleanupHudHls()
+      const isWs = hudLiveUrl.startsWith('ws:') || hudLiveUrl.startsWith('wss:')
 
-      if (Hls.isSupported()) {
+      if (isWs) {
+        // WebSocket + MSE mode (fMP4 from hardware encoder)
+        cleanupHudHls()
+        initHudMse(hudLiveUrl)
+      } else if (Hls.isSupported()) {
+        // HLS fallback mode
+        cleanupHudMse()
+        cleanupHudHls()
+
         hudHls = new Hls({
           enableWorker: true,
           liveSyncDurationCount: 2,
@@ -306,6 +425,7 @@
       }
     } else if (!hudLiveUrl && videoEl) {
       // Switching FROM HUD back to qcamera HLS
+      cleanupHudMse()
       cleanupHudHls()
       if (hudVideoEl) {
         hudVideoEl.pause()

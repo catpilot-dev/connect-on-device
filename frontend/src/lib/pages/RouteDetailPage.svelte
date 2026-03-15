@@ -1,7 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte'
   import { selectedRoute, dongleId, isMetric } from '../stores.js'
-  import { fetchRoute, fetchRouteFiles, fetchAllCoords, fetchAllEventsWithProgress, enrichRoute, startHudStream, stopHudStream, hudStreamStatus, hudStreamUrl, prerenderHud, hudProgress, hudVideoUrl, cancelHudRender, saveNote, addBookmark, updateBookmark, deleteBookmark, takeScreenshot, fetchScreenshotByTime, fetchDashboardTelemetry } from '../api.js'
+  import { fetchRoute, fetchRouteFiles, fetchAllCoords, fetchAllEventsWithProgress, enrichRoute, startHudStream, stopHudStream, hudStreamStatus, hudStreamUrl, hudStreamWsUrl, prerenderHud, hudProgress, hudVideoUrl, cancelHudRender, saveNote, addBookmark, updateBookmark, deleteBookmark, takeScreenshot, fetchScreenshotByTime, fetchDashboardTelemetry } from '../api.js'
   import { formatDate, formatDistance, formatDuration, getRouteDurationMs, formatAbsoluteTimeHM } from '../format.js'
   import { buildTimelineEvents } from '../derived.js'
   import snarkdown from 'snarkdown'
@@ -40,7 +40,8 @@
   let hudPollTimer = null
   let hudTickTimer = null
   let hudStartTime = 0  // currentTime when stream was started
-  const hudLiveUrl = $derived(hudStreaming ? hudStreamUrl() : null)
+  let hudStreamMode = $state('ws')  // 'ws' (WebSocket fMP4) or 'hls' (legacy)
+  const hudLiveUrl = $derived(hudStreaming ? (hudStreamMode === 'ws' ? hudStreamWsUrl() : hudStreamUrl()) : null)
   // HUD download (pre-render to MP4)
   let dlRendering = $state(false)
   let dlReady = $state(false)
@@ -346,7 +347,8 @@
     hudStreaming = false
     hudError = null
     try {
-      await startHudStream(route.local_id, currentTime, !!hevcSupported)
+      const streamResult = await startHudStream(route.local_id, currentTime, !!hevcSupported, 'ws')
+      hudStreamMode = streamResult.mode || 'ws'
       // Poll for streaming status
       hudPollTimer = setInterval(async () => {
         try {
@@ -355,6 +357,7 @@
             clearInterval(hudPollTimer)
             hudPollTimer = null
             hudStarting = false
+            hudStreamMode = s.mode || hudStreamMode
             hudStreaming = true
             startHudTick()
           } else if (s.status === 'error') {
