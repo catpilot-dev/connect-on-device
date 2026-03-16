@@ -579,6 +579,12 @@
   export function getMuted() {
     return isMuted
   }
+
+  export function getHudVideoTime() {
+    // Returns the HUD video element's currentTime (seconds since stream started).
+    // For WebRTC, this tracks actual video playback position.
+    return hudVideoEl?.currentTime ?? 0
+  }
 </script>
 
 <div class="relative w-full group bg-black" style="aspect-ratio: {showingHud ? '2160/1080' : '1928/1208'}; contain: strict">

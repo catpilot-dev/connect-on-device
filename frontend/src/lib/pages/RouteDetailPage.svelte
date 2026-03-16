@@ -40,6 +40,7 @@
   let hudPollTimer = null
   let hudTickTimer = null
   let hudStartTime = 0  // currentTime when stream was started
+  let hudVideoOffset = 0 // calibrated offset: replay_time at first video frame
   let hudStreamMode = $state('webrtc')  // 'webrtc' (default), 'ws' (WebSocket fMP4), or 'hls' (legacy)
   const hudLiveUrl = $derived(hudStreaming ? (hudStreamMode === 'webrtc' ? 'webrtc:' : hudStreamMode === 'ws' ? hudStreamWsUrl() : hudStreamUrl()) : null)
   // HUD download (pre-render to MP4)
@@ -306,21 +307,48 @@
   function startHudTick() {
     stopHudTick()
     hudStartTime = currentTime
+    hudVideoOffset = 0
     const endTime = (selectionEnd > 0) ? selectionEnd : duration
-    // Poll server for actual replay time — keeps UI synced with what's on screen
+    // For WebRTC: derive timeline from video element playback position
+    // (avoids desync from encoding+transport latency).
+    // Calibrate once: when video first plays, snapshot server replay_time
+    // as the base offset so video.currentTime maps to route time correctly.
+    let calibrated = false
     hudTickTimer = setInterval(async () => {
-      try {
-        const st = await hudStreamStatus()
-        if (st.replay_time != null) {
-          currentTime = st.replay_time
-        } else {
-          currentTime += 1 // fallback: wall-clock advance
+      if (hudStreamMode === 'webrtc') {
+        const vt = videoPlayer?.getHudVideoTime?.() ?? 0
+        if (vt > 0.1 && !calibrated) {
+          // One-time calibration: replay_time at first video frame
+          try {
+            const st = await hudStreamStatus()
+            if (st.replay_time != null) {
+              hudVideoOffset = st.replay_time - vt
+              calibrated = true
+            }
+          } catch {}
         }
-      } catch {
-        currentTime += 1
+        if (calibrated && vt > 0) {
+          currentTime = hudVideoOffset + vt
+        } else if (!calibrated) {
+          // Pre-calibration: use server time
+          try {
+            const st = await hudStreamStatus()
+            if (st.replay_time != null) currentTime = st.replay_time
+          } catch {}
+        }
+      } else {
+        try {
+          const st = await hudStreamStatus()
+          if (st.replay_time != null) {
+            currentTime = st.replay_time
+          } else {
+            currentTime += 1
+          }
+        } catch {
+          currentTime += 1
+        }
       }
       if (endTime > 0 && currentTime >= endTime) {
-        // Reached end — stop stream, return to normal video
         stopHudTick()
         hudWanted = false
         hudStreaming = false
@@ -328,7 +356,7 @@
         stopHudStream().catch(() => {})
         restoreVideoDefaults()
       }
-    }, 1000)
+    }, hudStreamMode === 'webrtc' ? 250 : 1000)
   }
 
   function restoreVideoDefaults() {
