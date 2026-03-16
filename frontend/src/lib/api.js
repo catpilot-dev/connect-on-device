@@ -187,7 +187,7 @@ export function hudVideoUrl(routeName) {
 
 // ── HUD live streaming ────────────────────────────────────
 
-export async function startHudStream(routeName, start = 0, hd = false, mode = 'ws') {
+export async function startHudStream(routeName, start = 0, hd = false, mode = 'webrtc') {
   const res = await fetch('/v1/hud/stream/start', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -218,6 +218,17 @@ export function hudStreamUrl() {
 export function hudStreamWsUrl() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
   return `${proto}//${location.host}/v1/hud/stream/ws`
+}
+
+/** WebRTC SDP offer/answer exchange */
+export async function hudStreamOffer(sdp) {
+  const res = await fetch('/v1/hud/stream/offer', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sdp }),
+  })
+  if (!res.ok) throw new Error(`hudStreamOffer: ${res.status}`)
+  return res.json()
 }
 
 // ── Connectdata URL builders ────────────────────────────────

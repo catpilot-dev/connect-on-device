@@ -1,7 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte'
   import Hls from 'hls.js'
-  import { hudUrl, spriteUrl, cameraUrl } from '../api.js'
+  import { hudUrl, spriteUrl, cameraUrl, hudStreamOffer } from '../api.js'
 
   /**
    * Cross-browser HLS video player with HUD live stream support.
@@ -53,6 +53,9 @@
   let hudSourceBuffer = null // SourceBuffer for H264 fMP4
   let hudMseQueue = []       // Pending chunks while SourceBuffer is updating
   let hudMseReady = false    // SourceBuffer is ready for appends
+
+  // WebRTC state for HUD stream
+  let hudPc = null           // RTCPeerConnection
 
   // Track which video is active for control methods
   const showingHud = $derived(!!hudLiveUrl)
@@ -238,10 +241,67 @@
     }
   }
 
+  async function initHudWebRTC() {
+    if (!hudVideoEl) return false
+
+    cleanupHudWebRTC()
+    cleanupHudMse()
+    cleanupHudHls()
+
+    const pc = new RTCPeerConnection({
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+    })
+    hudPc = pc
+
+    pc.onconnectionstatechange = () => {
+      console.log('[WebRTC] connection state:', pc.connectionState)
+    }
+
+    // Receive-only video transceiver
+    pc.addTransceiver('video', { direction: 'recvonly' })
+
+    pc.ontrack = (ev) => {
+      console.log('[WebRTC] ontrack:', ev.track.kind, 'streams:', ev.streams.length)
+      // aiortc may not associate tracks with streams, so create one from the track
+      const stream = ev.streams[0] || new MediaStream([ev.track])
+      hudVideoEl.srcObject = stream
+      hudVideoEl.play().catch((e) => console.error('[WebRTC] play error:', e))
+    }
+
+    // Create offer and wait for ICE gathering (LAN = instant)
+    const offer = await pc.createOffer()
+    await pc.setLocalDescription(offer)
+
+    // Wait for ICE gathering to complete (timeout after 3s for LAN)
+    await new Promise((resolve) => {
+      if (pc.iceGatheringState === 'complete') { resolve(); return }
+      const timer = setTimeout(resolve, 3000)
+      pc.onicegatheringstatechange = () => {
+        if (pc.iceGatheringState === 'complete') { clearTimeout(timer); resolve() }
+      }
+    })
+
+    // Exchange SDP with server
+    console.log('[WebRTC] sending offer...')
+    const answer = await hudStreamOffer(pc.localDescription.sdp)
+    console.log('[WebRTC] got answer, setting remote description')
+    await pc.setRemoteDescription(new RTCSessionDescription(answer))
+
+    return true
+  }
+
+  function cleanupHudWebRTC() {
+    if (hudPc) {
+      try { hudPc.close() } catch {}
+      hudPc = null
+    }
+  }
+
   function cleanup() {
     cleanupHls()
     cleanupHudHls()
     cleanupHudMse()
+    cleanupHudWebRTC()
   }
 
   // ── HLS video event handlers ──────────────────────────────
@@ -385,9 +445,13 @@
       // Switching TO HUD live stream
       videoEl?.pause()
 
+      const isWebRTC = hudLiveUrl === 'webrtc:'
       const isWs = hudLiveUrl.startsWith('ws:') || hudLiveUrl.startsWith('wss:')
 
-      if (isWs) {
+      if (isWebRTC) {
+        // WebRTC mode — aiortc encodes H.264, native <video> playback
+        initHudWebRTC().catch((e) => console.error('WebRTC init failed:', e))
+      } else if (isWs) {
         // WebSocket + MSE mode (fMP4 from hardware encoder)
         cleanupHudHls()
         initHudMse(hudLiveUrl)
@@ -425,6 +489,7 @@
       }
     } else if (!hudLiveUrl && videoEl) {
       // Switching FROM HUD back to qcamera HLS
+      cleanupHudWebRTC()
       cleanupHudMse()
       cleanupHudHls()
       if (hudVideoEl) {

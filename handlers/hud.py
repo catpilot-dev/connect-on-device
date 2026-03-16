@@ -440,9 +440,9 @@ async def handle_hud_stream_start(request: web.Request) -> web.Response:
         raise web.HTTPServiceUnavailable(
             text=json.dumps({"error": "Replay binary not available and rebuild failed"}))
 
-    mode = body.get("mode", "ws")  # "ws" (WebSocket fMP4) or "hls" (legacy HLS)
-    if mode not in ("ws", "hls"):
-        mode = "ws"
+    mode = body.get("mode", "webrtc")  # "webrtc" (default), "ws" (WebSocket fMP4), or "hls" (legacy)
+    if mode not in ("ws", "hls", "webrtc"):
+        mode = "webrtc"
 
     await mgr.start(
         route_name=route["fullname"],
@@ -501,6 +501,26 @@ async def handle_hud_stream_serve(request: web.Request) -> web.Response:
                 "Cache-Control": "public, max-age=60",
             },
         )
+
+
+async def handle_hud_stream_offer(request: web.Request) -> web.Response:
+    """POST /v1/hud/stream/offer — WebRTC SDP offer/answer exchange."""
+    mgr: HudStreamManager = request.app.get("stream_manager")
+    if not mgr or mgr._mode != "webrtc":
+        return web.json_response(
+            {"error": "No active WebRTC stream"}, status=400)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+
+    offer_sdp = body.get("sdp", "")
+    if not offer_sdp:
+        return web.json_response({"error": "Missing SDP"}, status=400)
+
+    answer_sdp = await mgr.create_webrtc_answer(offer_sdp)
+    return web.json_response({"sdp": answer_sdp, "type": "answer"})
 
 
 async def handle_hud_stream_ws(request: web.Request) -> web.WebSocketResponse:

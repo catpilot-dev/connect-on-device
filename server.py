@@ -34,6 +34,7 @@ from handlers import (
     handle_hud_prerender,
     handle_hud_progress,
     handle_hud_stream_serve,
+    handle_hud_stream_offer,
     handle_hud_stream_ws,
     handle_screencast_start,
     handle_screencast_seek,
@@ -237,6 +238,7 @@ def create_app(data_dir: str, static_dir: str) -> web.Application:
     app.router.add_post("/v1/hud/stream/start", handle_hud_stream_start)
     app.router.add_post("/v1/hud/stream/stop", handle_hud_stream_stop)
     app.router.add_get("/v1/hud/stream/status", handle_hud_stream_status)
+    app.router.add_post("/v1/hud/stream/offer", handle_hud_stream_offer)
     app.router.add_get("/v1/hud/stream/ws", handle_hud_stream_ws)
     app.router.add_get("/v1/hud/stream/{filename}", handle_hud_stream_serve)
 

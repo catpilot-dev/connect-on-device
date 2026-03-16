@@ -40,8 +40,8 @@
   let hudPollTimer = null
   let hudTickTimer = null
   let hudStartTime = 0  // currentTime when stream was started
-  let hudStreamMode = $state('ws')  // 'ws' (WebSocket fMP4) or 'hls' (legacy)
-  const hudLiveUrl = $derived(hudStreaming ? (hudStreamMode === 'ws' ? hudStreamWsUrl() : hudStreamUrl()) : null)
+  let hudStreamMode = $state('webrtc')  // 'webrtc' (default), 'ws' (WebSocket fMP4), or 'hls' (legacy)
+  const hudLiveUrl = $derived(hudStreaming ? (hudStreamMode === 'webrtc' ? 'webrtc:' : hudStreamMode === 'ws' ? hudStreamWsUrl() : hudStreamUrl()) : null)
   // HUD download (pre-render to MP4)
   let dlRendering = $state(false)
   let dlReady = $state(false)
@@ -307,9 +307,18 @@
     stopHudTick()
     hudStartTime = currentTime
     const endTime = (selectionEnd > 0) ? selectionEnd : duration
-    // Advance playhead at 1s/s — replay runs at real-time, one pass only
-    hudTickTimer = setInterval(() => {
-      currentTime += 1
+    // Poll server for actual replay time — keeps UI synced with what's on screen
+    hudTickTimer = setInterval(async () => {
+      try {
+        const st = await hudStreamStatus()
+        if (st.replay_time != null) {
+          currentTime = st.replay_time
+        } else {
+          currentTime += 1 // fallback: wall-clock advance
+        }
+      } catch {
+        currentTime += 1
+      }
       if (endTime > 0 && currentTime >= endTime) {
         // Reached end — stop stream, return to normal video
         stopHudTick()
@@ -347,7 +356,7 @@
     hudStreaming = false
     hudError = null
     try {
-      const streamResult = await startHudStream(route.local_id, currentTime, !!hevcSupported, 'ws')
+      const streamResult = await startHudStream(route.local_id, currentTime, !!hevcSupported, 'webrtc')
       hudStreamMode = streamResult.mode || 'ws'
       // Poll for streaming status
       hudPollTimer = setInterval(async () => {

@@ -55,6 +55,7 @@ from .hud import (
     handle_hud_stream_stop,
     handle_hud_stream_status,
     handle_hud_stream_serve,
+    handle_hud_stream_offer,
     handle_hud_stream_ws,
     handle_screencast_start,
     handle_screencast_seek,
