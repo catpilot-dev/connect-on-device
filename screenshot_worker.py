@@ -13,18 +13,22 @@ Safety: the worker runs only while the device is offroad, re-checks IsOnroad
 before every job, and yields to user-triggered HUD prerenders. It never runs
 while the car is driving.
 
-Output PNGs are named capture_YYYYMMDD_HHMMSS.png from the bookmark's epoch
-(route create_time + offset — the same formula the frontend uses for
-/v1/screenshots/at matching), so bookmark rows and the Captures page pick
-them up with no frontend changes.
+Output PNGs are named capture_YYYYMMDD_HHMMSS.png from the tap's exact epoch,
+converted mono→wall against the log's own GPS fixes. That epoch is recorded
+alongside the filename so bookmark rows and /v1/screenshots/at match on it
+directly. A tap with no GPS time anywhere in its drive is not rendered at all
+(status "no_gps_time"): the only other clock is the device RTC, which lags the
+drive's true start by the GPS-fix wait — 21-45 s measured — so a capture named
+from it would be wrong data and would never match its own bookmark row.
 
 State lives in route metadata under "hud_capture_state":
     {"scanned_segs": [0, 1, ...],
-     "bookmarks": {"<offset_ms>": {"status": "pending|done|failed", "attempts": n}}}
+     "bookmarks": {"<offset_ms>":
+         {"status": "pending|done|failed|no_gps_time", "attempts": n}}}
 
-Routes without a real create_time yet (gps_time is filled by
-enrich_new_routes() on the first route-list view) are skipped until it exists —
-the epoch-based filename would be meaningless without it.
+Routes are skipped until enrich_new_routes() has run on them (first route-list
+view): start_lng sets the filename's timezone, and create_time orders routes
+so "the latest drive" means what it says.
 """
 import asyncio
 import logging
@@ -37,7 +41,7 @@ from pathlib import Path
 from config import COD_HUD_CACHE_DIR, PYTHON_BIN
 from handlers.middleware import is_onroad
 from handlers.screenshots import SCREENSHOTS_DIR, _parse_capture_epoch
-from log_parser import _extract_bookmark_epochs
+from log_parser import _extract_bookmark_epochs, _gps_anchor
 from route_store import RouteStore
 
 logger = logging.getLogger("connect")
@@ -118,9 +122,9 @@ def _find_capture(captures: list[tuple[float, str]], target: float) -> str | Non
 def _sync_epochs_to_meta(meta: dict, bms: dict) -> bool:
     """Copy exact tap epochs onto the route's visible bookmarks.
 
-    The frontend matches a bookmark row to its capture PNG by epoch; without
-    this it falls back to create_time + time_sec, which misses whenever the
-    route's GPS fix lagged more than the 2 s match tolerance. Bookmarks are
+    The frontend matches a bookmark row to its capture PNG by epoch; a row
+    without one skips the lookup entirely and exports a plain frame instead,
+    since no other clock in the log dates the tap correctly. Bookmarks are
     matched by offset (drive bookmarks are imported as round(ms/1000, 1)).
     """
     changed = False
@@ -162,10 +166,11 @@ def _collect_pending(store) -> tuple[list[dict], bool]:
         if not lid or lid in store._hidden:
             continue
         create_time = route.get("create_time") or 0
-        # Wait for enrichment: without create_time the epoch is meaningless,
-        # and without start_lng the PNG would be named in device time (UTC) —
-        # which collides, to the second, with the old plugin's live-capture
-        # names. Both fields appear together on the first route-list view.
+        # Wait for enrichment: without start_lng the PNG would be named in
+        # device time (UTC) — which collides, to the second, with the old
+        # plugin's live-capture names — and without create_time the route
+        # sort above cannot tell which drive is the latest. Both fields
+        # appear together on the first route-list view.
         if create_time < MIN_REAL_EPOCH or route.get("start_lng") is None:
             continue
         meta = store._metadata.get(lid)
@@ -183,21 +188,34 @@ def _collect_pending(store) -> tuple[list[dict], bool]:
         route_scanned = False
         if not latest_scanned:
             latest_scanned = True
-            for seg in route.get("_segments", []):
+            segs = route.get("_segments", [])
+            # One GPS anchor for the whole route. logMonoTime is boot-relative
+            # and continuous across segments, so a single fix dates every tap
+            # exactly — including taps in a segment that never got a fix, and
+            # taps before the drive's first fix. The first fix normally lands
+            # in segment 0; three segments is a generous cap.
+            anchor = None
+            if any(s.get("number") not in scanned for s in segs):
+                for seg in segs[:3]:
+                    qlog = RouteStore._find_qlog(seg["path"])
+                    if qlog:
+                        anchor = _gps_anchor(qlog)
+                        if anchor:
+                            break
+            for seg in segs:
                 num = seg.get("number")
                 if num is None or num in scanned or scan_budget <= 0:
                     continue
                 qlog = RouteStore._find_qlog(seg["path"])
                 if qlog:
                     scan_budget -= 1
-                    for ms, epoch in _extract_bookmark_epochs(qlog, num):
-                        entry = {"status": "pending", "attempts": 0}
-                        if epoch is not None:
+                    for ms, epoch in _extract_bookmark_epochs(qlog, num, anchor):
+                        entry = bms.setdefault(str(ms), {"status": "pending", "attempts": 0})
+                        if epoch is not None and "epoch" not in entry:
                             # Exact tap wall-time — names the PNG so the user
                             # can identify the moment; create_time + offset is
                             # only a fallback (it carries the GPS-fix lag).
                             entry["epoch"] = round(epoch, 3)
-                        bms.setdefault(str(ms), entry)
                 scanned.add(num)
                 route_scanned = True
 
@@ -211,7 +229,18 @@ def _collect_pending(store) -> tuple[list[dict], bool]:
         for ms_key, entry in bms.items():
             if entry.get("status") != "pending":
                 continue
-            epoch = entry.get("epoch") or (create_time + int(ms_key) / 1000.0)
+            epoch = entry.get("epoch")
+            if epoch is None:
+                # No GPS fix anywhere in the drive. The device RTC is the only
+                # clock left and it dates the route from its first fix, not
+                # its start — 21-45 s late on real drives. A PNG named from
+                # that is wrong data that would never match its bookmark row,
+                # so don't produce one.
+                entry["status"] = "no_gps_time"
+                changed = True
+                logger.warning("Capture at %sms in %s has no GPS time — skipped",
+                               ms_key, lid)
+                continue
             filename = _capture_filename(epoch, round(route["start_lng"] / 15))
             # Already captured: exact filename from a previous run, or another
             # capture within the match window. Record the file that actually

@@ -124,8 +124,11 @@ def _state_epoch_map(store) -> dict:
 async def handle_screenshot_by_time(request: web.Request) -> web.Response:
     """GET /v1/screenshots/at/{epoch} — find and serve HUD PNG closest to epoch timestamp.
 
-    Used by bookmark export: route.create_time + bookmark.time_sec = target epoch.
-    Matches within 2-second tolerance (bookmark + capture happen in same second).
+    Used by bookmark export, which passes the bookmark's exact tap epoch
+    (mono→wall from the log's GPS fixes). Matches within a 2-second tolerance;
+    callers with no exact epoch must not call this — a route-relative offset
+    dated by create_time is tens of seconds off and would match the wrong
+    capture or none at all.
     """
     try:
         target = float(request.match_info['epoch'])

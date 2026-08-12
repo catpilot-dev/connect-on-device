@@ -258,18 +258,54 @@ def _extract_bookmarks(log_path: str, segment_num: int) -> list:
     return sorted(bookmarks)
 
 
-def _extract_bookmark_epochs(log_path: str, segment_num: int) -> list:
+def _gps_anchor(log_path: str) -> tuple | None:
+    """(logMonoTime, unix_seconds) of the first usable GPS fix in a log.
+
+    logMonoTime is boot-relative and continuous across every segment of a
+    route, so one anchor converts any segment's monotonic timestamps to wall
+    time — no per-segment fix required. Measured on a real drive, the anchor
+    holds to ~25 ms over 16 minutes of driving, and agrees with the device
+    wall clock to ~0.18 s.
+
+    Reads only the log head, so a fix that arrives late in a segment is
+    missed here; callers scan the next segment instead.
+    """
+    try:
+        for ev in _iter_log_head(log_path):
+            if ev.which() != "gpsLocationExternal":
+                continue
+            gps = ev.gpsLocationExternal
+            ms = getattr(gps, "unixTimestampMillis", 0)
+            if (gps.flags & 1) and ms > 0:
+                return (ev.logMonoTime, ms / 1000.0)
+    except Exception as e:
+        logger.debug("gps anchor scan error for %s: %s", log_path, e)
+    return None
+
+
+def _extract_bookmark_epochs(log_path: str, segment_num: int, gps_anchor=None) -> list:
     """Extract (route_offset_millis, wall_epoch) per userBookmark in a log.
 
     wall_epoch is the exact tap time: the bookmark's logMonoTime converted
-    mono→wall against the segment's first fixed gpsLocationExternal (any fix
-    works — both clocks advance together). None when the segment has no fix;
-    callers fall back to create_time + offset, which carries the route's
-    GPS-fix lag.
+    mono→wall against a GPS fix, which is the only clock in the log that is
+    both absolute and correct (the device RTC starts each boot months stale,
+    and initData.wallTimeNanos records that stale value).
+
+    Each tap is dated from the closest fix in its own segment, which keeps
+    the mono→wall conversion within ~20 ms. gps_anchor is the fallback for a
+    segment that has no usable fix: a (logMonoTime, unix_seconds) pair from
+    anywhere in the same route (see _gps_anchor()). Monotonic time is
+    continuous across a route's segments, so a distant anchor still dates the
+    tap to ~40 ms — worth using rather than reaching for create_time.
+
+    epoch is None only when the segment has no fix and no anchor was given;
+    callers then fall back to create_time + offset, which carries the route's
+    GPS-fix lag — measured at 21-45 s on real drives, far outside the 2 s
+    match window.
     """
-    taps = []  # (logMonoTime, route_offset_millis)
+    taps = []   # (logMonoTime, route_offset_millis)
+    fixes = []  # (logMonoTime, unix_seconds)
     base_mono = None
-    gps_ref = None  # (logMonoTime, unix_seconds)
 
     try:
         for ev in _iter_log(log_path):
@@ -277,11 +313,11 @@ def _extract_bookmark_epochs(log_path: str, segment_num: int) -> list:
             if base_mono is None and w != "initData":
                 base_mono = ev.logMonoTime
 
-            if gps_ref is None and w == "gpsLocationExternal":
+            if w == "gpsLocationExternal":
                 gps = ev.gpsLocationExternal
                 ms = getattr(gps, "unixTimestampMillis", 0)
                 if (gps.flags & 1) and ms > 0:
-                    gps_ref = (ev.logMonoTime, ms / 1000.0)
+                    fixes.append((ev.logMonoTime, ms / 1000.0))
 
             if w == "userBookmark":
                 offset_ms = (ev.logMonoTime - base_mono) / 1e6 if base_mono is not None else 0
@@ -291,7 +327,8 @@ def _extract_bookmark_epochs(log_path: str, segment_num: int) -> list:
 
     result = []
     for mono, offset in taps:
-        epoch = gps_ref[1] + (mono - gps_ref[0]) / 1e9 if gps_ref else None
+        ref = min(fixes, key=lambda f: abs(f[0] - mono)) if fixes else gps_anchor
+        epoch = ref[1] + (mono - ref[0]) / 1e9 if ref else None
         result.append((offset, epoch))
     return sorted(result)
 

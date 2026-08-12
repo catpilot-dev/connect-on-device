@@ -40,7 +40,8 @@ def quiet_world(monkeypatch):
 
 def test_collect_creates_pending_job(store, quiet_world, monkeypatch):
     store.add_route("aaaa--11")
-    monkeypatch.setattr(sw, "_extract_bookmark_epochs", lambda path, seg: [(12_345, None)])
+    monkeypatch.setattr(sw, "_extract_bookmark_epochs",
+                        lambda path, seg, anchor=None: [(12_345, REAL_EPOCH + 12.345)])
 
     jobs, changed = sw._collect_pending(store)
 
@@ -57,7 +58,7 @@ def test_collect_creates_pending_job(store, quiet_world, monkeypatch):
 
 def test_route_without_real_epoch_is_skipped(store, quiet_world, monkeypatch):
     store.add_route("bbbb--22", create_time=1234)  # counter fallback, not a clock
-    monkeypatch.setattr(sw, "_extract_bookmark_epochs", lambda path, seg: [(5_000, None)])
+    monkeypatch.setattr(sw, "_extract_bookmark_epochs", lambda path, seg, anchor=None: [(5_000, None)])
 
     jobs, changed = sw._collect_pending(store)
 
@@ -67,7 +68,8 @@ def test_route_without_real_epoch_is_skipped(store, quiet_world, monkeypatch):
 
 def test_existing_capture_marks_done_without_job(store, quiet_world, monkeypatch):
     store.add_route("cccc--33")
-    monkeypatch.setattr(sw, "_extract_bookmark_epochs", lambda path, seg: [(10_000, None)])
+    monkeypatch.setattr(sw, "_extract_bookmark_epochs",
+                        lambda path, seg, anchor=None: [(10_000, REAL_EPOCH + 10.0)])
     monkeypatch.setattr(sw, "_existing_captures",
                         lambda: [(REAL_EPOCH + 10.8, "capture_legacy.png")])  # within 2s
 
@@ -85,7 +87,7 @@ def test_scanned_segments_are_not_rescanned(store, quiet_world, monkeypatch):
     store.add_route("dddd--44")
     calls = []
 
-    def fake_extract(path, seg):
+    def fake_extract(path, seg, anchor=None):
         calls.append(seg)
         return []
 
@@ -100,7 +102,8 @@ def test_exhausted_attempts_marks_failed(store, quiet_world, monkeypatch):
     store.add_route("eeee--55")
     store._metadata["eeee--55"]["hud_capture_state"] = {
         "scanned_segs": [0],
-        "bookmarks": {"7000": {"status": "pending", "attempts": sw.MAX_ATTEMPTS}},
+        "bookmarks": {"7000": {"status": "pending", "attempts": sw.MAX_ATTEMPTS,
+                               "epoch": REAL_EPOCH + 7.0}},
     }
 
     jobs, changed = sw._collect_pending(store)
@@ -114,7 +117,7 @@ def test_onroad_aborts_scan(store, quiet_world, monkeypatch):
     store.add_route("ffff--66")
     monkeypatch.setattr(sw, "is_onroad", lambda: True)
     monkeypatch.setattr(sw, "_extract_bookmark_epochs",
-                        lambda path, seg: pytest.fail("must not parse qlogs onroad"))
+                        lambda path, seg, anchor=None: pytest.fail("must not parse qlogs onroad"))
 
     jobs, changed = sw._collect_pending(store)
 
@@ -127,7 +130,7 @@ def test_unenriched_route_waits_for_longitude(store, quiet_world, monkeypatch):
     plugin's UTC live-capture names. Skip until enrichment fills it."""
     store.add_route("gggg--00", lng=None)
     monkeypatch.setattr(sw, "_extract_bookmark_epochs",
-                        lambda path, seg: pytest.fail("must not scan before enrichment"))
+                        lambda path, seg, anchor=None: pytest.fail("must not scan before enrichment"))
 
     jobs, changed = sw._collect_pending(store)
 
@@ -140,7 +143,7 @@ def test_exact_tap_epoch_preferred_over_create_time(store, quiet_world, monkeypa
     store.add_route("hhhh--88")
     tap_epoch = REAL_EPOCH - 42.0  # GPS fix lagged the tap-relative estimate
     monkeypatch.setattr(sw, "_extract_bookmark_epochs",
-                        lambda path, seg: [(20_000, tap_epoch)])
+                        lambda path, seg, anchor=None: [(20_000, tap_epoch)])
 
     jobs, changed = sw._collect_pending(store)
 
@@ -148,6 +151,39 @@ def test_exact_tap_epoch_preferred_over_create_time(store, quiet_world, monkeypa
     assert jobs[0]["epoch"] == pytest.approx(tap_epoch)
     state = store._metadata["hhhh--88"]["hud_capture_state"]
     assert state["bookmarks"]["20000"]["epoch"] == pytest.approx(tap_epoch)
+
+
+def test_tap_without_gps_time_is_not_rendered(store, quiet_world, monkeypatch):
+    """No GPS anywhere in the drive → no trustworthy clock for the tap.
+
+    create_time dates a route from its first GPS fix, tens of seconds after it
+    actually started, so a PNG named from it is wrong data that would never
+    match its own bookmark row. Mark it and move on instead of rendering.
+    """
+    store.add_route("jjjj--77")
+    monkeypatch.setattr(sw, "_extract_bookmark_epochs",
+                        lambda path, seg, anchor=None: [(30_000, None)])
+
+    jobs, changed = sw._collect_pending(store)
+
+    assert jobs == []
+    assert changed
+    entry = store._metadata["jjjj--77"]["hud_capture_state"]["bookmarks"]["30000"]
+    assert entry["status"] == "no_gps_time"
+    assert "epoch" not in entry
+
+
+def test_no_gps_time_is_not_retried(store, quiet_world, monkeypatch):
+    store.add_route("kkkk--77")
+    store._metadata["kkkk--77"]["hud_capture_state"] = {
+        "scanned_segs": [0],
+        "bookmarks": {"30000": {"status": "no_gps_time", "attempts": 0}},
+    }
+    monkeypatch.setattr(sw, "_extract_bookmark_epochs", lambda path, seg, anchor=None: [])
+
+    jobs, _ = sw._collect_pending(store)
+
+    assert jobs == []
 
 
 def test_epoch_synced_to_visible_bookmarks(store, quiet_world, monkeypatch):
@@ -159,7 +195,7 @@ def test_epoch_synced_to_visible_bookmarks(store, quiet_world, monkeypatch):
     ]
     tap_epoch = REAL_EPOCH + 17.5
     monkeypatch.setattr(sw, "_extract_bookmark_epochs",
-                        lambda path, seg: [(20_000, tap_epoch)])
+                        lambda path, seg, anchor=None: [(20_000, tap_epoch)])
 
     sw._collect_pending(store)
 
@@ -174,7 +210,7 @@ def test_only_latest_route_is_scanned(store, quiet_world, monkeypatch):
     store.add_route("new1--bb", create_time=REAL_EPOCH)
     scanned_paths = []
 
-    def fake_extract(path, seg):
+    def fake_extract(path, seg, anchor=None):
         scanned_paths.append(path)
         return []
 
@@ -191,9 +227,10 @@ def test_older_route_pending_still_renders(store, quiet_world, monkeypatch):
     store.add_route("new2--dd", create_time=REAL_EPOCH)
     store._metadata["old2--cc"]["hud_capture_state"] = {
         "scanned_segs": [0],
-        "bookmarks": {"9000": {"status": "pending", "attempts": 1}},
+        "bookmarks": {"9000": {"status": "pending", "attempts": 1,
+                               "epoch": REAL_EPOCH - 7200 + 9.0}},
     }
-    monkeypatch.setattr(sw, "_extract_bookmark_epochs", lambda path, seg: [])
+    monkeypatch.setattr(sw, "_extract_bookmark_epochs", lambda path, seg, anchor=None: [])
 
     jobs, changed = sw._collect_pending(store)
 

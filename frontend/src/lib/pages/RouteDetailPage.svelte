@@ -498,14 +498,16 @@
     bookmarkExportBusy = index
     try {
       const bm = metaBookmarks[index]
-      // bm.epoch is the exact tap wall-time (mono→wall from the log);
-      // create_time + time_sec carries the route's GPS-fix lag.
-      const epoch = bm.epoch ?? ((route.create_time || 0) + bm.time_sec)
-
-      // Try HUD screenshot first (captured live with overlay)
+      // bm.epoch is the exact tap wall-time (mono→wall against the log's own
+      // GPS fixes). Without it there is no trustworthy wall clock for this
+      // bookmark — create_time dates the route from its first GPS fix, tens
+      // of seconds after it started — so skip the epoch lookup entirely and
+      // extract the frame by route offset instead.
       let res, filename
       try {
-        res = await fetchScreenshotByTime(epoch)
+        if (bm.epoch == null) throw new Error('no exact tap time')
+        // HUD screenshot first (rendered with the full overlay)
+        res = await fetchScreenshotByTime(bm.epoch)
         const cd = res.headers.get('Content-Disposition') || ''
         const match = cd.match(/filename="?([^"]+)"?/)
         filename = match ? match[1] : `hud_${Math.round(bm.time_sec)}s.png`
