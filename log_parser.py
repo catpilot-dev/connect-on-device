@@ -298,10 +298,10 @@ def _extract_bookmark_epochs(log_path: str, segment_num: int, gps_anchor=None) -
     continuous across a route's segments, so a distant anchor still dates the
     tap to ~40 ms — worth using rather than reaching for create_time.
 
-    epoch is None only when the segment has no fix and no anchor was given;
-    callers then fall back to create_time + offset, which carries the route's
-    GPS-fix lag — measured at 21-45 s on real drives, far outside the 2 s
-    match window.
+    epoch is None only when the segment has no fix and no anchor was given —
+    a drive that never got a fix. There is no clock left to estimate from
+    (create_time dates a route from its first fix, 21-45 s late on real
+    drives), so callers skip the tap rather than date it wrongly.
     """
     taps = []   # (logMonoTime, route_offset_millis)
     fixes = []  # (logMonoTime, unix_seconds)

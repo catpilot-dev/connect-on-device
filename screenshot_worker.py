@@ -213,8 +213,8 @@ def _collect_pending(store) -> tuple[list[dict], bool]:
                         entry = bms.setdefault(str(ms), {"status": "pending", "attempts": 0})
                         if epoch is not None and "epoch" not in entry:
                             # Exact tap wall-time — names the PNG so the user
-                            # can identify the moment; create_time + offset is
-                            # only a fallback (it carries the GPS-fix lag).
+                            # can identify the moment, and matches it back to
+                            # its bookmark row. No epoch, no capture.
                             entry["epoch"] = round(epoch, 3)
                 scanned.add(num)
                 route_scanned = True
