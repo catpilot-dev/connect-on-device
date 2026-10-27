@@ -11,6 +11,7 @@ Environment variables:
   PARAMS_DIR         — openpilot params (default: /data/params/d)
   MODELS_DIR         — driving models (default: /data/models)
   OSM_DIR            — offline OSM tiles (default: /data/media/0/osm)
+  COD_CLIPS_DIR      — dashcam clip store (default: /data/media/0/cod_clips)
 """
 
 import os
@@ -35,11 +36,13 @@ COD_DIR = str(Path(__file__).parent)
 COD_CACHE_DIR = os.getenv("COD_CACHE_DIR", "/data/connect-on-device/cache")
 COD_HUD_CACHE_DIR = os.getenv("COD_HUD_CACHE_DIR", "/data/connect-on-device/hud_cache")
 COD_HLS_TMP_DIR = os.getenv("COD_HLS_TMP_DIR", "/data/connect-on-device/hud_hls_tmp")
+COD_CLIPS_DIR = os.getenv("COD_CLIPS_DIR", "/data/media/0/cod_clips")
 
 # Binaries
 PYTHON_BIN = os.getenv("PYTHON_BIN", "/usr/local/venv/bin/python")
 FFMPEG_BIN = os.getenv("FFMPEG_BIN", "/usr/local/bin/ffmpeg")
 REPLAY_BIN = os.path.join(OPENPILOT_DIR, "tools/replay/replay")
+ENCODERD_BIN = os.getenv("ENCODERD_BIN", os.path.join(OPENPILOT_DIR, "openpilot/system/loggerd/encoderd"))
 
 # Staging paths for branch upgrades
 STAGING_PATHS = [
