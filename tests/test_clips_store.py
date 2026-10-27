@@ -94,3 +94,13 @@ def test_list_skips_malformed_sidecars(store, body):
     assert [c["filename"] for c in store.list()] == ["good.mp4"]
     assert [c["filename"] for c in store.queued()] == ["good.mp4"]
     assert store.total_bytes() == 0
+
+
+@pytest.mark.parametrize("size", ["big", True, [1]])
+def test_non_numeric_size_is_treated_as_none(store, size):
+    store.mp4_path("r.mp4").parent.mkdir(parents=True, exist_ok=True)
+    store.mp4_path("r.mp4").write_bytes(b"12345")
+    store.write(_clip("r.mp4", status=STATUS_READY, size=size))
+    assert [c["filename"] for c in store.list()] == ["r.mp4"]
+    assert store.list()[0]["size"] is None
+    assert store.total_bytes() == 0

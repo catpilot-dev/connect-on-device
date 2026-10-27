@@ -103,6 +103,9 @@ class ClipStore:
                     or not isinstance(clip.get("requested_at", 0), (int, float))):
                 log.warning("clips: malformed sidecar %s; skipping", p)
                 continue
+            size = clip.get("size")
+            if isinstance(size, bool) or not isinstance(size, (int, float)):
+                clip["size"] = None
             if clip.get("status") == STATUS_READY and not self.mp4_path(clip["filename"]).exists():
                 log.warning("clips: %s ready but MP4 missing; removing sidecar", clip["filename"])
                 p.unlink(missing_ok=True)
