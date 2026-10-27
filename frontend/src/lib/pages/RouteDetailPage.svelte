@@ -923,6 +923,23 @@
           {/if}
         </div>
 
+        {#if !isFullscreen && !enriching && !hudMode}
+          <!-- Phones: the player's hover overlay (and its Clip button) is hidden under 640 px -->
+          <button
+            class="sm:hidden w-full flex items-center justify-center gap-2 py-2 rounded-lg bg-surface-800 border border-surface-700 text-sm text-surface-100 active:bg-surface-700"
+            title="Dashcam clip"
+            onclick={openClipFromSelection}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-4 h-4">
+              <rect x="2" y="3" width="20" height="18" rx="2"/>
+              <line x1="7" y1="3" x2="7" y2="21"/>
+              <line x1="17" y1="3" x2="17" y2="21"/>
+              <line x1="2" y1="12" x2="22" y2="12"/>
+            </svg>
+            Clip
+          </button>
+        {/if}
+
         {#if clipToast}
           <div class="mt-2 px-3 py-2 rounded-lg bg-surface-800 border border-surface-700 text-sm text-surface-100 flex items-center justify-between">
             <span>{clipToast}</span>
@@ -1319,7 +1336,7 @@
                           >{bm.label}</button>
                         {/if}
                         <button
-                          class="shrink-0 text-surface-500/40 hover:text-surface-200 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer p-1"
+                          class="shrink-0 text-surface-500/40 hover:text-surface-200 opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100 [@media(hover:none)]:text-surface-300 transition-opacity cursor-pointer p-1"
                           title="Clip 30 s around this bookmark"
                           onclick={() => openClipFromBookmark(i)}
                         >
