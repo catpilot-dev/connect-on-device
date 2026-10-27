@@ -98,18 +98,23 @@ class ClipStore:
             except (OSError, ValueError):
                 log.warning("clips: unreadable sidecar %s", p)
                 continue
+            if (not isinstance(clip, dict) or not isinstance(clip.get("filename"), str)
+                    or isinstance(clip.get("requested_at"), bool)
+                    or not isinstance(clip.get("requested_at", 0), (int, float))):
+                log.warning("clips: malformed sidecar %s; skipping", p)
+                continue
             if clip.get("status") == STATUS_READY and not self.mp4_path(clip["filename"]).exists():
                 log.warning("clips: %s ready but MP4 missing; removing sidecar", clip["filename"])
                 p.unlink(missing_ok=True)
                 continue
             clips.append(clip)
-        clips.sort(key=lambda c: c.get("requested_at", 0), reverse=True)
+        clips.sort(key=lambda c: c.get("requested_at") or 0, reverse=True)
         return clips
 
     def queued(self) -> list[dict]:
         """Queued clips, oldest request first (encode order)."""
         q = [c for c in self.list() if c.get("status") == STATUS_QUEUED]
-        q.sort(key=lambda c: c.get("requested_at", 0))
+        q.sort(key=lambda c: c.get("requested_at") or 0)
         return q
 
     def total_bytes(self) -> int:

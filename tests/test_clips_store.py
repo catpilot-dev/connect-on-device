@@ -80,3 +80,17 @@ def test_missing_directory_is_tolerated_and_not_created_by_init(tmp_path):
     assert not (tmp_path / "nope").exists()
     assert s.list() == [] and s.queued() == [] and s.total_bytes() == 0
     assert s.read("a.mp4") is None
+
+
+@pytest.mark.parametrize("body", [
+    "null", "[]",
+    json.dumps({"status": "ready", "requested_at": 1.0}),
+    json.dumps({"filename": "bad.mp4", "status": "queued", "requested_at": None}),
+    json.dumps({"filename": "bad.mp4", "status": "queued", "requested_at": "soon"}),
+])
+def test_list_skips_malformed_sidecars(store, body):
+    store.write(_clip("good.mp4", requested_at=5.0))
+    store.dir.joinpath("bad.json").write_text(body)
+    assert [c["filename"] for c in store.list()] == ["good.mp4"]
+    assert [c["filename"] for c in store.queued()] == ["good.mp4"]
+    assert store.total_bytes() == 0
