@@ -581,6 +581,51 @@ export async function fetchScreenshotByTime(epoch) {
   return res  // raw Response for blob download
 }
 
+// ── Dashcam clips ────────────────────────────────────────
+
+export const CLIP_MAX_SEC = 120
+export const CLIP_BOOKMARK_PAD_SEC = 30
+export const CLIP_BITRATES = [5, 8, 12]
+export const CLIP_DEFAULT_BITRATE = 8
+
+export function clipEstimateMB(durationSec, bitrateMbps) {
+  return durationSec * bitrateMbps / 8
+}
+
+export async function createClip(routeName, { startSec, endSec, cameras, bitrateMbps, name }) {
+  const body = { start_sec: startSec, end_sec: endSec, cameras, bitrate_mbps: bitrateMbps }
+  if (name) body.name = name
+  const res = await fetch(`/v1/route/${routeId(routeName)}/clips`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error((await res.json()).error || `createClip: ${res.status}`)
+  return res.json()
+}
+
+export async function fetchRouteClips(routeName) {
+  const res = await fetch(`/v1/route/${routeId(routeName)}/clips`)
+  if (!res.ok) throw new Error(`fetchRouteClips: ${res.status}`)
+  return res.json()
+}
+
+export async function fetchClips() {
+  const res = await fetch('/v1/clips')
+  if (!res.ok) throw new Error(`fetchClips: ${res.status}`)
+  return res.json()
+}
+
+export function clipUrl(filename) {
+  return `/v1/clips/${encodeURIComponent(filename)}`
+}
+
+export async function deleteClip(filename) {
+  const res = await fetch(`/v1/clips/${encodeURIComponent(filename)}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`deleteClip: ${res.status}`)
+  return res.json()
+}
+
 // ── Plugins ──────────────────────────────────────────────
 
 export async function fetchPlugins() {

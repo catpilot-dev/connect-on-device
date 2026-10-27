@@ -59,3 +59,21 @@ describe('downloadUrl', () => {
     expect(result).toBe('/v1/route/00000123--abc/download?files=fcamera')
   })
 })
+
+import { clipUrl, clipEstimateMB, CLIP_MAX_SEC, CLIP_BOOKMARK_PAD_SEC, CLIP_BITRATES, CLIP_DEFAULT_BITRATE } from '../api.js'
+
+describe('clips', () => {
+  it('clipUrl encodes the filename', () => {
+    expect(clipUrl('a b.mp4')).toBe('/v1/clips/a%20b.mp4')
+  })
+  it('estimate is duration × bitrate / 8 in MB', () => {
+    expect(clipEstimateMB(120, 8)).toBe(120)
+    expect(clipEstimateMB(60, 12)).toBe(90)
+  })
+  it('constants match the spec', () => {
+    expect(CLIP_MAX_SEC).toBe(120)
+    expect(CLIP_BOOKMARK_PAD_SEC).toBe(30)
+    expect(CLIP_BITRATES).toEqual([5, 8, 12])
+    expect(CLIP_DEFAULT_BITRATE).toBe(8)
+  })
+})
