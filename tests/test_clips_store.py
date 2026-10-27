@@ -110,3 +110,41 @@ def test_non_numeric_size_is_treated_as_none(store, size):
     assert [c["filename"] for c in store.list()] == ["r.mp4"]
     assert store.list()[0]["size"] is None
     assert store.total_bytes() == 0
+
+
+# --- unusable sidecars are set aside once, not warned about every tick ------
+
+import logging
+
+def _sidecar_warnings(caplog, name):
+    return [r for r in caplog.records if r.levelno == logging.WARNING and name in r.getMessage()]
+
+@pytest.mark.parametrize("body", [
+    "{not json", "null", "[]", "\udcff",
+    json.dumps({"status": "ready", "requested_at": 1.0}),
+    json.dumps({"filename": "bad.mp4", "status": "queued", "requested_at": "soon"}),
+])
+def test_unusable_sidecar_is_renamed_bad_and_warned_once(store, caplog, body):
+    store.write(_clip("good.mp4"))
+    bad = store.dir / "bad.json"
+    bad.write_bytes(body.encode("utf-8", "surrogateescape"))
+    with caplog.at_level(logging.WARNING, logger="connect"):
+        assert [c["filename"] for c in store.list()] == ["good.mp4"]
+        assert not bad.exists()
+        assert (store.dir / "bad.json.bad").read_bytes() == body.encode("utf-8", "surrogateescape")
+        assert len(_sidecar_warnings(caplog, "bad.json")) == 1
+        caplog.clear()
+        assert [c["filename"] for c in store.list()] == ["good.mp4"]
+        assert [c["filename"] for c in store.queued()] == ["good.mp4"]
+        assert _sidecar_warnings(caplog, "bad.json") == []
+
+def test_sidecar_that_cannot_be_read_is_kept_and_warned_once(store, caplog):
+    # An I/O error is not proof the clip is bad: never rename it away, just say so once.
+    store.write(_clip("good.mp4"))
+    odd = store.dir / "odd.json"
+    odd.mkdir()                                   # read_text() raises IsADirectoryError
+    with caplog.at_level(logging.WARNING, logger="connect"):
+        assert [c["filename"] for c in store.list()] == ["good.mp4"]
+        store.list(); store.queued()
+    assert odd.is_dir() and not (store.dir / "odd.json.bad").exists()
+    assert len(_sidecar_warnings(caplog, "odd.json")) == 1

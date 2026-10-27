@@ -77,6 +77,27 @@ class ClipStore:
 
     def __init__(self, clips_dir: str):
         self.dir = Path(clips_dir)
+        self._warned: set[str] = set()  # sidecars already reported as unreadable
+
+    def _warn_once(self, p: Path, message: str) -> None:
+        if p.name not in self._warned:
+            self._warned.add(p.name)
+            log.warning("clips: %s %s", message, p)
+
+    def _set_aside(self, p: Path, why: str) -> None:
+        """Rename an unusable sidecar to <stem>.json.bad (best effort) so it is reported once.
+
+        list() runs every worker tick; left in place, a bad sidecar would be
+        re-read and warned about every two seconds. The .bad file keeps its
+        bytes for inspection and is never listed.
+        """
+        try:
+            os.replace(p, p.with_name(p.name + ".bad"))
+        except OSError:
+            self._warn_once(p, f"{why} sidecar (could not rename it aside):")
+            return
+        self._warned.discard(p.name)
+        log.warning("clips: %s sidecar %s; renamed to %s.bad", why, p, p.name)
 
     def sidecar_path(self, filename: str) -> Path:
         return self.dir / (Path(filename).stem + ".json")
@@ -118,14 +139,21 @@ class ClipStore:
         for p in paths:
             try:
                 clip = json.loads(p.read_text())
-            except (OSError, ValueError):
-                log.warning("clips: unreadable sidecar %s", p)
+            except FileNotFoundError:
+                continue  # removed since the glob
+            except OSError as e:
+                # Not proof the clip is bad (it may read fine next time), so it stays put.
+                self._warn_once(p, f"cannot read sidecar ({e}):")
+                continue
+            except ValueError:  # not UTF-8, or not JSON
+                self._set_aside(p, "unparseable")
                 continue
             if (not isinstance(clip, dict) or not isinstance(clip.get("filename"), str)
                     or isinstance(clip.get("requested_at"), bool)
                     or not isinstance(clip.get("requested_at", 0), (int, float))):
-                log.warning("clips: malformed sidecar %s; skipping", p)
+                self._set_aside(p, "malformed")
                 continue
+            self._warned.discard(p.name)
             size = clip.get("size")
             if isinstance(size, bool) or not isinstance(size, (int, float)):
                 clip["size"] = None
