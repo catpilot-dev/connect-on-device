@@ -174,3 +174,18 @@ async def test_cancel_kills_encoder_and_cleans(cs, tmp_path, monkeypatch):
         await task
     assert procs[0].returncode == -signal.SIGKILL      # shutdown never leaves an orphan encoder running
     assert not cs.temp_path("c.mp4").exists() and not cs.lock_path("c.mp4").exists()
+
+
+def test_kill_stray_encoders_argv(monkeypatch):
+    calls = []
+    monkeypatch.setattr(clips.subprocess, "run", lambda argv, **kw: calls.append((argv, kw)))
+    clips.kill_stray_encoders()
+    assert calls[0][0] == ["pkill", "-9", "-f", "encoderd --clip"]
+    assert calls[0][1].get("capture_output") is True
+
+
+def test_kill_stray_encoders_tolerates_missing_pkill(monkeypatch):
+    def boom(*a, **k):
+        raise FileNotFoundError("pkill")
+    monkeypatch.setattr(clips.subprocess, "run", boom)
+    clips.kill_stray_encoders()

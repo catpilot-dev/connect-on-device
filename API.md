@@ -392,6 +392,111 @@ Download the rendered HUD MP4 video.
 
 ---
 
+## Dashcam Clips
+
+Export a window of camera footage as a hardware-transcoded H.264 MP4. Clips are encoded one at a time in the background while the device is offroad, and stored outside the route data, so route cleanup never deletes them. Requesting a clip preserves its route.
+
+### `POST /v1/route/{routeName}/clips`
+Queue one clip per requested camera.
+
+**Body:**
+```json
+{
+  "start_sec": 5,
+  "end_sec": 25,
+  "cameras": ["road", "driver"],
+  "bitrate_mbps": 8,
+  "name": "evidence"
+}
+```
+
+| Param | Default | Description |
+|-------|---------|-------------|
+| `start_sec` | _(required)_ | Window start, seconds from route start |
+| `end_sec` | _(required)_ | Window end; the window must be 1-120 s long |
+| `cameras` | _(required)_ | Any of `road`, `wide`, `driver` |
+| `bitrate_mbps` | `8` | One of `5`, `8`, `12` |
+| `name` | route date + camera + window | Base filename (no path separators, no leading `.`); `.mp4` is appended and a numeric suffix added on collision |
+
+The window is clamped to the footage that exists; `clamped` reports whether that happened.
+
+**Response (202):**
+```json
+{
+  "clips": [
+    {
+      "filename": "evidence.mp4",
+      "status": "queued",
+      "requested_at": 1761550000.0,
+      "route": "dongle/2026-10-27--08-00-00",
+      "local_id": "00000100--def456",
+      "camera": "road",
+      "start_sec": 5.0,
+      "end_sec": 25.0,
+      "clamped": false,
+      "bitrate_mbps": 8,
+      "duration_sec": 20.0,
+      "encode_start_sec": 5.0,
+      "estimate_bytes": 20000000,
+      "size": null,
+      "error": null,
+      "provenance": {"wall_start_epoch": null, "gps": null},
+      "eta_sec": 5.0
+    }
+  ],
+  "clamped": false
+}
+```
+
+Errors (`{"error": "..."}`): `400` invalid window, cameras, bitrate or name; `409` requested footage is missing or there is not enough free space; `503` no clip encoder is available on the device.
+
+### `GET /v1/route/{routeName}/clips`
+Clips of this route (newest first) and the footage available per camera.
+
+**Response:**
+```json
+{
+  "clips": [],
+  "cameras": {"road": [[0, 60]]},
+  "supported": true,
+  "free_bytes": 53687091200
+}
+```
+`cameras` maps each camera to `[start_sec, end_sec]` ranges that have footage.
+
+### `GET /v1/clips`
+All clips, newest first.
+
+**Response:**
+```json
+{
+  "clips": [],
+  "total_bytes": 0,
+  "supported": true,
+  "free_bytes": 53687091200
+}
+```
+`total_bytes` counts `ready` clips only. `eta_sec` is an estimated encode time.
+
+### `GET /v1/clips/{filename}`
+Download a finished clip.
+
+**Response:** `video/mp4` with `Content-Disposition: attachment`; HTTP Range requests are supported. Returns 404 unless the clip is `ready`, 400 for an invalid filename.
+
+### `DELETE /v1/clips/{filename}`
+Delete a clip (any status).
+
+**Response:**
+```json
+{"status": "ok", "filename": "evidence.mp4"}
+```
+
+Status values: `queued`, `encoding`, `ready`, `error` (see `error` for the reason).
+
+**Onroad rules:** while the vehicle is driving, creating clips (`POST`), deleting (`DELETE`) and downloading (`GET /v1/clips/{filename}`) return 409 with `isOnroad: true`. Both listings stay available. The encoder worker pauses while driving and resumes offroad.
+
+---
+
 ## Media Files
 
 ### `GET /connectdata/{dongleId}/{routeDate}/{segment}/{filename}`

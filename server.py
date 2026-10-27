@@ -121,7 +121,14 @@ from handlers import (
     handle_ssh_keys_delete,
     handle_hud_data,
     handle_hud_emblem,
+    handle_clips_create,
+    handle_clips_for_route,
+    handle_clips_list,
+    handle_clip_serve,
+    handle_clip_delete,
 )
+import clips
+from config import COD_CLIPS_DIR
 from route_store import DEFAULT_DATA_DIR, DEFAULT_PORT, RouteStore
 from screenshot_worker import screenshot_worker
 from storage_management import run_cleanup
@@ -179,11 +186,19 @@ async def _startup(app: web.Application):
     app["health_task"] = asyncio.create_task(_health_worker(app))
     app["screenshot_task"] = asyncio.create_task(screenshot_worker(app))
 
+    # Dashcam clips. Orphaned encoders go first: recovery deletes the temp and
+    # lock files they may still be writing. The probe blocks, so off the loop.
+    clips.kill_stray_encoders()
+    clips.recover_on_startup(app["clip_store"])
+    app["clips_encoder"] = await asyncio.get_running_loop().run_in_executor(None, clips.init_encoder)
+    logger.info("Clip encoder: %s", app["clips_encoder"])
+    app["clip_task"] = asyncio.create_task(clips.clip_worker(app))
+
 
 
 async def _shutdown(app: web.Application):
     """Clean shutdown — stop any active HUD stream and cleanup task."""
-    for name in ("cleanup_task", "health_task", "screenshot_task"):
+    for name in ("cleanup_task", "health_task", "screenshot_task", "clip_task"):
         task = app.get(name)
         if task:
             task.cancel()
@@ -197,6 +212,8 @@ def create_app(data_dir: str, static_dir: str) -> web.Application:
 
     store = RouteStore(data_dir)
     app["store"] = store
+    app["clip_store"] = clips.ClipStore(COD_CLIPS_DIR)
+    app["clips_encoder"] = "none"
     app["static_dir"] = Path(static_dir)
 
     app.on_startup.append(_startup)
@@ -351,6 +368,13 @@ def create_app(data_dir: str, static_dir: str) -> web.Application:
     app.router.add_get("/v1/screenshots/at/{epoch}", handle_screenshot_by_time)
     app.router.add_get("/v1/screenshots/{filename}", handle_screenshot_serve)
     app.router.add_delete("/v1/screenshots/{filename}", handle_screenshot_delete)
+
+    # Dashcam clips (hardware-transcoded H.264 exports; 0.11.2+)
+    app.router.add_post("/v1/route/{routeName}/clips", handle_clips_create)
+    app.router.add_get("/v1/route/{routeName}/clips", handle_clips_for_route)
+    app.router.add_get("/v1/clips", handle_clips_list)
+    app.router.add_get("/v1/clips/{filename}", handle_clip_serve)
+    app.router.add_delete("/v1/clips/{filename}", handle_clip_delete)
 
     # Media file serving
     app.router.add_get("/connectdata/{path:.*}", handle_connectdata)

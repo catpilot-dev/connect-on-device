@@ -36,6 +36,8 @@ _ONROAD_FORBIDDEN = re.compile(
     r"|plugins/"          # toggle, param, repo, repo/install
     r"|screencast/"       # takes over the C3 display and restarts the UI
     r"|route/[^/]+/hud/prerender"  # heavy headless render — competes with driving stack
+    r"|route/[^/]+/clips"          # queues a hardware encode job and pins footage
+    r"|clips/"                     # deleting a clip is a storage change, not a driving-time action
     r")"
 )
 
@@ -46,8 +48,12 @@ _MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
 # the driving stack on a machine that is also running the car, and a browser
 # left open on a route page issues them in bulk (HUD overlay prefetch walks
 # every segment). Route listings and metadata stay available while driving.
+# Clips: downloading a finished clip streams a large file off the device, so
+# GET /v1/clips/<file> is refused; the listings (GET /v1/clips and
+# GET /v1/route/{r}/clips) are cheap and stay open.
 _ONROAD_FORBIDDEN_READ = re.compile(
-    r"^/v1/route/[^/]+/("
+    r"^/v1/("
+    r"route/[^/]+/("
     r"hud_data"          # rlog extraction, seconds of CPU per segment
     r"|frame"            # frame extraction; also frame_times/ rlog parse
     r"|signals/"         # rlog parse per segment
@@ -55,6 +61,8 @@ _ONROAD_FORBIDDEN_READ = re.compile(
     r"|camera/"          # HEVC -> mp4 mux (ffmpeg)
     r"|mjpeg"            # continuous ffmpeg transcode
     r"|qcamera"          # qcamera.m3u8 + qcamera_hls/ segments (ffmpeg)
+    r")"
+    r"|clips/[^/]+"      # finished-clip download
     r")"
 )
 

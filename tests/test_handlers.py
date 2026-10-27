@@ -565,6 +565,8 @@ class TestOnroadGuard:
         ("post", "/v1/plugins/phone_gps/toggle"),
         ("post", "/v1/screencast/start"),
         ("post", "/v1/route/000003e5--c904a8df49/hud/prerender"),
+        ("post", "/v1/route/000003e5--c904a8df49/clips"),
+        ("delete", "/v1/clips/evidence.mp4"),
     ]
 
     @pytest.mark.asyncio
@@ -600,6 +602,7 @@ class TestOnroadGuard:
         "/v1/route/000003e5--c904a8df49/mjpeg",
         "/v1/route/000003e5--c904a8df49/qcamera.m3u8",
         "/v1/route/000003e5--c904a8df49/qcamera_hls/index.m3u8",
+        "/v1/clips/evidence.mp4",
     ]
 
     @pytest.mark.asyncio
@@ -624,6 +627,14 @@ class TestOnroadGuard:
         c = await client
         with patch("handlers.middleware.read_param", return_value="1"):
             for path in ("/v1/storage", "/v1/devices/test123/routes"):
+                resp = await c.get(path)
+                assert resp.status != 409, path
+
+    @pytest.mark.asyncio
+    async def test_clip_listings_allowed_onroad(self, client):
+        c = await client
+        with patch("handlers.middleware.read_param", return_value="1"):
+            for path in ("/v1/clips", "/v1/route/00000100--def456/clips"):
                 resp = await c.get(path)
                 assert resp.status != 409, path
 

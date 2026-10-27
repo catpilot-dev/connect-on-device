@@ -383,6 +383,7 @@ def build_requests(route: dict, store, body: dict, clip_store: ClipStore, now: f
         out.append({
             "filename": filename, "route": route["fullname"], "camera": cam,
             "start_sec": s, "end_sec": e, "bitrate_mbps": bitrate,
+            "local_id": route.get("_local_id"), "size": None, "error": None,
             "status": STATUS_QUEUED, "requested_at": now, "inputs": inputs,
             "encode_start_sec": s - int(s // SEGMENT_SEC) * SEGMENT_SEC,
             "duration_sec": duration, "estimate_bytes": estimate, "clamped": clamped,
@@ -604,6 +605,19 @@ async def encode_one(clip_store: ClipStore, clip: dict, encoder: str, poll_sec: 
         _mark_error(clip_store, clip, f"clip encoder exited with code {code}")
         return "error"
     return _publish(clip_store, clip, time.monotonic() - started)
+
+
+def kill_stray_encoders() -> None:
+    """SIGKILL any `encoderd --clip` left by a COD that was itself SIGKILLed.
+
+    setup_service.sh restarts COD with pkill -9, which can orphan the encoder
+    child. pkill exits non-zero when nothing matched, and may be absent
+    entirely off-device; neither matters.
+    """
+    try:
+        subprocess.run(["pkill", "-9", "-f", "encoderd --clip"], capture_output=True)
+    except OSError:
+        pass
 
 
 def recover_on_startup(clip_store: ClipStore) -> int:

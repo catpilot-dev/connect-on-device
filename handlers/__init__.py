@@ -143,6 +143,14 @@ from .screenshots import (
     handle_screenshot_by_time,
 )
 
+from .clips import (
+    handle_clips_create,
+    handle_clips_for_route,
+    handle_clips_list,
+    handle_clip_serve,
+    handle_clip_delete,
+)
+
 from .stubs import (
     handle_stub_empty_array,
     handle_stub_error,
