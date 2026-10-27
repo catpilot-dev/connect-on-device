@@ -216,3 +216,13 @@ def test_frame_count_cache_skips_recent_files(tmp_path, monkeypatch):
         clips.segment_frame_count(str(p)); clips.segment_frame_count(str(p))
     assert [c[-1] for c in calls].count(str(old)) == 1      # served from cache
     assert [c[-1] for c in calls].count(str(new)) == 2      # may still be growing
+
+
+def test_two_minute_limit_tolerates_float_noise(world):
+    route, store, cs = world
+    body = {"cameras": ["road"]}
+    reqs = build_requests(route, store, {**body, "start_sec": 0.3, "end_sec": 120.3}, cs, now=1.0)
+    assert len(reqs) == 1
+    with pytest.raises(ClipRequestError) as e:
+        build_requests(route, store, {**body, "start_sec": 0, "end_sec": 120.5}, cs, now=1.0)
+    assert e.value.status == 400 and "2 minutes" in str(e.value)

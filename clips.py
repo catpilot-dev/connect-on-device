@@ -324,7 +324,7 @@ def _validate_body(body: dict) -> tuple[float, float, list[str], float, str | No
         raise ClipRequestError(400, "start_sec must not be negative")
     if end - start < MIN_CLIP_SEC:
         raise ClipRequestError(400, f"Clip must be at least {MIN_CLIP_SEC} second long")
-    if end - start > MAX_CLIP_SEC:
+    if end - start > MAX_CLIP_SEC + 1e-6:
         raise ClipRequestError(400, f"Clip can be at most {MAX_CLIP_SEC // 60} minutes long")
     cams = body.get("cameras")
     if not isinstance(cams, list) or not cams:
