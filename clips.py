@@ -19,6 +19,7 @@ import json
 import logging
 import math
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -57,9 +58,15 @@ def default_filename(route_date: str, camera: str, start_sec: float, end_sec: fl
             f"{e // 60:02d}m{e % 60:02d}s")
 
 
+# Control characters break the Content-Disposition header (CR/LF make aiohttp
+# drop the connection); a quote or backslash would end its quoted filename
+# early. Non-ASCII stays allowed: clips may be named in any language.
+_FILENAME_FORBIDDEN = re.compile(r'[\x00-\x1f\x7f"\\/]')
+
+
 def validate_filename(name: str) -> str:
     """Return name if it is a bare, non-hidden .mp4 filename; else raise ValueError."""
-    if (not name or name != os.path.basename(name) or "\\" in name
+    if (not name or name != os.path.basename(name) or _FILENAME_FORBIDDEN.search(name)
             or name.startswith(".") or not name.endswith(".mp4") or name == ".mp4"):
         raise ValueError(f"invalid clip filename: {name!r}")
     return name

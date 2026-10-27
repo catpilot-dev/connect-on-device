@@ -70,13 +70,16 @@ def test_default_filename_and_collision_suffix(store):
     store.write(_clip(base + ".mp4"))
     assert store.unique_filename(base) == base + "_2.mp4"
 
-@pytest.mark.parametrize("bad", ["../x.mp4", ".hidden.mp4", "a/b.mp4", "noext", ""])
+@pytest.mark.parametrize("bad", ["../x.mp4", ".hidden.mp4", "a/b.mp4", "noext", "",
+                                 "a\nb.mp4", "a\rb.mp4", "a\tb.mp4", "a\x00b.mp4", "a\x1fb.mp4",
+                                 "a\x7fb.mp4", 'say "hi".mp4', "a\\b.mp4"])
 def test_validate_filename_rejects(bad):
     with pytest.raises(ValueError):
         validate_filename(bad)
 
-def test_validate_filename_accepts():
-    assert validate_filename("crash_road.mp4") == "crash_road.mp4"
+@pytest.mark.parametrize("good", ["crash_road.mp4", "事故 現場.mp4", "it's (1).mp4"])
+def test_validate_filename_accepts(good):
+    assert validate_filename(good) == good
 
 def test_missing_directory_is_tolerated_and_not_created_by_init(tmp_path):
     s = ClipStore(str(tmp_path / "nope"))

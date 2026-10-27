@@ -77,3 +77,39 @@ async def test_delete(clip_client, clip_app):
     clip_app["clip_store"].write({"filename": "d.mp4", "status": "queued", "requested_at": 1.0, "size": None})
     assert (await c.delete("/v1/clips/d.mp4")).status == 200
     assert (await c.delete("/v1/clips/d.mp4")).status == 404
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("encoded", ["a%0Ab.mp4", "a%0D%0Ab.mp4", "a%00b.mp4", "say%20%22hi%22.mp4"])
+async def test_serve_and_delete_reject_control_chars_and_quotes(clip_client, encoded):
+    from yarl import URL
+    c = await clip_client
+    url = URL(f"/v1/clips/{encoded}", encoded=True)
+    assert (await c.get(url)).status == 400
+    assert (await c.delete(url)).status == 400
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["line\nbreak", "cr\rlf", 'say "hi"'])
+async def test_create_rejects_control_chars_and_quotes_in_name(clip_client, clip_app, name):
+    c = await clip_client
+    resp = await c.post(f"/v1/route/{ROUTE}/clips",
+                        json={"start_sec": 0, "end_sec": 10, "cameras": ["road"], "name": name})
+    assert resp.status == 400
+    assert clip_app["clip_store"].list() == []
+
+@pytest.mark.asyncio
+async def test_serve_non_ascii_name_uses_rfc5987_filename(clip_client, clip_app):
+    from urllib.parse import quote
+    c = await clip_client
+    cs = clip_app["clip_store"]
+    name = "事故 現場.mp4"
+    cs.mp4_path(name).parent.mkdir(parents=True, exist_ok=True)
+    cs.mp4_path(name).write_bytes(b"\x00" * 16)
+    cs.write({"filename": name, "status": "ready", "requested_at": 2.0, "size": 16})
+    resp = await c.get("/v1/clips/" + quote(name))
+    assert resp.status == 200
+    disposition = resp.headers["Content-Disposition"]
+    assert disposition == (
+        'attachment; filename="__ __.mp4"; '
+        "filename*=UTF-8''%E4%BA%8B%E6%95%85%20%E7%8F%BE%E5%A0%B4.mp4")
+    assert disposition.isascii()

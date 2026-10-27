@@ -9,6 +9,7 @@ import asyncio
 import logging
 import os
 import time
+from urllib.parse import quote
 
 from aiohttp import web
 
@@ -23,6 +24,16 @@ def _public(clip: dict) -> dict:
     out = {k: v for k, v in clip.items() if k != "inputs"}
     out["eta_sec"] = clip.get("duration_sec", 0) / clips.ENCODE_RATE_PLACEHOLDER
     return out
+
+
+def _content_disposition(name: str) -> str:
+    """attachment with an ASCII fallback filename plus the exact UTF-8 name (RFC 6266).
+
+    name has passed validate_filename, so it holds no quote, backslash or
+    control character that could break out of the quoted fallback.
+    """
+    fallback = "".join(ch if ch.isascii() else "_" for ch in name)
+    return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(name, safe='')}"
 
 
 def _supported(request: web.Request) -> bool:
@@ -107,7 +118,7 @@ async def handle_clip_serve(request: web.Request) -> web.StreamResponse:
         return web.json_response({"error": "not found"}, status=404)
     return web.FileResponse(path, headers={
         "Content-Type": "video/mp4",
-        "Content-Disposition": f'attachment; filename="{name}"',
+        "Content-Disposition": _content_disposition(name),
     })
 
 

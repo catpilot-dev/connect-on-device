@@ -98,6 +98,8 @@ def test_admission_refuses_below_emergency_line(world, monkeypatch):
     ({"start_sec": 0, "end_sec": 30, "cameras": ["road"], "bitrate_mbps": 7}, "bitrate"),
     ({"start_sec": 0, "end_sec": 30, "cameras": []}, "camera"),
     ({"start_sec": 0, "end_sec": 30, "cameras": ["road"], "name": "../x.mp4"}, "name"),
+    ({"start_sec": 0, "end_sec": 30, "cameras": ["road"], "name": "line\nbreak"}, "name"),
+    ({"start_sec": 0, "end_sec": 30, "cameras": ["road"], "name": 'say "hi"'}, "name"),
 ])
 def test_build_requests_rejects_bad_input(world, body, msg):
     route, store, cs = world
