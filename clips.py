@@ -20,6 +20,7 @@ import math
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 from config import FFMPEG_BIN
@@ -158,6 +159,7 @@ SEGMENT_SEC = 60
 FRAME_RATE = 20
 _CAMERA_BY_FILE = {v: k for k, v in CAMERAS.items()}
 _FRAME_COUNT_CACHE: dict[str, int] = {}
+FRAME_COUNT_SETTLE_SEC = 60  # don't cache counts of files modified more recently than this
 
 
 class ClipRequestError(ValueError):
@@ -198,6 +200,11 @@ def segment_frame_count(path: str) -> int:
     if cached is not None:
         return cached
     try:
+        # A route's last segment can still be growing just after ignition off.
+        settled = time.time() - os.path.getmtime(path) >= FRAME_COUNT_SETTLE_SEC
+    except OSError:
+        settled = False
+    try:
         out = subprocess.run(
             [_ffprobe_bin(), "-v", "error", "-count_packets", "-show_entries",
              "stream=nb_read_packets", "-of", "csv=p=0", path],
@@ -205,7 +212,8 @@ def segment_frame_count(path: str) -> int:
         count = int(out.strip().split()[0])
     except (OSError, subprocess.SubprocessError, ValueError, IndexError) as e:
         raise ClipRequestError(409, f"Cannot read footage length: {e}") from e
-    _FRAME_COUNT_CACHE[path] = count
+    if settled:
+        _FRAME_COUNT_CACHE[path] = count
     return count
 
 
@@ -217,10 +225,12 @@ def clamp_window(route: dict, store, start_sec: float, end_sec: float,
     so the nominal end would run past the footage.
     """
     fname = CAMERAS[camera]
-    nums = [s["number"] for s in route.get("_segments", []) if fname in s["files"]]
-    if not nums:
+    segs = route.get("_segments", [])
+    if not segs:
         return start_sec, end_sec, False
-    last = max(nums)
+    # Anchor on the route's last segment, not the camera's: a camera that stopped
+    # early must surface as a missing-footage 409 in collect_inputs, not a silent clamp.
+    last = max(s["number"] for s in segs)
     if end_sec <= last * SEGMENT_SEC:
         return start_sec, end_sec, False
     path = store.resolve_segment_path(route["fullname"], last, fname)
@@ -229,6 +239,9 @@ def clamp_window(route: dict, store, start_sec: float, end_sec: float,
     real_end = last * SEGMENT_SEC + segment_frame_count(str(path)) / FRAME_RATE
     if end_sec <= real_end:
         return start_sec, end_sec, False
+    if real_end - start_sec <= 0:
+        raise ClipRequestError(
+            409, f"Cannot export: no {camera} footage for segment {int(start_sec // SEGMENT_SEC)}")
     if real_end - start_sec < MIN_CLIP_SEC:
         raise ClipRequestError(400, "Clip must be at least 1 second of recorded footage")
     return start_sec, real_end, True

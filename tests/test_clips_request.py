@@ -130,3 +130,89 @@ def test_custom_name_applies_to_single_camera_and_suffixes_multi(world):
     assert one[0]["filename"] == "crash.mp4"
     two = build_requests(route, store, {"start_sec": 0, "end_sec": 30, "cameras": ["road", "wide"], "name": "crash"}, cs, now=1.0)
     assert [r["filename"] for r in two] == ["crash_road.mp4", "crash_wide.mp4"]
+
+
+# --- clamp edge cases and the ffprobe hole guard ---------------------------
+
+def test_clamp_not_applied_when_window_ends_on_boundary(world, monkeypatch):
+    route, store, _ = world
+    monkeypatch.setattr(clips, "segment_frame_count", lambda path: 400)
+    assert clamp_window(route, store, 100, 120, "road") == (100, 120, False)
+
+def test_clamp_start_beyond_end_is_409_naming_segment(world, monkeypatch):
+    route, store, _ = world
+    monkeypatch.setattr(clips, "segment_frame_count", lambda path: 400)   # real end 140
+    with pytest.raises(ClipRequestError) as e:
+        clamp_window(route, store, 150, 170, "road")
+    assert e.value.status == 409 and "segment 2" in str(e.value)
+
+def test_clamp_sub_second_remainder_is_400(world, monkeypatch):
+    route, store, _ = world
+    monkeypatch.setattr(clips, "segment_frame_count", lambda path: 400)   # real end 140
+    with pytest.raises(ClipRequestError) as e:
+        clamp_window(route, store, 139.5, 170, "road")
+    assert e.value.status == 400
+
+def test_camera_missing_from_trailing_segment_is_409_not_clamp(tmp_path, monkeypatch):
+    route = _route(tmp_path)
+    route["_segments"][2]["files"] = {"fcamera.hevc"}            # wide stops at segment 1
+    (Path(route["_segments"][2]["path"]) / "ecamera.hevc").unlink()
+    store = FakeStore(tmp_path)
+    monkeypatch.setattr(clips, "segment_frame_count", lambda path: 1200)
+    assert clamp_window(route, store, 100, 170, "wide") == (100, 170, False)
+    with pytest.raises(ClipRequestError) as e:
+        collect_inputs(route, store, "wide", 100, 170)
+    assert e.value.status == 409 and "2" in str(e.value)
+
+def test_build_requests_clamps_and_flags_sidecar(world, monkeypatch):
+    route, store, cs = world
+    monkeypatch.setattr(clips, "segment_frame_count", lambda path: 400)
+    r = build_requests(route, store, {"start_sec": 100, "end_sec": 175, "cameras": ["road"]}, cs, now=1.0)[0]
+    assert r["clamped"] is True and r["end_sec"] == 140 and r["duration_sec"] == 40
+
+def test_build_requests_unclamped_flag_false(world):
+    route, store, cs = world
+    r = build_requests(route, store, {"start_sec": 0, "end_sec": 30, "cameras": ["road"]}, cs, now=1.0)[0]
+    assert r["clamped"] is False
+
+class _Proc:
+    def __init__(self, out="", rc=0): self.stdout, self.returncode = out, rc
+
+def _stub_run(monkeypatch, out="1200\n", rc=0):
+    calls = []
+    def run(cmd, **kw):
+        calls.append(cmd)
+        if rc:
+            raise clips.subprocess.CalledProcessError(rc, cmd)
+        return _Proc(out)
+    monkeypatch.setattr(clips.subprocess, "run", run)
+    return calls
+
+def test_segment_frame_count_parses_ffprobe(tmp_path, monkeypatch):
+    f = tmp_path / "fcamera.hevc"; f.write_bytes(b"\x00")
+    monkeypatch.setattr(clips, "_FRAME_COUNT_CACHE", {})
+    calls = _stub_run(monkeypatch)
+    assert clips.segment_frame_count(str(f)) == 1200
+    assert "-count_packets" in calls[0] and str(f) in calls[0]
+
+@pytest.mark.parametrize("out,rc", [("", 0), ("\n", 0), ("N/A\n", 0), ("", 1)])
+def test_segment_frame_count_failure_is_409(tmp_path, monkeypatch, out, rc):
+    f = tmp_path / "fcamera.hevc"; f.write_bytes(b"\x00")
+    monkeypatch.setattr(clips, "_FRAME_COUNT_CACHE", {})
+    _stub_run(monkeypatch, out, rc)
+    with pytest.raises(ClipRequestError) as e:
+        clips.segment_frame_count(str(f))
+    assert e.value.status == 409
+
+def test_frame_count_cache_skips_recent_files(tmp_path, monkeypatch):
+    import os, time
+    old, new = tmp_path / "old.hevc", tmp_path / "new.hevc"
+    old.write_bytes(b"\x00"); new.write_bytes(b"\x00")
+    t = time.time() - 3600
+    os.utime(old, (t, t))
+    monkeypatch.setattr(clips, "_FRAME_COUNT_CACHE", {})
+    calls = _stub_run(monkeypatch)
+    for p in (old, new):
+        clips.segment_frame_count(str(p)); clips.segment_frame_count(str(p))
+    assert [c[-1] for c in calls].count(str(old)) == 1      # served from cache
+    assert [c[-1] for c in calls].count(str(new)) == 2      # may still be growing
