@@ -228,3 +228,11 @@ def test_two_minute_limit_tolerates_float_noise(world):
     with pytest.raises(ClipRequestError) as e:
         build_requests(route, store, {**body, "start_sec": 0, "end_sec": 120.5}, cs, now=1.0)
     assert e.value.status == 400 and "2 minutes" in str(e.value)
+
+
+@pytest.mark.parametrize("body", [[], [{"start_sec": 0}], "x", None, 3])
+def test_build_requests_rejects_a_non_object_body(world, body):
+    route, store, cs = world
+    with pytest.raises(ClipRequestError) as e:
+        build_requests(route, store, body, cs, now=1.0)
+    assert e.value.status == 400 and str(e.value) == "Request body must be a JSON object"

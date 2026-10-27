@@ -7,6 +7,7 @@ an import cycle).
 """
 import asyncio
 import logging
+import math
 import os
 import time
 from urllib.parse import quote
@@ -22,7 +23,10 @@ logger = logging.getLogger("connect")
 def _public(clip: dict) -> dict:
     """Clip as the browser sees it: no device paths, plus an encode-time estimate."""
     out = {k: v for k, v in clip.items() if k != "inputs"}
-    out["eta_sec"] = clip.get("duration_sec", 0) / clips.ENCODE_RATE_PLACEHOLDER
+    duration = clip.get("duration_sec") or 0
+    if isinstance(duration, bool) or not isinstance(duration, (int, float)) or not math.isfinite(duration):
+        duration = 0  # a damaged sidecar must not turn every listing into a 500
+    out["eta_sec"] = duration / clips.ENCODE_RATE_PLACEHOLDER
     return out
 
 

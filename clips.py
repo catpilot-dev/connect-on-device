@@ -330,6 +330,8 @@ def _number(body: dict, key: str) -> float:
 
 
 def _validate_body(body: dict) -> tuple[float, float, list[str], float, str | None]:
+    if not isinstance(body, dict):  # parse_json returns whatever JSON value was sent
+        raise ClipRequestError(400, "Request body must be a JSON object")
     start, end = _number(body, "start_sec"), _number(body, "end_sec")
     if start < 0:
         raise ClipRequestError(400, "start_sec must not be negative")

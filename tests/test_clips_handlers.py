@@ -142,3 +142,23 @@ async def test_create_rechecks_the_name_on_the_loop_before_writing(clip_client, 
         assert cs.read("crash.mp4") == original
     else:
         assert cs.read("crash.mp4") is None and cs.mp4_path("crash.mp4").read_bytes() == b"theirs"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("duration", [None, "30", True, float("nan"), [10]])
+async def test_listing_survives_a_damaged_duration(clip_client, clip_app, duration):
+    c = await clip_client
+    clip_app["clip_store"].write({"filename": "d.mp4", "status": "queued", "requested_at": 1.0,
+                                  "size": None, "duration_sec": duration})
+    resp = await c.get("/v1/clips")
+    assert resp.status == 200
+    assert (await resp.json())["clips"][0]["eta_sec"] == 0
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw", ["[1, 2]", '"start"', "5", "null"])
+async def test_create_rejects_a_non_object_body(clip_client, clip_app, raw):
+    c = await clip_client
+    resp = await c.post(f"/v1/route/{ROUTE}/clips", data=raw,
+                        headers={"Content-Type": "application/json"})
+    assert resp.status == 400
+    assert (await resp.json())["error"] == "Request body must be a JSON object"
