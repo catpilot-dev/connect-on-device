@@ -539,8 +539,16 @@ def _stderr_tail(path: Path) -> str:
     return data.decode("utf-8", "replace").strip()
 
 
-def _mark_error(clip_store: ClipStore, clip: dict, message: str) -> None:
+def _mark_error(clip_store: ClipStore, clip: dict, message: str) -> bool:
+    """Record the failure; False (nothing written) if the clip was deleted meanwhile.
+
+    The check matters after an await, e.g. a failed spawn: a DELETE that
+    landed during it must not be undone by writing the sidecar back.
+    """
+    if not clip_store.sidecar_path(clip["filename"]).exists():
+        return False
     clip_store.write({**clip, "status": STATUS_ERROR, "error": message})
+    return True
 
 
 def _as_queued(clip: dict) -> dict:
@@ -555,8 +563,8 @@ def _publish(clip_store: ClipStore, clip: dict, encode_sec: float) -> str:
 
     The rename precedes the ready sidecar so a ready sidecar never points at a
     missing or partial file: list() deletes a ready sidecar whose MP4 is
-    missing, and a crash between the two steps leaves an "encoding" sidecar
-    that the next start re-queues instead of trusting.
+    missing, and a crash (or a failed write) between the two steps leaves an
+    "encoding" sidecar that requeue_stranded re-queues instead of trusting.
     """
     name = clip["filename"]
     temp = clip_store.temp_path(name)
@@ -605,8 +613,7 @@ async def encode_one(clip_store: ClipStore, clip: dict, encoder: str, poll_sec: 
                 stdin=asyncio.subprocess.PIPE if encoder == "ffmpeg" else asyncio.subprocess.DEVNULL)
         spawned = True
     except (KeyError, TypeError, ValueError, OSError) as e:
-        _mark_error(clip_store, clip, f"clip encoder could not start: {e}")
-        return "error"
+        return "error" if _mark_error(clip_store, clip, f"clip encoder could not start: {e}") else "deleted"
     finally:
         if not spawned and err is not None:
             err.unlink(missing_ok=True)
@@ -618,13 +625,17 @@ async def encode_one(clip_store: ClipStore, clip: dict, encoder: str, poll_sec: 
             await _send_concat_list(proc, clip["inputs"])
         code = await _await_exit(proc, clip_store, name, poll_sec, onroad)
     finally:
-        await _kill(proc)
-        if isinstance(code, int) and code != 0:
-            tail = _stderr_tail(err)
-        err.unlink(missing_ok=True)
-        clip_store.lock_path(name).unlink(missing_ok=True)
-        if code != 0:
-            temp.unlink(missing_ok=True)
+        # Nested so a second cancellation landing in _kill's wait (the kill
+        # itself is already sent) cannot skip the cleanup.
+        try:
+            await _kill(proc)
+        finally:
+            if isinstance(code, int) and code != 0:
+                tail = _stderr_tail(err)
+            err.unlink(missing_ok=True)
+            clip_store.lock_path(name).unlink(missing_ok=True)
+            if code != 0:
+                temp.unlink(missing_ok=True)
 
     # Nothing awaits from here on, so a DELETE handler cannot land between
     # this check and the sidecar writes below and have its deletion undone.
@@ -654,12 +665,16 @@ def kill_stray_encoders() -> None:
         pass
 
 
-def recover_on_startup(clip_store: ClipStore) -> int:
-    """Re-queue every clip a previous run left "encoding"; returns how many.
+def requeue_stranded(clip_store: ClipStore) -> int:
+    """Re-queue every clip left "encoding" with no encode running; returns how many.
 
-    A process that died mid-encode left a partial temp file, possibly the
-    encoder's lock, and its stderr file. None is resumable, so all go and the
-    clip starts over.
+    Two things strand a clip that way: a COD that died mid-encode, and an
+    exception (a failed rename or sidecar write, a failing onroad check) that
+    escaped encode_one. The worker encodes one clip at a time, so an
+    "encoding" sidecar seen when no encode is in flight -- at startup, or at
+    the start of a worker tick -- is always one of those. Its partial temp
+    file, the encoder's lock and its stderr file are not resumable, so all
+    go and the clip starts over.
     """
     count = 0
     for clip in clip_store.list():
@@ -673,6 +688,11 @@ def recover_on_startup(clip_store: ClipStore) -> int:
     return count
 
 
+def recover_on_startup(clip_store: ClipStore) -> int:
+    """Startup recovery (called by server.py before the worker starts)."""
+    return requeue_stranded(clip_store)
+
+
 async def clip_worker_tick(app) -> str:
     """One scheduling decision: "unsupported", "onroad", "busy", "idle",
     "admission_error", or the result of encoding the oldest queued clip.
@@ -680,15 +700,20 @@ async def clip_worker_tick(app) -> str:
     Admission is re-checked here, not only at request time: several requests
     may each have been admitted against the same free space, and the disk may
     have filled since.
+
+    No encode is in flight at the start of a tick, so any "encoding" sidecar
+    is stranded and goes back in the queue first. That runs after the onroad
+    gate, so a moving car sees no clip-store disk work at all.
     """
     encoder = app["clips_encoder"]
     if encoder == "none":
         return "unsupported"
     if is_onroad():
         return "onroad"
+    clip_store = app["clip_store"]
+    requeue_stranded(clip_store)
     if _user_render_busy():
         return "busy"  # a user HUD render is running; two CPU-heavy jobs never overlap
-    clip_store = app["clip_store"]
     queue = clip_store.queued()
     if not queue:
         return "idle"

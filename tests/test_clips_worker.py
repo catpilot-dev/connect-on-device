@@ -229,3 +229,69 @@ def test_kill_stray_encoders_tolerates_missing_pkill(monkeypatch):
         raise FileNotFoundError("pkill")
     monkeypatch.setattr(clips.subprocess, "run", boom)
     clips.kill_stray_encoders()
+
+
+# ── stranded "encoding" sidecars, deletes during a failed spawn, double cancel ──
+
+@pytest.mark.asyncio
+async def test_tick_requeues_a_stranded_encoding_clip(cs, tmp_path, quiet, monkeypatch):
+    from clips import clip_worker_tick
+    cs.write({**_clip(tmp_path), "status": "encoding", "started_at": 5.0})
+    for p in (cs.temp_path("c.mp4"), cs.lock_path("c.mp4"), cs.err_path("c.mp4")):
+        p.write_bytes(b"left over")
+    monkeypatch.setattr(clips, "_user_render_busy", lambda: True)   # stop before encoding it
+    assert await clip_worker_tick(_app(cs)) == "busy"
+    side = cs.read("c.mp4")
+    assert side["status"] == "queued" and "started_at" not in side
+    assert not any(p.exists() for p in (cs.temp_path("c.mp4"), cs.lock_path("c.mp4"),
+                                         cs.err_path("c.mp4")))
+
+@pytest.mark.asyncio
+async def test_tick_retries_a_clip_stranded_by_an_exception(cs, tmp_path, quiet, monkeypatch):
+    from clips import clip_worker_tick
+    cs.write(_clip(tmp_path))
+    publish = clips._publish
+    def disk_full(*a, **k):
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(clips, "_publish", disk_full)
+    with pytest.raises(OSError):
+        await clip_worker_tick(_app(cs))
+    assert cs.read("c.mp4")["status"] == "encoding"          # what the exception leaves behind
+    monkeypatch.setattr(clips, "_publish", publish)
+    assert await clip_worker_tick(_app(cs)) == "ready"
+    assert cs.read("c.mp4")["status"] == "ready" and not cs.temp_path("c.mp4").exists()
+
+def test_mark_error_on_a_deleted_clip_writes_nothing(cs, tmp_path):
+    clip = _clip(tmp_path); cs.write(clip)
+    cs.delete("c.mp4")
+    clips._mark_error(cs, clip, "boom")
+    assert not cs.sidecar_path("c.mp4").exists()
+
+@pytest.mark.asyncio
+async def test_delete_during_a_failed_spawn_is_not_undone(cs, tmp_path, monkeypatch):
+    monkeypatch.setattr(clips, "ENCODERD_BIN", FAKE)
+    async def spawn_fails_after_delete(*a, **k):
+        cs.delete("c.mp4")                      # DELETE lands while the spawn is awaited
+        raise OSError(12, "Cannot allocate memory")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn_fails_after_delete)
+    clip = _clip(tmp_path); cs.write(clip)
+    assert await encode_one(cs, clip, "encoderd", poll_sec=0.05, onroad=lambda: False) == "deleted"
+    assert not cs.sidecar_path("c.mp4").exists() and not cs.err_path("c.mp4").exists()
+
+@pytest.mark.asyncio
+async def test_cleanup_survives_a_second_cancel_during_kill(cs, tmp_path, monkeypatch):
+    monkeypatch.setattr(clips, "ENCODERD_BIN", FAKE)
+    monkeypatch.setenv("FAKE_ENCODERD_SLEEP", "5"); monkeypatch.setenv("FAKE_ENCODERD_LEAVE_LOCK", "1")
+    async def kill_interrupted(proc):
+        proc.kill()
+        await proc.wait()                       # reap it so the test leaves no process behind
+        raise asyncio.CancelledError()          # ...then a second cancel lands in the wait
+    monkeypatch.setattr(clips, "_kill", kill_interrupted)
+    clip = _clip(tmp_path); cs.write(clip)
+    task = asyncio.create_task(encode_one(cs, clip, "encoderd", poll_sec=0.05, onroad=lambda: False))
+    await asyncio.sleep(0.3)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not any(p.exists() for p in (cs.temp_path("c.mp4"), cs.lock_path("c.mp4"),
+                                         cs.err_path("c.mp4")))
