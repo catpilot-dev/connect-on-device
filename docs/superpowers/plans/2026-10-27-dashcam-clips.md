@@ -892,3 +892,21 @@ On the drive that just ended, request a window reaching into the last segment: t
 git add clips.py docs/superpowers/specs/2026-10-27-dashcam-clips-design.md
 git commit -m "chore(clips): measured encode rate; on-device checklist passed"
 ```
+
+---
+
+## Deferred follow-ups (recorded 2026-10-27 after execution)
+
+Tasks 1–8 are implemented and reviewed on `v0.11.2` (commits `7b17b86..58a4891`). Task 9 above has **not** run: it needs the rebased catpilot on a device and remains the gate for the first `v0.11.2` release. Items below were found by the reviews and deliberately left for after Task 9.
+
+- **Retry action** on `error` rows (rewrite the sidecar as `queued`; inputs are already recorded).
+- **Requeue cap**: the per-tick stranded-clip requeue has no attempt limit, so a persistent post-encode disk error re-encodes on every parked tick.
+- **Stale route view** can over-clamp a window within 2 min of a rescan (`CACHE_TTL`); check `resolve_segment_path(..., last+1, ...)` before clamping.
+- **Delete then re-create the same name within 1 s** lets the old encode overwrite the new sidecar; tag sidecars with an encode id.
+- **Lone UTF-16 surrogate in a name** passes validation and 500s on serve; add `\ud800-\udfff` to the forbidden set.
+- **NaN/Infinity** in a sidecar field other than the estimate reaches the listing JSON as literal `NaN`.
+- `kill_stray_encoders` also kills a comma-connect `encoderd --clip` if one is running at COD start; document or narrow the match.
+- The encoder probe runs at every COD start even onroad (millisecond usage print on 0.11.2); gate on `not is_onroad()`.
+- Add `COD_CLIPS_DIR` to the health checks.
+- Admission does not count already-queued clips (the worker re-check catches it); fsync on sidecar writes; overlapping Clips-page polls; failed-delete error cleared by the next poll; `createClip` error body parse unguarded; no mocked-fetch tests for the clip wrappers.
+- Task 9 step 3: also `ls -la` for any `.encoderd-*.tmp` or faststart side file, and read a failing clip's `error` (it now carries the encoder's stderr tail).
