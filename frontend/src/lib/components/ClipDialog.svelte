@@ -2,7 +2,7 @@
   import { createClip, fetchRouteClips, clipEstimateMB, CLIP_MAX_SEC, CLIP_BITRATES, CLIP_DEFAULT_BITRATE } from '../api.js'
   import { formatVideoTime } from '../format.js'
 
-  /** @type {{ open: boolean, routeName: string, startSec: number, endSec: number, routeDurationSec: number, currentTime?: number, onClose?: () => void, onCreated?: (clips: any[]) => void }} */
+  /** @type {{ open: boolean, routeName: string, startSec: number, endSec: number, routeDurationSec: number, currentTime?: number, onClose?: () => void, onCreated?: (result: { clips: any[], clamped: boolean }) => void }} */
   let {
     open = $bindable(false),
     routeName = '',
@@ -111,7 +111,7 @@
         bitrateMbps: bitrate,
         name: name.trim() || undefined,
       })
-      onCreated?.(res.clips)
+      onCreated?.(res)
       handleClose()
     } catch (e) {
       error = e.message

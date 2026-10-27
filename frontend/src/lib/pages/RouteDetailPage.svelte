@@ -56,8 +56,10 @@
     clipOpen = true
   }
 
-  function handleClipCreated() {
-    clipToast = 'Clip queued — see Clips'
+  function handleClipCreated(result) {
+    clipToast = result?.clamped
+      ? 'Clip queued — shortened to the end of the recording · see Clips'
+      : 'Clip queued — see Clips'
     clearTimeout(clipToastTimer)
     clipToastTimer = setTimeout(() => { clipToast = null }, 6000)
   }
