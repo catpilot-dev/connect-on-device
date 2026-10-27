@@ -113,3 +113,32 @@ async def test_serve_non_ascii_name_uses_rfc5987_filename(clip_client, clip_app)
         'attachment; filename="__ __.mp4"; '
         "filename*=UTF-8''%E4%BA%8B%E6%95%85%20%E7%8F%BE%E5%A0%B4.mp4")
     assert disposition.isascii()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("taken_by", ["sidecar", "mp4"])
+async def test_create_rechecks_the_name_on_the_loop_before_writing(clip_client, clip_app, monkeypatch, taken_by):
+    # Another POST claimed the name after build_requests chose it in the executor.
+    def fixed(route, store, body, clip_store, now):
+        return [{"filename": "crash.mp4", "status": "queued", "requested_at": now, "camera": "road",
+                 "local_id": route["_local_id"], "duration_sec": 10, "inputs": [],
+                 "clamped": False, "size": None, "error": None}]
+    monkeypatch.setattr(clips, "build_requests", fixed)
+    cs = clip_app["clip_store"]
+    original = {"filename": "crash.mp4", "status": "queued", "requested_at": 1.0, "size": None,
+                "camera": "wide"}
+    if taken_by == "sidecar":
+        cs.write(original)
+    else:
+        cs.mp4_path("crash.mp4").parent.mkdir(parents=True, exist_ok=True)
+        cs.mp4_path("crash.mp4").write_bytes(b"theirs")
+    c = await clip_client
+    resp = await c.post(f"/v1/route/{ROUTE}/clips",
+                        json={"start_sec": 0, "end_sec": 10, "cameras": ["road"], "name": "crash"})
+    assert resp.status == 202
+    assert [x["filename"] for x in (await resp.json())["clips"]] == ["crash_2.mp4"]
+    assert cs.read("crash_2.mp4")["camera"] == "road"
+    if taken_by == "sidecar":
+        assert cs.read("crash.mp4") == original
+    else:
+        assert cs.read("crash.mp4") is None and cs.mp4_path("crash.mp4").read_bytes() == b"theirs"

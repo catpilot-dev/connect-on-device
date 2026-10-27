@@ -72,7 +72,13 @@ async def handle_clips_create(request: web.Request) -> web.Response:
     except clips.ClipRequestError as e:
         return web.json_response({"error": str(e)}, status=e.status)
 
+    # build_requests chose each name in the executor; a concurrent POST may
+    # have claimed it since. Re-check on the loop with no await before the
+    # write, so two requests can never write the same sidecar.
     for sidecar in requests:
+        name = sidecar["filename"]
+        if clip_store.sidecar_path(name).exists() or clip_store.mp4_path(name).exists():
+            sidecar["filename"] = clip_store.unique_filename(name[:-len(".mp4")])
         clip_store.write(sidecar)
     store.preserve_route(route["_local_id"])
     _preserve_segments(requests)
