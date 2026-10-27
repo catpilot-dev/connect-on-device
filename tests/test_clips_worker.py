@@ -38,7 +38,7 @@ async def test_encode_success_writes_ready(cs, tmp_path, monkeypatch):
     side = cs.read("c.mp4")
     assert side["status"] == "ready" and side["size"] == 4096 and side["encode_sec"] >= 0
     assert cs.mp4_path("c.mp4").exists() and not cs.temp_path("c.mp4").exists()
-    assert not cs.lock_path("c.mp4").exists()
+    assert not cs.lock_path("c.mp4").exists() and not cs.err_path("c.mp4").exists()
 
 @pytest.mark.asyncio
 async def test_encode_failure_writes_error_and_cleans(cs, tmp_path, monkeypatch):
@@ -48,6 +48,41 @@ async def test_encode_failure_writes_error_and_cleans(cs, tmp_path, monkeypatch)
     assert await encode_one(cs, clip, "encoderd", poll_sec=0.05, onroad=lambda: False) == "error"
     assert cs.read("c.mp4")["error"] == "clip encoder exited with code 1"
     assert not cs.temp_path("c.mp4").exists() and not cs.lock_path("c.mp4").exists()
+    assert not cs.err_path("c.mp4").exists()
+
+@pytest.mark.asyncio
+async def test_encode_failure_reports_encoder_stderr(cs, tmp_path, monkeypatch):
+    monkeypatch.setattr(clips, "ENCODERD_BIN", FAKE)
+    clip = {**_clip(tmp_path), "inputs": [str(tmp_path / "gone" / "fcamera.hevc")]}
+    cs.write(clip)
+    assert await encode_one(cs, clip, "encoderd", poll_sec=0.05, onroad=lambda: False) == "error"
+    assert cs.read("c.mp4")["error"] == (
+        "clip encoder exited with code 1: clip encoding failed: missing input: "
+        + clip["inputs"][0])
+    assert not cs.err_path("c.mp4").exists() and not cs.temp_path("c.mp4").exists()
+
+@pytest.mark.asyncio
+async def test_encode_failure_keeps_only_the_stderr_tail(cs, tmp_path, monkeypatch):
+    monkeypatch.setattr(clips, "ENCODERD_BIN", FAKE)
+    monkeypatch.setenv("FAKE_ENCODERD_EXIT", "1")
+    monkeypatch.setenv("FAKE_ENCODERD_STDERR",
+                       "noise " * 200 + "clip failed: input=600 decoded=412 encoded=411\n")
+    clip = _clip(tmp_path); cs.write(clip)
+    assert await encode_one(cs, clip, "encoderd", poll_sec=0.05, onroad=lambda: False) == "error"
+    error = cs.read("c.mp4")["error"]
+    prefix = "clip encoder exited with code 1: "
+    assert error.startswith(prefix) and error.endswith("clip failed: input=600 decoded=412 encoded=411")
+    assert len(error) - len(prefix) <= 300
+    assert not cs.err_path("c.mp4").exists()
+
+@pytest.mark.asyncio
+async def test_encode_success_ignores_and_removes_stderr(cs, tmp_path, monkeypatch):
+    monkeypatch.setattr(clips, "ENCODERD_BIN", FAKE)
+    monkeypatch.setenv("FAKE_ENCODERD_STDERR", "warning: something harmless\n")
+    clip = _clip(tmp_path); cs.write(clip)
+    assert await encode_one(cs, clip, "encoderd", poll_sec=0.05, onroad=lambda: False) == "ready"
+    assert cs.read("c.mp4")["error"] is None
+    assert not cs.err_path("c.mp4").exists()
 
 @pytest.mark.asyncio
 async def test_onroad_kills_and_requeues(cs, tmp_path, monkeypatch):
@@ -61,6 +96,7 @@ async def test_onroad_kills_and_requeues(cs, tmp_path, monkeypatch):
     assert asyncio.get_event_loop().time() - t0 < 2.0          # SIGKILL, not a 5 s wait
     assert cs.read("c.mp4")["status"] == "queued"
     assert not cs.temp_path("c.mp4").exists() and not cs.lock_path("c.mp4").exists()
+    assert not cs.err_path("c.mp4").exists()
 
 @pytest.mark.asyncio
 async def test_delete_during_encode_leaves_nothing(cs, tmp_path, monkeypatch):
@@ -73,13 +109,16 @@ async def test_delete_during_encode_leaves_nothing(cs, tmp_path, monkeypatch):
     assert await task == "deleted"
     assert not cs.sidecar_path("c.mp4").exists() and not cs.temp_path("c.mp4").exists()
     assert not cs.lock_path("c.mp4").exists() and not cs.mp4_path("c.mp4").exists()
+    assert not cs.err_path("c.mp4").exists()
 
 def test_startup_requeues_encoding_and_removes_temp(cs, tmp_path):
     clip = _clip(tmp_path); clip["status"] = "encoding"; cs.write(clip)
     cs.temp_path("c.mp4").write_bytes(b"partial"); cs.lock_path("c.mp4").write_bytes(b"")
+    cs.err_path("c.mp4").write_bytes(b"half a message")
     assert recover_on_startup(cs) == 1
     assert cs.read("c.mp4")["status"] == "queued"
     assert not cs.temp_path("c.mp4").exists() and not cs.lock_path("c.mp4").exists()
+    assert not cs.err_path("c.mp4").exists()
 
 # ── scheduling (clip_worker_tick) ────────────────────────────────────
 
@@ -174,6 +213,7 @@ async def test_cancel_kills_encoder_and_cleans(cs, tmp_path, monkeypatch):
         await task
     assert procs[0].returncode == -signal.SIGKILL      # shutdown never leaves an orphan encoder running
     assert not cs.temp_path("c.mp4").exists() and not cs.lock_path("c.mp4").exists()
+    assert not cs.err_path("c.mp4").exists()
 
 
 def test_kill_stray_encoders_argv(monkeypatch):

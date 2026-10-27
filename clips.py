@@ -83,6 +83,10 @@ class ClipStore:
     def lock_path(self, filename: str) -> Path:
         return self.dir / f".{filename}.lock"
 
+    def err_path(self, filename: str) -> Path:
+        """The encoder's stderr while it runs; read for the error message, then removed."""
+        return self.dir / f".{filename}.err"
+
     def write(self, clip: dict) -> None:
         """Atomically write the sidecar (tmp + rename) so readers never see a partial file."""
         os.makedirs(self.dir, exist_ok=True)
@@ -136,14 +140,14 @@ class ClipStore:
         return sum(c.get("size") or 0 for c in self.list() if c.get("status") == STATUS_READY)
 
     def delete(self, filename: str) -> bool:
-        """Remove sidecar, MP4, temp and lock. True if a sidecar or MP4 existed."""
+        """Remove sidecar, MP4, temp, lock and stderr file. True if a sidecar or MP4 existed."""
         existed = False
         for p in (self.sidecar_path(filename), self.mp4_path(filename)):
             if p.exists():
                 existed = True
             p.unlink(missing_ok=True)
-        self.temp_path(filename).unlink(missing_ok=True)
-        self.lock_path(filename).unlink(missing_ok=True)
+        for p in (self.temp_path(filename), self.lock_path(filename), self.err_path(filename)):
+            p.unlink(missing_ok=True)
         return existed
 
     def unique_filename(self, base: str) -> str:
@@ -404,6 +408,7 @@ def build_requests(route: dict, store, body: dict, clip_store: ClipStore, now: f
 CLIP_WORKER_TICK_SEC = 2
 ENCODE_RATE_PLACEHOLDER = 4.0  # seconds of footage per wall second; measured on device later
 PROBE_TIMEOUT_SEC = 10
+STDERR_TAIL_BYTES = 300  # how much of a failed encoder's stderr the sidecar error keeps
 
 ENCODER: str = "none"  # "encoderd" | "ffmpeg" | "none"; set once at startup by init_encoder()
 
@@ -522,6 +527,18 @@ async def _kill(proc: asyncio.subprocess.Process) -> None:
         await proc.wait()
 
 
+def _stderr_tail(path: Path) -> str:
+    """The last STDERR_TAIL_BYTES of the encoder's stderr file, decoded and stripped."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - STDERR_TAIL_BYTES))
+            data = f.read()
+    except OSError:
+        return ""
+    return data.decode("utf-8", "replace").strip()
+
+
 def _mark_error(clip_store: ClipStore, clip: dict, message: str) -> None:
     clip_store.write({**clip, "status": STATUS_ERROR, "error": message})
 
@@ -564,31 +581,47 @@ async def encode_one(clip_store: ClipStore, clip: dict, encoder: str, poll_sec: 
     Returns "ready"; "error" (encoder failed: sidecar says why); "requeued"
     (car went onroad: encoder killed, clip back in the queue); or "deleted"
     (sidecar removed mid-encode: encoder killed, nothing left behind). Every
-    path removes the encoder's lock, and every path but "ready" removes the
-    temp output. Cancellation (server shutdown) kills the encoder too, so it
-    never outlives the worker task; the sidecar stays "encoding" for
-    recover_on_startup.
+    path removes the encoder's lock and stderr file, and every path but
+    "ready" removes the temp output. Cancellation (server shutdown) kills the
+    encoder too, so it never outlives the worker task; the sidecar stays
+    "encoding" for recover_on_startup.
+
+    The encoder's stderr goes to a dot file beside the temp output, because
+    a non-zero exit code alone says nothing: its last few hundred bytes
+    (encoderd's "clip failed: ..." line, or ffmpeg's error) become the error.
     """
     name = clip["filename"]
     temp = clip_store.temp_path(name)
+    err: Path | None = None
+    spawned = False
     try:
         validate_filename(name)  # it becomes a rename target below
         cmd = encoder_command(clip, encoder, str(temp))
+        err = clip_store.err_path(name)
         started = time.monotonic()
-        proc = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
-            stdin=asyncio.subprocess.PIPE if encoder == "ffmpeg" else asyncio.subprocess.DEVNULL)
+        with open(err, "wb") as err_file:  # the child keeps its own copy of the fd
+            proc = await asyncio.create_subprocess_exec(
+                *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=err_file,
+                stdin=asyncio.subprocess.PIPE if encoder == "ffmpeg" else asyncio.subprocess.DEVNULL)
+        spawned = True
     except (KeyError, TypeError, ValueError, OSError) as e:
         _mark_error(clip_store, clip, f"clip encoder could not start: {e}")
         return "error"
+    finally:
+        if not spawned and err is not None:
+            err.unlink(missing_ok=True)
 
     code: int | str | None = None
+    tail = ""
     try:
         if encoder == "ffmpeg":
             await _send_concat_list(proc, clip["inputs"])
         code = await _await_exit(proc, clip_store, name, poll_sec, onroad)
     finally:
         await _kill(proc)
+        if isinstance(code, int) and code != 0:
+            tail = _stderr_tail(err)
+        err.unlink(missing_ok=True)
         clip_store.lock_path(name).unlink(missing_ok=True)
         if code != 0:
             temp.unlink(missing_ok=True)
@@ -602,7 +635,8 @@ async def encode_one(clip_store: ClipStore, clip: dict, encoder: str, poll_sec: 
         clip_store.write(_as_queued(clip))
         return "requeued"
     if code != 0:
-        _mark_error(clip_store, clip, f"clip encoder exited with code {code}")
+        message = f"clip encoder exited with code {code}"
+        _mark_error(clip_store, clip, f"{message}: {tail}" if tail else message)
         return "error"
     return _publish(clip_store, clip, time.monotonic() - started)
 
@@ -623,15 +657,17 @@ def kill_stray_encoders() -> None:
 def recover_on_startup(clip_store: ClipStore) -> int:
     """Re-queue every clip a previous run left "encoding"; returns how many.
 
-    A process that died mid-encode left a partial temp file and possibly the
-    encoder's lock. Neither is resumable, so both go and the clip starts over.
+    A process that died mid-encode left a partial temp file, possibly the
+    encoder's lock, and its stderr file. None is resumable, so all go and the
+    clip starts over.
     """
     count = 0
     for clip in clip_store.list():
         if clip.get("status") != STATUS_ENCODING:
             continue
-        clip_store.temp_path(clip["filename"]).unlink(missing_ok=True)
-        clip_store.lock_path(clip["filename"]).unlink(missing_ok=True)
+        name = clip["filename"]
+        for p in (clip_store.temp_path(name), clip_store.lock_path(name), clip_store.err_path(name)):
+            p.unlink(missing_ok=True)
         clip_store.write(_as_queued(clip))
         count += 1
     return count

@@ -30,6 +30,7 @@ def test_write_then_read_roundtrip(store):
     assert store.sidecar_path("a.mp4").name == "a.json"
     assert store.temp_path("a.mp4").name == ".a.mp4"
     assert store.lock_path("a.mp4").name == ".a.mp4.lock"
+    assert store.err_path("a.mp4").name == ".a.mp4.err"
 
 def test_list_newest_first_and_queued_oldest_first(store):
     store.write(_clip("old.mp4", requested_at=1.0))
@@ -53,11 +54,13 @@ def test_total_bytes_counts_ready_only(store):
 
 def test_delete_removes_every_artifact(store):
     store.write(_clip("d.mp4"))
-    for p in (store.mp4_path("d.mp4"), store.temp_path("d.mp4"), store.lock_path("d.mp4")):
+    for p in (store.mp4_path("d.mp4"), store.temp_path("d.mp4"), store.lock_path("d.mp4"),
+              store.err_path("d.mp4")):
         p.write_bytes(b"")
     assert store.delete("d.mp4") is True
     assert not any(p.exists() for p in (store.sidecar_path("d.mp4"), store.mp4_path("d.mp4"),
-                                         store.temp_path("d.mp4"), store.lock_path("d.mp4")))
+                                         store.temp_path("d.mp4"), store.lock_path("d.mp4"),
+                                         store.err_path("d.mp4")))
     assert store.delete("d.mp4") is False
 
 def test_default_filename_and_collision_suffix(store):

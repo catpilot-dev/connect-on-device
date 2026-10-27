@@ -16,6 +16,8 @@ Environment knobs:
   FAKE_ENCODERD_BYTES       bytes written to OUTPUT (default 4096)
   FAKE_ENCODERD_EXIT        exit code (default 0)
   FAKE_ENCODERD_LEAVE_LOCK  "1" leaves OUTPUT.lock behind, like a writer that never ran its destructor
+  FAKE_ENCODERD_STDERR      text written to stderr just before exiting (the real binary's
+                            "clip failed: ..." / "clip encoding failed: ..." diagnostics)
 """
 import json
 import os
@@ -72,6 +74,8 @@ def main(argv: list[str]) -> int:
         f.write(b"\x00" * int(os.environ.get("FAKE_ENCODERD_BYTES", "4096")))
     if os.environ.get("FAKE_ENCODERD_LEAVE_LOCK") != "1":
         os.unlink(lock)
+    sys.stderr.write(os.environ.get("FAKE_ENCODERD_STDERR", ""))
+    sys.stderr.flush()
     return int(os.environ.get("FAKE_ENCODERD_EXIT", "0"))
 
 
