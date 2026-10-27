@@ -1,7 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte'
   import { selectedRoute, dongleId, isMetric } from '../stores.js'
-  import { fetchRoute, fetchRouteFiles, fetchAllCoords, fetchAllEventsWithProgress, enrichRoute, prerenderHud, hudProgress, hudVideoUrl, cancelHudRender, saveNote, addBookmark, updateBookmark, deleteBookmark, takeScreenshot, fetchScreenshotByTime, fetchDashboardTelemetry, fetchHudData } from '../api.js'
+  import { CLIP_BOOKMARK_PAD_SEC, fetchRoute, fetchRouteFiles, fetchAllCoords, fetchAllEventsWithProgress, enrichRoute, prerenderHud, hudProgress, hudVideoUrl, cancelHudRender, saveNote, addBookmark, updateBookmark, deleteBookmark, takeScreenshot, fetchScreenshotByTime, fetchDashboardTelemetry, fetchHudData } from '../api.js'
   import { formatDate, formatDistance, formatDuration, getRouteDurationMs, formatAbsoluteTimeHM } from '../format.js'
   import { buildTimelineEvents } from '../derived.js'
   import snarkdown from 'snarkdown'
@@ -10,6 +10,7 @@
   import VideoControls from '../components/VideoControls.svelte'
   import RouteMap from '../components/RouteMap.svelte'
   import RouteActions from '../components/RouteActions.svelte'
+  import ClipDialog from '../components/ClipDialog.svelte'
   import { Tabs } from 'bits-ui'
   import WidgetCard from '../components/dashboard/WidgetCard.svelte'
   import DigitsWidget from '../components/dashboard/DigitsWidget.svelte'
@@ -33,6 +34,33 @@
   let currentTime = $state(0)
   let absoluteTime = $state(null)
   let duration = $state(0)
+
+  // Dashcam clips
+  let clipOpen = $state(false)
+  let clipStart = $state(0)
+  let clipEnd = $state(0)
+  let clipToast = $state(null)
+  let clipToastTimer = null
+  const routeDurationSec = $derived(duration || (route?.maxqlog != null ? (route.maxqlog + 1) * 60 : 0))
+
+  function openClipFromSelection() {
+    clipStart = selectionStart || 0
+    clipEnd = selectionEnd > 0 ? selectionEnd : duration || ((route.maxqlog + 1) * 60)
+    clipOpen = true
+  }
+
+  function openClipFromBookmark(i) {
+    const t = metaBookmarks[i].time_sec
+    clipStart = Math.max(0, t - CLIP_BOOKMARK_PAD_SEC)
+    clipEnd = Math.min(routeDurationSec, t + CLIP_BOOKMARK_PAD_SEC)
+    clipOpen = true
+  }
+
+  function handleClipCreated() {
+    clipToast = 'Clip queued — see Clips'
+    clearTimeout(clipToastTimer)
+    clipToastTimer = setTimeout(() => { clipToast = null }, 6000)
+  }
   let isPlaying = $state(false)
   // HUD download (pre-render to MP4)
   let dlRendering = $state(false)
@@ -864,6 +892,7 @@
             onPause={handlePause}
             onHudToggle={!enriching ? toggleHudOverlay : undefined}
             onHudDownload={!enriching && !hudMode ? handleHudDownload : undefined}
+            onClip={!enriching && !hudMode ? openClipFromSelection : undefined}
             onHevcFailed={() => { hevcSupported = false; hdSource = null }}
           />
           {#if isFullscreen && !enriching}
@@ -893,6 +922,13 @@
             </div>
           {/if}
         </div>
+
+        {#if clipToast}
+          <div class="mt-2 px-3 py-2 rounded-lg bg-surface-800 border border-surface-700 text-sm text-surface-100 flex items-center justify-between">
+            <span>{clipToast}</span>
+            <a href="/clips" class="text-engage-blue hover:underline">Clips</a>
+          </div>
+        {/if}
 
         {#if !isFullscreen && !enriching}
           {#if hudMode === 'download'}
@@ -1283,6 +1319,18 @@
                           >{bm.label}</button>
                         {/if}
                         <button
+                          class="shrink-0 text-surface-500/40 hover:text-surface-200 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer p-1"
+                          title="Clip 30 s around this bookmark"
+                          onclick={() => openClipFromBookmark(i)}
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-4 h-4">
+                            <rect x="2" y="3" width="20" height="18" rx="2"/>
+                            <line x1="7" y1="3" x2="7" y2="21"/>
+                            <line x1="17" y1="3" x2="17" y2="21"/>
+                            <line x1="2" y1="12" x2="22" y2="12"/>
+                          </svg>
+                        </button>
+                        <button
                           class="shrink-0 text-surface-500/40 hover:text-surface-200 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer p-1 {bookmarkExportBusy === i ? 'animate-pulse' : ''}"
                           title="Export HD frame with EXIF"
                           onclick={() => exportBookmarkFrame(i)}
@@ -1316,6 +1364,18 @@
     </div>
   {/if}
 </div>
+
+{#if route}
+  <ClipDialog
+    bind:open={clipOpen}
+    routeName={route.local_id}
+    startSec={clipStart}
+    endSec={clipEnd}
+    {routeDurationSec}
+    {currentTime}
+    onCreated={handleClipCreated}
+  />
+{/if}
 
 {#if showWidgetPicker}
   <WidgetPicker

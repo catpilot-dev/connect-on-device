@@ -31,6 +31,7 @@
     showHud = false,
     onHudToggle,
     onHudDownload,
+    onClip,
     onHevcFailed,
   } = $props()
 
@@ -478,7 +479,7 @@
   {/if}
 
   <!-- Hover overlay: HUD buttons -->
-  {#if !frozen && (onHudToggle || onHudDownload)}
+  {#if !frozen && (onHudToggle || onHudDownload || onClip)}
     <div class="absolute inset-0 hidden sm:flex items-center justify-center gap-4
       opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none">
       {#if onHudToggle}
@@ -507,6 +508,21 @@
             <line x1="12" y1="15" x2="12" y2="3"/>
           </svg>
           <span class="text-white text-sm font-medium">HUD Download</span>
+        </button>
+      {/if}
+      {#if onClip}
+        <button
+          class="pointer-events-auto flex items-center gap-2 px-4 py-2.5 rounded-lg bg-black/50 hover:bg-black/70 border border-transparent hover:border-blue-500 backdrop-blur-sm transition-colors"
+          title="Dashcam clip"
+          onclick={onClip}
+        >
+          <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <rect x="2" y="3" width="20" height="18" rx="2"/>
+            <line x1="7" y1="3" x2="7" y2="21"/>
+            <line x1="17" y1="3" x2="17" y2="21"/>
+            <line x1="2" y1="12" x2="22" y2="12"/>
+          </svg>
+          <span class="text-white text-sm font-medium">Clip</span>
         </button>
       {/if}
     </div>
