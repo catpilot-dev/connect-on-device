@@ -14,6 +14,7 @@ the install directory wholesale, which would wipe every clip the user kept.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
@@ -21,9 +22,13 @@ import os
 import shutil
 import subprocess
 import time
+from collections.abc import Callable
+from contextlib import suppress
 from pathlib import Path
 
-from config import FFMPEG_BIN
+from config import ENCODERD_BIN, FFMPEG_BIN
+from handlers.middleware import is_onroad
+from screenshot_worker import _user_render_busy
 from storage_management import EMERGENCY_BYTES
 
 log = logging.getLogger("connect")
@@ -384,3 +389,278 @@ def build_requests(route: dict, store, body: dict, clip_store: ClipStore, now: f
             "provenance": provenance(route, store, cam, s, e),
         })
     return out
+
+
+# =============================================================================
+# Encoder and worker: probe, command line, one encode, recovery, scheduling
+# =============================================================================
+#
+# Safety rules this section exists to keep: never encode while the car is
+# onroad (and stop an encode the moment it goes onroad), never let an encoder
+# outlive the worker task, and never let a clip look finished before its MP4
+# is complete and in place.
+
+CLIP_WORKER_TICK_SEC = 2
+ENCODE_RATE_PLACEHOLDER = 4.0  # seconds of footage per wall second; measured on device later
+PROBE_TIMEOUT_SEC = 10
+
+ENCODER: str = "none"  # "encoderd" | "ffmpeg" | "none"; set once at startup by init_encoder()
+
+
+def probe_encoder(encoderd_bin: str = ENCODERD_BIN) -> str:
+    """Which clip encoder this machine has: "encoderd", "ffmpeg" or "none".
+
+    The binary existing proves nothing: only a comma-hardware build of 0.11.2+
+    has clip mode, and other builds log a line and exit 0 for `--clip`. Clip
+    mode with no further arguments prints its usage line on stderr and exits 2,
+    so that pair is the support signal. ffmpeg (software libx264) is the laptop
+    path and is chosen only when there is no encoderd at all; a device always
+    has one, so ffmpeg is never selected there.
+    """
+    if os.path.exists(encoderd_bin):
+        try:
+            probe = subprocess.run([encoderd_bin, "--clip"], stdin=subprocess.DEVNULL,
+                                   capture_output=True, text=True, errors="replace",
+                                   timeout=PROBE_TIMEOUT_SEC)
+        except (OSError, subprocess.SubprocessError):
+            return "none"
+        return "encoderd" if probe.returncode == 2 and "usage:" in probe.stderr else "none"
+    return "ffmpeg" if shutil.which(FFMPEG_BIN) else "none"
+
+
+def init_encoder(encoderd_bin: str = ENCODERD_BIN) -> str:
+    """Probe once at startup and cache the result in ENCODER."""
+    global ENCODER
+    ENCODER = probe_encoder(encoderd_bin)
+    return ENCODER
+
+
+def _clip_metadata(clip: dict) -> str:
+    """The MP4's self-description: the sidecar minus queue plumbing (inputs, status).
+
+    requested_at stays numeric because upstream's clip listing skips a tag
+    without one; compact separators keep the encoder argv short.
+    """
+    meta = {k: v for k, v in clip.items() if k not in ("inputs", "status")}
+    return json.dumps(meta, separators=(",", ":"))
+
+
+def _ffconcat_list(inputs: list[str]) -> str:
+    """ffmpeg concat-demuxer script for the segment files, as upstream's PC path writes it."""
+    parts = ["ffconcat version 1.0\n"]
+    for path in inputs:
+        escaped = path.replace("'", "'\\''")
+        parts.append(f"file 'file:{escaped}'\noption framerate {FRAME_RATE}\nduration {SEGMENT_SEC}\n")
+    return "".join(parts)
+
+
+def encoder_command(clip: dict, encoder: str, output: str) -> list[str]:
+    """argv that encodes the clip's window of its input segments into output.
+
+    Both forms always carry the metadata: besides describing the file, passing
+    it is what makes encoderd apply faststart, which phones need. Speedup is
+    always 1 (clips never time-lapse). encoderd takes the inputs as argv;
+    ffmpeg reads them as a concat list on stdin (see _ffconcat_list).
+    """
+    start, duration = str(clip["encode_start_sec"]), str(clip["duration_sec"])
+    metadata = _clip_metadata(clip)
+    if encoder == "encoderd":
+        return [ENCODERD_BIN, "--clip", output, start, duration,
+                "--bitrate", str(int(clip["bitrate_mbps"] * 1_000_000)), "--speedup", "1",
+                "--metadata", metadata, "--", *clip["inputs"]]
+    if encoder == "ffmpeg":
+        return [FFMPEG_BIN, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+                "-r", str(FRAME_RATE), "-f", "concat", "-safe", "0",
+                "-protocol_whitelist", "file,pipe", "-c:v", "hevc", "-i", "pipe:0",
+                "-ss", start, "-t", duration, "-map", "0:v:0", "-an", "-r", str(FRAME_RATE),
+                "-c:v", "libx264", "-preset", "veryfast", "-b:v", f"{clip['bitrate_mbps']}M",
+                "-pix_fmt", "yuv420p", "-movflags", "+faststart+use_metadata_tags",
+                "-metadata", f"ai.comma.clip.settings={metadata}", output]
+    raise ValueError(f"no clip encoder: {encoder!r}")
+
+
+async def _send_concat_list(proc: asyncio.subprocess.Process, inputs: list[str]) -> None:
+    """Write ffmpeg's concat list to its stdin and close it; EOF ends the list."""
+    try:
+        proc.stdin.write(_ffconcat_list(inputs).encode())
+        await proc.stdin.drain()
+    except ConnectionError:
+        pass  # ffmpeg exited before reading; its exit code says why
+    finally:
+        proc.stdin.close()
+
+
+async def _await_exit(proc: asyncio.subprocess.Process, clip_store: ClipStore, filename: str,
+                      poll_sec: float, onroad: Callable[[], bool]) -> int | str:
+    """The encoder's exit code, or why it must be stopped now: "onroad" or "deleted".
+
+    Waits in poll_sec slices so the car and the sidecar are checked between them.
+    """
+    while True:
+        try:
+            return await asyncio.wait_for(proc.wait(), timeout=poll_sec)
+        except asyncio.TimeoutError:
+            pass
+        if onroad():
+            return "onroad"
+        if not clip_store.sidecar_path(filename).exists():
+            return "deleted"
+
+
+async def _kill(proc: asyncio.subprocess.Process) -> None:
+    """SIGKILL the encoder if it is still running, and reap it.
+
+    SIGKILL, not SIGTERM: encoderd's exit handler only sets a flag that the
+    clip path never reads, so a terminated encode runs to completion, on a
+    moving car if the stop was for onroad. A killed encoder leaves its temp
+    output and the VideoWriter's .lock behind; the caller removes both.
+    """
+    if proc.returncode is None:
+        with suppress(ProcessLookupError):
+            proc.kill()
+        await proc.wait()
+
+
+def _mark_error(clip_store: ClipStore, clip: dict, message: str) -> None:
+    clip_store.write({**clip, "status": STATUS_ERROR, "error": message})
+
+
+def _as_queued(clip: dict) -> dict:
+    """The clip back in the queue; started_at goes, since that encode never finished."""
+    queued = {k: v for k, v in clip.items() if k != "started_at"}
+    queued["status"] = STATUS_QUEUED
+    return queued
+
+
+def _publish(clip_store: ClipStore, clip: dict, encode_sec: float) -> str:
+    """Move a finished encode into place, then mark it ready.
+
+    The rename precedes the ready sidecar so a ready sidecar never points at a
+    missing or partial file: list() deletes a ready sidecar whose MP4 is
+    missing, and a crash between the two steps leaves an "encoding" sidecar
+    that the next start re-queues instead of trusting.
+    """
+    name = clip["filename"]
+    temp = clip_store.temp_path(name)
+    try:
+        size = temp.stat().st_size
+    except OSError:
+        size = 0
+    if size == 0:
+        temp.unlink(missing_ok=True)
+        _mark_error(clip_store, clip, "clip encoder exited 0 without writing the clip")
+        return "error"
+    os.replace(temp, clip_store.mp4_path(name))
+    clip_store.write({**clip, "status": STATUS_READY, "size": size,
+                      "encode_sec": round(encode_sec, 2), "finished_at": time.time()})
+    return "ready"
+
+
+async def encode_one(clip_store: ClipStore, clip: dict, encoder: str, poll_sec: float = 1.0,
+                     onroad: Callable[[], bool] = is_onroad) -> str:
+    """Encode one clip into its temp file, then settle its sidecar.
+
+    Returns "ready"; "error" (encoder failed: sidecar says why); "requeued"
+    (car went onroad: encoder killed, clip back in the queue); or "deleted"
+    (sidecar removed mid-encode: encoder killed, nothing left behind). Every
+    path removes the encoder's lock, and every path but "ready" removes the
+    temp output. Cancellation (server shutdown) kills the encoder too, so it
+    never outlives the worker task; the sidecar stays "encoding" for
+    recover_on_startup.
+    """
+    name = clip["filename"]
+    temp = clip_store.temp_path(name)
+    try:
+        validate_filename(name)  # it becomes a rename target below
+        cmd = encoder_command(clip, encoder, str(temp))
+        started = time.monotonic()
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+            stdin=asyncio.subprocess.PIPE if encoder == "ffmpeg" else asyncio.subprocess.DEVNULL)
+    except (KeyError, TypeError, ValueError, OSError) as e:
+        _mark_error(clip_store, clip, f"clip encoder could not start: {e}")
+        return "error"
+
+    code: int | str | None = None
+    try:
+        if encoder == "ffmpeg":
+            await _send_concat_list(proc, clip["inputs"])
+        code = await _await_exit(proc, clip_store, name, poll_sec, onroad)
+    finally:
+        await _kill(proc)
+        clip_store.lock_path(name).unlink(missing_ok=True)
+        if code != 0:
+            temp.unlink(missing_ok=True)
+
+    # Nothing awaits from here on, so a DELETE handler cannot land between
+    # this check and the sidecar writes below and have its deletion undone.
+    if code == "deleted" or not clip_store.sidecar_path(name).exists():
+        temp.unlink(missing_ok=True)
+        return "deleted"
+    if code == "onroad":
+        clip_store.write(_as_queued(clip))
+        return "requeued"
+    if code != 0:
+        _mark_error(clip_store, clip, f"clip encoder exited with code {code}")
+        return "error"
+    return _publish(clip_store, clip, time.monotonic() - started)
+
+
+def recover_on_startup(clip_store: ClipStore) -> int:
+    """Re-queue every clip a previous run left "encoding"; returns how many.
+
+    A process that died mid-encode left a partial temp file and possibly the
+    encoder's lock. Neither is resumable, so both go and the clip starts over.
+    """
+    count = 0
+    for clip in clip_store.list():
+        if clip.get("status") != STATUS_ENCODING:
+            continue
+        clip_store.temp_path(clip["filename"]).unlink(missing_ok=True)
+        clip_store.lock_path(clip["filename"]).unlink(missing_ok=True)
+        clip_store.write(_as_queued(clip))
+        count += 1
+    return count
+
+
+async def clip_worker_tick(app) -> str:
+    """One scheduling decision: "unsupported", "onroad", "busy", "idle",
+    "admission_error", or the result of encoding the oldest queued clip.
+
+    Admission is re-checked here, not only at request time: several requests
+    may each have been admitted against the same free space, and the disk may
+    have filled since.
+    """
+    encoder = app["clips_encoder"]
+    if encoder == "none":
+        return "unsupported"
+    if is_onroad():
+        return "onroad"
+    if _user_render_busy():
+        return "busy"  # a user HUD render is running; two CPU-heavy jobs never overlap
+    clip_store = app["clip_store"]
+    queue = clip_store.queued()
+    if not queue:
+        return "idle"
+    clip = queue[0]
+    try:
+        check_admission(app["store"], clip.get("estimate_bytes") or 0)
+    except ClipRequestError as e:
+        _mark_error(clip_store, clip, str(e))
+        return "admission_error"
+    clip = {**clip, "status": STATUS_ENCODING, "started_at": time.time()}
+    clip_store.write(clip)
+    # Pass is_onroad explicitly: encode_one's default was bound at import time.
+    return await encode_one(clip_store, clip, encoder, onroad=is_onroad)
+
+
+async def clip_worker(app) -> None:
+    """Background task started by server.py: one encode at a time, offroad only."""
+    while True:
+        await asyncio.sleep(CLIP_WORKER_TICK_SEC)
+        try:
+            await clip_worker_tick(app)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("clips: worker tick failed")
