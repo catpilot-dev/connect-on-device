@@ -61,13 +61,17 @@
   onDestroy(() => { poll?.stop(); if (ticker) clearInterval(ticker) })
 
   async function remove(c) {
-    if (!confirm(`Delete clip ${c.filename}?`)) return
+    const msg = c.status === 'encoding'
+      ? 'Stop encoding and delete this clip?'
+      : `Delete clip ${c.filename}?`
+    if (!confirm(msg)) return
     try {
       await deleteClip(c.filename)
-      if (playing === c.filename) playing = null
     } catch (e) {
       error = e.message
+      return
     }
+    if (playing === c.filename) playing = null
     await load()
   }
 
@@ -142,9 +146,9 @@
                 </button>
                 <a class="btn-ghost text-xs" href={clipUrl(c.filename)} download={c.filename}>Download</a>
               {/if}
-              {#if c.status !== 'encoding'}
-                <button class="btn-ghost text-xs text-engage-red" onclick={() => remove(c)}>Delete</button>
-              {/if}
+              <button class="btn-ghost text-xs text-engage-red" onclick={() => remove(c)}>
+                {c.status === 'encoding' ? 'Cancel' : 'Delete'}
+              </button>
             </div>
           </div>
           {#if playing === c.filename && c.status === 'ready'}
