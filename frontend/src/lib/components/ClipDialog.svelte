@@ -35,8 +35,11 @@
   let submitting = $state(false)
   let error = $state('')
 
+  // Snap bounds to 0.1 s so float noise never pushes a 2-minute window over the limit
+  const snap = (x) => Math.round(x * 10) / 10
+
   const length = $derived(winEnd - winStart)
-  const tooLong = $derived(length > CLIP_MAX_SEC && !picked)
+  const tooLong = $derived(length > CLIP_MAX_SEC + 1e-6 && !picked)
   const tooShort = $derived(length < 1)
   const supported = $derived(availability?.supported !== false)
 
@@ -59,8 +62,8 @@
   // Reset and load availability each time the dialog opens
   $effect(() => {
     if (!open) return
-    winStart = startSec
-    winEnd = endSec
+    winStart = snap(startSec)
+    winEnd = snap(endSec)
     picked = false
     error = ''
     loadError = ''
@@ -84,15 +87,15 @@
   }
 
   function pickFirst() {
-    winEnd = winStart + CLIP_MAX_SEC
+    winEnd = snap(winStart + CLIP_MAX_SEC)
     picked = true
   }
 
   function pickAroundPlayhead() {
     const lo = Math.max(0, currentTime - CLIP_MAX_SEC / 2)
     const hi = Math.min(routeDurationSec || currentTime + CLIP_MAX_SEC / 2, currentTime + CLIP_MAX_SEC / 2)
-    winStart = lo
-    winEnd = hi
+    winStart = snap(lo)
+    winEnd = snap(hi)
     picked = true
   }
 
@@ -103,7 +106,7 @@
     try {
       const res = await createClip(routeName, {
         startSec: winStart,
-        endSec: winEnd,
+        endSec: Math.min(winEnd, winStart + CLIP_MAX_SEC),
         cameras: chosenCameras,
         bitrateMbps: bitrate,
         name: name.trim() || undefined,
