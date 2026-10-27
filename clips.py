@@ -413,6 +413,11 @@ STDERR_TAIL_BYTES = 300  # how much of a failed encoder's stderr the sidecar err
 ENCODER: str = "none"  # "encoderd" | "ffmpeg" | "none"; set once at startup by init_encoder()
 
 
+def _is_comma_device() -> bool:
+    """True on a comma device (AGNOS marker, or openpilot's params directory)."""
+    return os.path.isfile("/AGNOS") or os.path.isdir("/data/params/d")
+
+
 def probe_encoder(encoderd_bin: str = ENCODERD_BIN) -> str:
     """Which clip encoder this machine has: "encoderd", "ffmpeg" or "none".
 
@@ -420,8 +425,9 @@ def probe_encoder(encoderd_bin: str = ENCODERD_BIN) -> str:
     has clip mode, and other builds log a line and exit 0 for `--clip`. Clip
     mode with no further arguments prints its usage line on stderr and exits 2,
     so that pair is the support signal. ffmpeg (software libx264) is the laptop
-    path and is chosen only when there is no encoderd at all; a device always
-    has one, so ffmpeg is never selected there.
+    path: it is chosen only when there is no encoderd AND this is not a comma
+    device, so a device whose encoderd is missing gets "none", never a
+    software encode.
     """
     if os.path.exists(encoderd_bin):
         try:
@@ -431,6 +437,8 @@ def probe_encoder(encoderd_bin: str = ENCODERD_BIN) -> str:
         except (OSError, subprocess.SubprocessError):
             return "none"
         return "encoderd" if probe.returncode == 2 and "usage:" in probe.stderr else "none"
+    if _is_comma_device():
+        return "none"
     return "ffmpeg" if shutil.which(FFMPEG_BIN) else "none"
 
 

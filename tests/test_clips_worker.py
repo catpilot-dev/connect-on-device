@@ -20,6 +20,24 @@ def test_probe_encoder_detects_usage_exit_2(tmp_path):
     assert probe_encoder(FAKE) == "encoderd"
     assert probe_encoder(str(tmp_path / "missing")) in ("ffmpeg", "none")
 
+def test_probe_uses_ffmpeg_only_when_not_a_comma_device(tmp_path, monkeypatch):
+    monkeypatch.setattr(clips, "FFMPEG_BIN", sys.executable)        # an ffmpeg that resolves
+    monkeypatch.setattr(clips, "_is_comma_device", lambda: False)
+    assert probe_encoder(str(tmp_path / "missing")) == "ffmpeg"
+
+def test_probe_never_picks_ffmpeg_on_a_comma_device(tmp_path, monkeypatch):
+    monkeypatch.setattr(clips, "FFMPEG_BIN", sys.executable)
+    monkeypatch.setattr(clips, "_is_comma_device", lambda: True)
+    assert probe_encoder(str(tmp_path / "missing")) == "none"        # no encoderd: no clips, not libx264
+    assert probe_encoder(FAKE) == "encoderd"
+
+@pytest.mark.parametrize("agnos,params,expected", [
+    (True, False, True), (False, True, True), (True, True, True), (False, False, False)])
+def test_is_comma_device(monkeypatch, agnos, params, expected):
+    monkeypatch.setattr(clips.os.path, "isfile", lambda p: agnos and p == "/AGNOS")
+    monkeypatch.setattr(clips.os.path, "isdir", lambda p: params and p == "/data/params/d")
+    assert clips._is_comma_device() is expected
+
 def test_encoder_command_shape(tmp_path):
     clip = _clip(tmp_path)
     cmd = encoder_command(clip, "encoderd", "/out/.c.mp4")
