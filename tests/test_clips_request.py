@@ -236,3 +236,10 @@ def test_build_requests_rejects_a_non_object_body(world, body):
     with pytest.raises(ClipRequestError) as e:
         build_requests(route, store, body, cs, now=1.0)
     assert e.value.status == 400 and str(e.value) == "Request body must be a JSON object"
+
+
+@pytest.mark.parametrize("given", ["Crash.MP4", "Crash.Mp4", "Crash.mp4", "Crash", "  Crash.MP4 "])
+def test_custom_name_mp4_suffix_is_case_insensitive(world, given):
+    route, store, cs = world
+    body = {"start_sec": 0, "end_sec": 30, "cameras": ["road"], "name": given}
+    assert build_requests(route, store, body, cs, now=1.0)[0]["filename"] == "Crash.mp4"

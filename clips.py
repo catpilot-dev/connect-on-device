@@ -354,8 +354,8 @@ def _validate_body(body: dict) -> tuple[float, float, list[str], float, str | No
         if not isinstance(name, str):
             raise ClipRequestError(400, "Invalid clip name")
         name = name.strip()
-        if name.endswith(".mp4"):
-            name = name[:-4]
+        if name.lower().endswith(".mp4"):
+            name = name[:-len(".mp4")]
         try:
             validate_filename(name + ".mp4")
         except ValueError:
@@ -380,19 +380,16 @@ def build_requests(route: dict, store, body: dict, clip_store: ClipStore, now: f
     check_admission(store, sum(p[6] for p in plans))
 
     route_date = route["fullname"].split("/")[-1]
-    taken: set[str] = set()
     out = []
     for cam, s, e, clamped, inputs, duration, estimate in plans:
+        # Cameras are de-duplicated and a multi-camera base carries its camera,
+        # so the bases of one request never collide; the handler's on-loop
+        # re-check guards against concurrent requests.
         if name:
             base = f"{name}_{cam}" if len(cams) > 1 else name
         else:
             base = default_filename(route_date, cam, s, e)
         filename = clip_store.unique_filename(base)
-        n = 2
-        while filename in taken:
-            filename = clip_store.unique_filename(f"{base}_{n}")
-            n += 1
-        taken.add(filename)
         out.append({
             "filename": filename, "route": route["fullname"], "camera": cam,
             "start_sec": s, "end_sec": e, "bitrate_mbps": bitrate,
