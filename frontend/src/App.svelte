@@ -12,6 +12,7 @@
   import SignalBrowserPage from './lib/pages/SignalBrowserPage.svelte'
   import PluginsPage from './lib/pages/PluginsPage.svelte'
   import ScreenshotsPage from './lib/pages/ScreenshotsPage.svelte'
+  import ClipsPage from './lib/pages/ClipsPage.svelte'
 
   let error = $state(null)
   let isOnroad = $state(false)
@@ -23,6 +24,7 @@
     if (parts[0] === 'settings') return 'settings'
     if (parts[0] === 'plugins') return 'plugins'
     if (parts[0] === 'screenshots') return 'screenshots'
+    if (parts[0] === 'clips') return 'clips'
     if (parts[0] === 'routes') return 'routes'
     // if (parts[0] === 'dashboard') return 'dashboard'  // disabled for now
     if (parts[0] === 'signals') return 'signals'
@@ -93,6 +95,7 @@
     const unsub = selectedRoute.subscribe(route => {
       if (route === lastRoute) return
       lastRoute = route
+      if (route && page === 'clips') page = 'routes'  // opened from a clip row
       if (!route && page === 'routes') {
         history.pushState(null, '', '/routes')
       }
@@ -150,6 +153,12 @@
     page = 'screenshots'
     selectedRoute.set(null)
     history.pushState(null, '', '/screenshots')
+  }
+
+  function showClips() {
+    page = 'clips'
+    selectedRoute.set(null)
+    history.pushState(null, '', '/clips')
   }
 
   async function handleUpdate() {
@@ -211,6 +220,12 @@
           >
             Captures
           </button>
+          <button
+            class="px-3 py-1.5 text-sm rounded transition-colors {page === 'clips' ? 'bg-surface-700 text-surface-50' : 'text-surface-400 hover:text-surface-200'}"
+            onclick={showClips}
+          >
+            Clips
+          </button>
         </div>
       {/snippet}
     </DeviceHeader>
@@ -240,6 +255,8 @@
         <PluginsPage />
       {:else if page === 'screenshots'}
         <ScreenshotsPage />
+      {:else if page === 'clips'}
+        <ClipsPage />
       {:else if $selectedRoute}
         <RouteDetailPage />
       {:else}

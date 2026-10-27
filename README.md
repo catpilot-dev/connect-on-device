@@ -24,6 +24,7 @@ Open **http://catpilot.local/** (or `http://<comma_device_ip>/`) in any browser 
 - **Video playback** — stream front/wide/driver cameras, extract frames with EXIF metadata
 - **HUD video** — render openpilot's HUD overlay onto dashcam footage as downloadable MP4 or live HLS stream
 - **Screen captures** — screenshots from the screen_capture plugin; onroad taps become exact HUD frames automatically after you park, named by the moment you tapped
+- **Dashcam clips** — hardware-transcoded H.264 clips of any ≤2 min window, for sharing or insurance claims (openpilot 0.11.2+)
 - **Note taking** — add notes to any route for documentation, debugging, or personal reference
 - **Plugin management** — enable/disable plugins without SSH
 - **Settings** — driving personality, speed limit offsets, experimental mode, SSH keys, and more

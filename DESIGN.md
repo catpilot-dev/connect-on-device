@@ -23,6 +23,7 @@ connect-on-device/
 │                           #   frame times, bookmark epochs
 ├── storage_management.py   # Disk reclaim phases + cache cleanups
 ├── screenshot_worker.py    # Offroad extraction of onroad screen-capture taps
+├── clips.py                # Dashcam clip queue, sidecars, encode worker
 ├── render_clip_headless.py # Headless HUD renderer (clip + screenshot modes)
 ├── render_clip_drm.py      # Legacy DRM render fallback
 ├── cod_recorder.py         # ffmpeg frame encoder for HUD clip rendering
@@ -35,6 +36,7 @@ connect-on-device/
 │   ├── media.py            # Video streaming, frame extraction, frame_times
 │   ├── hud.py              # HUD prerender/progress/video, screencast
 │   ├── screenshots.py      # Captures list/serve/delete, by-time matching
+│   ├── clips.py            # Clip create/list/serve/delete
 │   ├── signals.py          # CAN/cereal signal browser
 │   ├── updates.py          # Channel-aware COD + plugins update flow
 │   ├── software.py         # openpilot update lifecycle
@@ -97,6 +99,15 @@ drive-local filenames, and per-tap state in route metadata
 (`hud_capture_state`). The full contract — including why the onroad path
 must never touch GPU or disk — is documented in the plugins repo:
 `plugins/screen_capture/DESIGN.md`.
+
+## Dashcam clips
+
+`clips.py` exports a window (<= 2 min) of a drive as a hardware-transcoded
+H.264 MP4 in `cod_clips`. The per-clip JSON sidecar is the source of truth:
+the queue and every status (`queued`, `encoding`, `ready`, `error`) are
+rebuilt from sidecars, never from memory. Going onroad SIGKILLs a running
+encode and requeues it for the next offroad period. `cod_clips` is never
+reclaimed by storage management; only the user deletes clips.
 
 ## Onroad safety guard
 
