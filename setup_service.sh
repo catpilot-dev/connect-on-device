@@ -24,6 +24,23 @@ if [ "$(hostname)" != "$_hostname" ]; then
   sudo systemctl restart avahi-daemon avahi-ssh-publish 2>/dev/null || true
 fi
 
+# Install COD's Python deps into the openpilot venv (aiohttp is no longer an
+# openpilot dependency since v0.11.2; see requirements.txt). The check is
+# local, so pip -- network plus a rootfs remount -- runs only when something is
+# unmet: first boot, a COD update that bumps a pin, or an AGNOS update that
+# replaced the venv. Short timeouts: offline at boot must not hold COD up, and
+# a failed install is retried next boot.
+_venv_py=/usr/local/venv/bin/python
+if ! _unmet=$(cd "$DIR" && "$_venv_py" requirements_check.py 2>&1); then
+  echo "[setup_service] unmet requirements: $(echo $_unmet)" >> /tmp/connect.log
+  _was_ro=$(findmnt -no OPTIONS / | grep -qw ro && echo 1)
+  [ -n "$_was_ro" ] && sudo mount -o remount,rw /
+  sudo "$_venv_py" -m pip install --disable-pip-version-check --root-user-action=ignore \
+      --no-cache-dir --timeout 10 --retries 1 -r "$DIR/requirements.txt" >> /tmp/connect.log 2>&1 \
+    || echo "[setup_service] pip install failed; will retry next boot" >> /tmp/connect.log
+  [ -n "$_was_ro" ] && sudo mount -o remount,ro / 2>/dev/null
+fi
+
 # Grant Python the capability to bind port 80 directly (works for both IPv4 and
 # IPv6, no iptables NAT needed).  The root filesystem may be read-only until
 # remounted; retry once after remounting.

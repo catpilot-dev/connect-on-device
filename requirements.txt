@@ -6,10 +6,9 @@
 # provides it and COD (an aiohttp.web app: server.py + all handlers + the
 # aiohttp.ClientSession client in updates.py) would fail to import.
 #
-# Install into the openpilot venv at deploy (setup_service.sh), read-only rootfs:
-#   sudo mount -o remount,rw /
-#   /usr/local/venv/bin/pip install -r requirements.txt
-#   sudo mount -o remount,ro /
+# setup_service.sh installs these into the openpilot venv at every boot/deploy,
+# but only when requirements_check.py reports something unmet (so an up-to-date
+# device never touches the network or remounts the read-only rootfs).
 #
 # aiohttp + its EXCLUSIVE transitive deps are listed. They were removed
 # from openpilot's lock alongside aiohttp, so installing them cannot conflict
@@ -44,11 +43,13 @@ yarl==1.24.2
 # openpilot dropped pillow as a direct dep (#38320/#38466), so as of AGNOS 19.4
 # pillow reaches the venv through exactly ONE thread: matplotlib, which AGNOS
 # lists as an "extra nice-to-have" in agnos-builder/userspace/uv/pyproject.toml.
-# It is present today (12.3.0) and this line is a no-op — but if comma ever
-# drops matplotlib from that list, pillow disappears and COD breaks. Floor, not
-# an exact pin, so it never downgrades the version matplotlib resolved to.
-# 12.3.0 ships a cp312 aarch64 manylinux wheel (no on-device compilation).
-pillow>=12.3.0
+# It is present today and this line is a no-op — but if comma ever drops
+# matplotlib from that list, pillow disappears and COD breaks. Floor, not an
+# exact pin, so it never downgrades the version matplotlib resolved to. The
+# floor is the OLDEST version seen working (12.1.1 on AGNOS 12.8; 19.4 ships
+# 12.3.0): a higher floor would make boot upgrade pillow to the newest major
+# (13.x when checked 2026-11-08) on devices that already work.
+pillow>=12.1.1
 
 # Provided by the openpilot venv, NOT installed here (listed for documentation):
 #   numpy      — openpilot core dep (log_parser / render_clip use it)
