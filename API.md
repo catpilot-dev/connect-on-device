@@ -325,13 +325,13 @@ Both frame endpoints embed the following EXIF data:
 - First request for a segment is slower (~1.5s) due to one-time HEVC→MP4 muxing
 - Subsequent requests for the same segment seek directly in the cached MP4
 - Camera intrinsics are from the tici AR0231 sensor (fixed)
-- Camera pose comes from liveCalibration in rlog (cached per segment)
+- Camera pose comes from extrinsicsCalibration in the qlog/rlog (cached per segment)
 
 ---
 
 ## HUD Video Rendering
 
-Pre-render the openpilot HUD overlay to an MP4 video using the device's replay binary.
+Pre-render the openpilot HUD overlay to an MP4 video with the headless renderer (`render_clip_headless.py`).
 
 ### `POST /v1/route/{routeName}/hud/prerender`
 Start a HUD video render job.

@@ -270,8 +270,6 @@ def create_app(data_dir: str, static_dir: str) -> web.Application:
     app.router.add_get("/v1/route/{routeName}/hud/preview", handle_hud_render_preview)
     app.router.add_get("/v1/route/{routeName}/hud/video", handle_hud_video)
 
-    # HUD live streaming (DRM replay → HLS)
-
     # Screencast: play fcamera on C3 screen, controlled from mobile
     app.router.add_post("/v1/screencast/start", handle_screencast_start)
     app.router.add_post("/v1/screencast/seek", handle_screencast_seek)

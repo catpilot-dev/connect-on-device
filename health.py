@@ -223,12 +223,6 @@ def run_startup_checks(static_dir: str = None) -> list[dict]:
     # Binaries
     results.append(check_binary("ffmpeg", config.FFMPEG_BIN))
     results.append(check_binary("python", config.PYTHON_BIN))
-    replay = config.REPLAY_BIN
-    if os.path.isfile(replay):
-        results.append(check_binary("replay", replay))
-    else:
-        results.append(_check("replay", LEVEL_WARN,
-                              f"Replay binary not found at {replay} (HUD rendering unavailable)"))
 
     # Paths
     results.append(check_path("openpilot", config.OPENPILOT_DIR))

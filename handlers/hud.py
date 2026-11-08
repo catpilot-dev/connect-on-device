@@ -19,14 +19,12 @@ _hud_prerender_tasks: dict = {}
 
 from config import (COD_HUD_CACHE_DIR, COD_HLS_TMP_DIR,
                      OPENPILOT_DIR as _OPENPILOT_DIR_STR,
-                     PYTHON_BIN, REPLAY_BIN as _REPLAY_BIN_STR)
+                     PYTHON_BIN)
 
 HUD_CACHE_DIR = Path(COD_HUD_CACHE_DIR)
 RENDER_HLS_DIR = Path(COD_HLS_TMP_DIR)
 RENDER_SCRIPT_HEADLESS = Path(__file__).parent.parent / "render_clip_headless.py"
-RENDER_SCRIPT_DRM = Path(__file__).parent.parent / "render_clip_drm.py"  # legacy fallback
 OPENPILOT_DIR = Path(_OPENPILOT_DIR_STR)
-REPLAY_BIN = Path(_REPLAY_BIN_STR)
 
 MANAGER_CMD = [PYTHON_BIN, "./manager.py"]
 MANAGER_CWD = os.path.join(_OPENPILOT_DIR_STR, "openpilot/system/manager")
@@ -76,101 +74,9 @@ async def _ensure_manager():
     await loop.run_in_executor(None, _start_manager)
 
 
-async def _verify_replay_binary():
-    """Test-run replay binary to verify it's functional.
-
-    Returns True if healthy, False if broken (crash, missing libs, ABI mismatch).
-    Checks that the binary can run without crashing — a normal exit (code >= 0)
-    is OK; only signal kills (code < 0, e.g. SIGABRT=-6) indicate breakage.
-    """
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            str(REPLAY_BIN), "--help",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
-        if proc.returncode >= 0:
-            return True
-        # Negative return code = killed by signal (e.g. -6 = SIGABRT)
-        logger.warning("Replay binary crashed (signal %d): %s",
-                       -proc.returncode, (stdout.decode()[-200:] if stdout else ""))
-        return False
-    except asyncio.TimeoutError:
-        logger.warning("Replay binary health check timed out")
-        return False
-    except Exception as e:
-        logger.warning("Replay binary health check error: %s", e)
-        return False
-
-
-async def _rebuild_replay_binary():
-    """Rebuild replay binary from scons cache.
-
-    Returns True on success, False on failure.
-    """
-    logger.info("Rebuilding replay binary from scons cache...")
-    proc = await asyncio.create_subprocess_exec(
-        "scons", "openpilot/tools/replay/replay", "-j2",
-        cwd=str(OPENPILOT_DIR),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-        env={**os.environ, "VIRTUAL_ENV": "/usr/local/venv",
-             "PATH": "/usr/local/venv/bin:" + os.environ.get("PATH", "")},
-    )
-    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=120)
-    if proc.returncode == 0 and REPLAY_BIN.is_file():
-        logger.info("Replay binary rebuilt successfully")
-        return True
-    else:
-        logger.error("Failed to rebuild replay binary: %s",
-                     stdout.decode()[-500:] if stdout else "no output")
-        return False
-
-
-_REPLAY_BACKUP = Path(__file__).parent.parent / "lib" / "replay"
-
-
-async def _restore_replay_from_backup() -> bool:
-    """Copy replay binary from COD backup to openpilot tools dir."""
-    if not _REPLAY_BACKUP.is_file():
-        return False
-    try:
-        import shutil
-        REPLAY_BIN.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(str(_REPLAY_BACKUP), str(REPLAY_BIN))
-        REPLAY_BIN.chmod(0o755)
-        logger.info("Restored replay binary from backup")
-        return True
-    except Exception as e:
-        logger.warning("Failed to restore replay from backup: %s", e)
-        return False
-
-
-async def _ensure_replay_binary():
-    """Check replay binary exists and is functional; restore/rebuild if needed.
-
-    Returns True if binary is available, False on failure.
-    """
-    if not REPLAY_BIN.is_file():
-        logger.info("Replay binary missing, restoring from backup...")
-        if not await _restore_replay_from_backup():
-            logger.info("Backup not available, trying scons rebuild...")
-            return await _rebuild_replay_binary()
-
-    if not await _verify_replay_binary():
-        logger.info("Replay binary broken, restoring from backup...")
-        if not await _restore_replay_from_backup():
-            return await _rebuild_replay_binary()
-        if not await _verify_replay_binary():
-            logger.info("Backup binary also broken, trying scons rebuild...")
-            return await _rebuild_replay_binary()
-
-    return True
-
-# Quality presets for DRM mode — 0.2x replay, 2fps capture → 10 unique frames/route-sec
+# Quality presets — 0.2x replay, 2fps capture → 10 unique frames/route-sec
 # Post-processed: 5x speedup + frame-dup to target fps. wall_duration ≈ 5x duration
-QUALITY_PRESETS_DRM = {
+QUALITY_PRESETS = {
     "high":   {"fps": 20, "bitrate_mbps": 3.0},
     "medium": {"fps": 20, "bitrate_mbps": 1.5},
     "low":    {"fps": 10, "bitrate_mbps": 0.8},
@@ -178,10 +84,9 @@ QUALITY_PRESETS_DRM = {
 
 
 def _get_render_script() -> Path | None:
-    """Get the best available render script.
+    """Get the headless render script, or None if it can't run here.
 
-    Prefers headless (no DRM master needed), falls back to DRM.
-    Requires raylib package and the UI script.
+    Requires the raylib package and the openpilot UI script.
     """
     try:
         import raylib
@@ -191,12 +96,10 @@ def _get_render_script() -> Path | None:
         return None
     if RENDER_SCRIPT_HEADLESS.exists():
         return RENDER_SCRIPT_HEADLESS
-    if RENDER_SCRIPT_DRM.exists():
-        return RENDER_SCRIPT_DRM
     return None
 
 
-def _is_drm_available() -> bool:
+def _is_render_available() -> bool:
     """Check if any render backend is available."""
     return _get_render_script() is not None
 
@@ -238,22 +141,23 @@ async def handle_hud_prerender(request: web.Request) -> web.Response:
     if duration <= 0:
         raise web.HTTPBadRequest(text=json.dumps({"error": "Invalid time range"}))
 
-    if not _is_drm_available():
+    if not _is_render_available():
         raise web.HTTPServiceUnavailable(
-            text=json.dumps({"error": "DRM rendering not available (missing raylib or ui.py)"}))
+            text=json.dumps({"error": "HUD rendering not available (missing raylib or ui.py)"}))
 
     # Accept explicit fps, or fall back to quality preset
     quality = body.get("quality")
-    if quality and quality in QUALITY_PRESETS_DRM:
-        preset = QUALITY_PRESETS_DRM[quality]
+    if quality and quality in QUALITY_PRESETS:
+        preset = QUALITY_PRESETS[quality]
     else:
-        preset = QUALITY_PRESETS_DRM["high"]
+        preset = QUALITY_PRESETS["high"]
     render_fps = preset["fps"]
     render_bitrate = preset["bitrate_mbps"]
 
     estimated_mb = round(duration * render_bitrate / 8)
     wall_duration = round(duration / 0.2 + 15)
 
+    # "drm_" is historical; kept so existing cached renders still match
     cache_tag = f"drm_f{render_fps}"
 
     # Check cache — already rendered?
@@ -286,11 +190,6 @@ async def handle_hud_prerender(request: web.Request) -> web.Response:
                 proc.terminate()
             except Exception:
                 pass
-
-    # Ensure replay binary is available (auto-rebuild from scons cache if needed)
-    if not await _ensure_replay_binary():
-        raise web.HTTPServiceUnavailable(
-            text=json.dumps({"error": "Replay binary not available and rebuild failed"}))
 
     # Prepare paths
     HUD_CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -331,7 +230,7 @@ async def handle_hud_prerender(request: web.Request) -> web.Response:
         "--output", output,
         "--status-file", status_file,
     ]
-    logger.info("Launching HUD render (DRM): %s (%.0fs-%.0fs, fps=%d)",
+    logger.info("Launching HUD render: %s (%.0fs-%.0fs, fps=%d)",
                 fullname, start_sec, end_sec, render_fps)
 
     proc = await asyncio.create_subprocess_exec(
