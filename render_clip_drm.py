@@ -38,9 +38,9 @@ from config import OPENPILOT_DIR, PYTHON_BIN, COD_HLS_TMP_DIR, PARAMS_BASE
 if OPENPILOT_DIR not in sys.path:
     sys.path.insert(0, OPENPILOT_DIR)
 
-from common.prefix import OpenpilotPrefix
-from tools.lib.logreader import LogReader
-from tools.clip.run import populate_car_params, wait_for_frames, check_for_failure
+from openpilot.common.prefix import OpenpilotPrefix
+from openpilot.tools.lib.logreader import LogReader
+from openpilot.tools.clip.run import populate_car_params, wait_for_frames, check_for_failure
 
 REPLAY_BIN = str(Path(OPENPILOT_DIR, "tools/replay/replay").resolve())
 UI_SCRIPT = "selfdrive/ui/ui.py"
@@ -64,7 +64,7 @@ def start_selfdrive_publisher(stop_event: threading.Event):
     becomes 5s, triggering the UI's staleness timeout. This keeps the message fresh.
     Not needed for HUD Preview (1x speed) where replay's own messages suffice.
     """
-    import cereal.messaging as messaging
+    import openpilot.cereal.messaging as messaging
     pm = messaging.PubMaster(['selfdriveState'])
     while not stop_event.is_set():
         msg = messaging.new_message('selfdriveState')

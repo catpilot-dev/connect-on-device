@@ -296,7 +296,7 @@ def _load_calibration(seg_dir: Path) -> dict | None:
         import sys
         if _OPENPILOT_DIR not in sys.path:
             sys.path.insert(0, _OPENPILOT_DIR)
-        from tools.lib.logreader import LogReader
+        from openpilot.tools.lib.logreader import LogReader
 
         calib = None
         for msg in LogReader(str(log_file)):

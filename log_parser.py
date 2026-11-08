@@ -14,7 +14,7 @@ logger = logging.getLogger("connect.log_parser")
 
 def _iter_log(log_path: str):
     """Iterate over qlog/rlog messages using cereal directly (avoids LogReader path validation)."""
-    from cereal import log as capnp_log
+    from openpilot.cereal import log as capnp_log
     import zstandard as zstd
 
     if log_path.endswith(".zst"):
@@ -33,7 +33,7 @@ def _iter_log_head(log_path: str, max_bytes: int = 5_000_000):
     carParams (~msg 100), and often first GPS (~msg 500-5000) — while keeping
     memory usage bounded.
     """
-    from cereal import log as capnp_log
+    from openpilot.cereal import log as capnp_log
     import zstandard as zstd
 
     if log_path.endswith(".zst"):
@@ -698,7 +698,7 @@ def _iter_log_full(log_path: str):
     _iter_log_head reads a bounded prefix, which is enough for initData/GPS but
     not for per-frame data spanning a whole segment.
     """
-    from cereal import log as capnp_log
+    from openpilot.cereal import log as capnp_log
     import zstandard as zstd
 
     if log_path.endswith(".zst"):

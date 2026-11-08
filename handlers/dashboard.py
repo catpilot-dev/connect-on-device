@@ -71,7 +71,7 @@ def _sm_poller(latest, stop_event):
     Runs sm.update() (blocking) in its own thread so the asyncio event loop
     is never blocked. The async WebSocket sender reads from `latest` dict.
     """
-    import cereal.messaging as messaging
+    import openpilot.cereal.messaging as messaging
 
     sm = messaging.SubMaster([
         "carState", "carControl", "selfdriveState", "peripheralState",
@@ -119,7 +119,7 @@ async def handle_dashboard_ws(request):
     logger.info("Dashboard WebSocket connected")
 
     try:
-        import cereal.messaging  # noqa: F401 — probe availability
+        import openpilot.cereal.messaging  # noqa: F401 — probe availability
 
         latest = {"msg": None}
         stop_event = threading.Event()

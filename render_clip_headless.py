@@ -205,8 +205,8 @@ def main():
         })
 
         # Import clip function (after path setup)
-        from tools.lib.route import Route
-        from tools.clip.run import clip, setup_env
+        from openpilot.tools.lib.route import Route
+        from openpilot.tools.clip.run import clip, setup_env
 
         canonical_name = f"{args.dongle_id}/{args.local_id}"
         route = Route(canonical_name, data_dir=symlink_dir)
