@@ -39,6 +39,7 @@ rsync -avz \
   --exclude='build' \
   --exclude='.envrc' \
   --exclude='.pytest_cache' \
+  --exclude='.superpowers' \
   --exclude='frontend' \
   --exclude='node_modules' \
   --exclude='tests' \
