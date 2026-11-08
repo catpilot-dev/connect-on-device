@@ -133,6 +133,24 @@ def _patch_plugin_bus_for_replay():
     # Blocking recorder patch is applied in main() where args are in scope
 
 
+def _force_camera_texture_path():
+    """Make the road camera view use texture copies instead of EGL images.
+
+    On comma hardware the camera view imports VisionIPC dmabufs as EGL images,
+    which fails on the headless pbuffer context (EGL_BAD_MATCH): the camera
+    renders black. It binds COMMA_HARDWARE (and picks its shader) at import
+    time, so clear the flag before any UI module is imported. Nothing is
+    imported here: application.py reads RECORD/BIG/OFFSCREEN at import, and
+    plugin hooks must be registered before ui_state loads.
+
+    The flag stays off for this process. The only other UI readers are
+    alert_renderer (drops the "lost selfdriveState" alert, which replay gaps
+    would otherwise trigger) and scroll_panel2 (a velocity buffer length).
+    """
+    import openpilot.common.hardware as hw
+    hw.COMMA_HARDWARE = False
+
+
 def main():
     parser = argparse.ArgumentParser(description="Render openpilot HUD video (headless EGL)")
     parser.add_argument("--route-name", required=True)
@@ -184,10 +202,7 @@ def main():
         sys.path.insert(0, OPENPILOT_DIR)
     os.chdir(OPENPILOT_DIR)
 
-    # Force texture-copy render path instead of EGL images (DMA-BUF).
-    # EGL images fail on pbuffer surfaces; texture-copy works everywhere.
-    import openpilot.system.hardware as _hw
-    _hw.TICI = False
+    _force_camera_texture_path()
 
     max_seg = find_max_segment(args.data_dir, args.local_id)
     if max_seg < 0:
