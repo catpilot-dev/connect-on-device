@@ -25,7 +25,6 @@ connect-on-device/
 ├── screenshot_worker.py    # Offroad extraction of onroad screen-capture taps
 ├── clips.py                # Dashcam clip queue, sidecars, encode worker
 ├── render_clip_headless.py # Headless HUD renderer (clip + screenshot modes)
-├── cod_recorder.py         # ffmpeg frame encoder for HUD clip rendering
 ├── screencast.py           # Live C3 display casting
 ├── tile_manager.py         # Offline OSM tile download/delete
 ├── health.py               # Startup + periodic self-checks
@@ -82,8 +81,11 @@ assumptions anywhere else.
 
 `render_clip_headless.py` wraps catpilot's `openpilot/tools/clip/run.py clip()` with a
 patched raylib (GLFW null platform) so it renders without DRM master while
-the live UI keeps running. COD owns the frame encoder (`cod_recorder.py`) and
-registers its own `ui.post_end_drawing` capture hook; plugin UI overlays are
+the live UI keeps running. openpilot's `gui_app` encodes the video itself
+(`setup_env` sets `RECORD=1`; since v0.11.2 upstream ships that recorder, so
+COD must not run a second encoder on the same file). COD's
+`ui.post_end_drawing` hook only writes the live preview JPEG and progress
+status; plugin UI overlays are
 loaded from an allow-list of hooks so rendered video matches what the driver
 saw. `--screenshot-at <sec>` is the single-frame mode: replay a ~3 s window,
 PNG-export the render texture at the target frame, no ffmpeg, no burned-in

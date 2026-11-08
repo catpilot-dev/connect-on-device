@@ -297,8 +297,8 @@ def main():
                 hooks.register("ui.post_end_drawing", "cod_screenshot", _screenshot_hook, 50)
                 print(f"Screenshot capture enabled (frame {_target_idx})", file=sys.stderr)
             else:
-                # COD owns frame capture — see cod_recorder.
-                import cod_recorder as _rec
+                # openpilot's gui_app encodes the video itself (setup_env set
+                # RECORD=1); this hook only adds the live preview and progress.
                 _status_file = args.status_file
                 _total_duration = duration
                 _fps = 20
@@ -310,21 +310,12 @@ def main():
                     except FileNotFoundError:
                         pass
 
-                def _capture_hook(default):
-                    if not _rec.RECORD:
-                        return
+                def _progress_hook(default):
                     from openpilot.system.ui.lib.application import gui_app
                     import pyray as rl
                     rt = gui_app._render_texture
                     if rt is None:
                         return
-                    if not _rec.is_started():
-                        _rec.start(gui_app.width, gui_app.height, gui_app.target_fps)
-                    image = rl.load_image_from_texture(rt.texture)
-                    data_size = image.width * image.height * 4
-                    data = bytes(rl.ffi.buffer(image.data, data_size))
-                    rl.unload_image(image)
-                    _rec.write_frame(data)
 
                     frame_num = gui_app.frame
                     elapsed = frame_num / _fps
@@ -358,8 +349,8 @@ def main():
                             "phase": "recording",
                         })
 
-                hooks.register("ui.post_end_drawing", "cod_recorder", _capture_hook, 50)
-                print("Blocking capture + preview enabled", file=sys.stderr)
+                hooks.register("ui.post_end_drawing", "cod_progress", _progress_hook, 50)
+                print("Preview + progress enabled", file=sys.stderr)
         except Exception as e:
             print(f"Warning: plugin hooks not available: {e}", file=sys.stderr)
 
