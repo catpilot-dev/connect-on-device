@@ -300,8 +300,8 @@ def _load_calibration(seg_dir: Path) -> dict | None:
 
         calib = None
         for msg in LogReader(str(log_file)):
-            if msg.which() == "liveCalibration":
-                c = msg.liveCalibration
+            if msg.which() == "extrinsicsCalibration":
+                c = msg.extrinsicsCalibration
                 rpy = list(c.rpyCalib)
                 try:
                     height = list(c.height)

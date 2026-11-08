@@ -40,7 +40,7 @@
   // Category groupings
   const CATEGORIES = {
     'Control': ['carState', 'carControl', 'selfdriveState', 'controlsState', 'longitudinalPlan', 'lateralPlan', 'carOutput'],
-    'Model': ['modelV2', 'driverMonitoringState', 'liveCalibration', 'livePose', 'liveParameters', 'liveTorqueParameters'],
+    'Model': ['modelV2', 'driverMonitoringState', 'extrinsicsCalibration', 'deviceMotion', 'vehicleParameters', 'lateralTorqueParameters'],
     'Sensors': ['accelerometer', 'gyroscope', 'magnetometer', 'temperatureSensor', 'lightSensor'],
     'Navigation': ['gpsLocation', 'gpsLocationExternal', 'navInstruction', 'navRoute', 'navModel'],
     'System': ['initData', 'carParams', 'deviceState', 'peripheralState', 'pandaStates', 'managerState', 'sentinel', 'procLog'],

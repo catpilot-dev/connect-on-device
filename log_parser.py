@@ -721,11 +721,11 @@ def extract_frame_times(rlog_path: str) -> list[float] | None:
     The video carries no timestamps of its own, so synthesizing them from an
     assumed frame rate drifts away from reality. The log has the exact chain:
 
-      roadEncodeIdx   encoded-frame index -> frameId  (frame order in the .hevc)
-      roadCameraState frameId -> timestampSof         (capture time, boot-mono)
+      narrowRoadEncodeIdx   encoded-frame index -> frameId  (frame order in the .hevc)
+      narrowRoadCameraState frameId -> timestampSof         (capture time, boot-mono)
       gpsLocationExternal / clocks                    (boot-mono -> wall clock)
 
-    Use rlog, not qlog: qlog decimates roadCameraState to roughly every 20th
+    Use rlog, not qlog: qlog decimates narrowRoadCameraState to roughly every 20th
     frameId, so most frames' capture times are simply absent there.
     """
     sof_by_frame: dict[int, float] = {}
@@ -736,11 +736,11 @@ def extract_frame_times(rlog_path: str) -> list[float] | None:
     try:
         for ev in _iter_log_full(rlog_path):
             w = ev.which()
-            if w == "roadCameraState":
-                cs = ev.roadCameraState
+            if w == "narrowRoadCameraState":
+                cs = ev.narrowRoadCameraState
                 sof_by_frame[cs.frameId] = cs.timestampSof / 1e9
-            elif w == "roadEncodeIdx":
-                encode_order.append(ev.roadEncodeIdx.frameId)
+            elif w == "narrowRoadEncodeIdx":
+                encode_order.append(ev.narrowRoadEncodeIdx.frameId)
             elif w == "gpsLocationExternal" and mono_to_wall is None:
                 gps = ev.gpsLocationExternal
                 gps_ms = getattr(gps, "unixTimestampMillis", 0)
@@ -766,7 +766,7 @@ def extract_frame_times(rlog_path: str) -> list[float] | None:
     ]
 
     # A segment's first encoded frames are captured just before its own rlog
-    # starts (encodeId 0 maps to frameId 2, whose roadCameraState lands in the
+    # starts (encodeId 0 maps to frameId 2, whose narrowRoadCameraState lands in the
     # previous segment), so leading holes are normal. Fill any hole from the
     # neighbouring known frames rather than dropping it.
     known = [i for i, t in enumerate(times) if t is not None]

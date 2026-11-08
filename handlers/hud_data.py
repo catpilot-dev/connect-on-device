@@ -189,7 +189,7 @@ CANVAS_H = 1208.0
 # segment holds ~300 pre-projected frames (1-2 MB), and the server shares RAM
 # with the driving stack, so the cache must stay bounded. Calibration is kept
 # per entry so later segments can start from the nearest earlier segment's
-# calibration instead of dropping frames until liveCalibration reappears.
+# calibration instead of dropping frames until extrinsicsCalibration reappears.
 _HUD_DATA_CACHE = OrderedDict()
 _HUD_CACHE_MAX_SEGMENTS = 32
 
@@ -262,8 +262,8 @@ def _extract_hud_segment(qlog_path: str, seg_num: int, calib_rpy=None, height=No
 
             w = ev.which()
 
-            if w == "liveCalibration":
-                calib = ev.liveCalibration
+            if w == "extrinsicsCalibration":
+                calib = ev.extrinsicsCalibration
                 if len(calib.rpyCalib) == 3:
                     calib_rpy = list(calib.rpyCalib)
                     car_space_transform = _build_car_space_transform(
@@ -330,7 +330,7 @@ def _extract_hud_segment(qlog_path: str, seg_num: int, calib_rpy=None, height=No
                     radar = None
                     if last_radar is not None:
                         lead = last_radar.radarState.leadOne
-                        if lead.status:
+                        if lead.present:
                             radar = {"dRel": float(lead.dRel), "yRel": float(lead.yRel), "vRel": float(lead.vRel)}
 
                     path_max = max_distance
@@ -452,7 +452,7 @@ def _extract_hud_data(store, fullname: str, start_seg: int, end_seg: int) -> lis
 
     # Seed calibration (and brand) from the nearest earlier cached segment of
     # this route, so a cold seek into segment N doesn't drop frames until
-    # liveCalibration/carParams reappear.
+    # extrinsicsCalibration/carParams reappear.
     best_seg = -1
     for (lid, s), (_frames, c, h, b) in _HUD_DATA_CACHE.items():
         if lid == local_id and s < start_seg and c is not None and s > best_seg:

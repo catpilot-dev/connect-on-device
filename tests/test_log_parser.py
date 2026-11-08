@@ -255,3 +255,35 @@ class TestExtractBookmarkEpochs:
     def test_no_bookmarks(self, monkeypatch):
         self._patch(monkeypatch, [_other(100_000_000_000)])
         assert _extract_bookmark_epochs("q.zst", 0) == []
+
+
+# ─── extract_frame_times ───────────────────────────────────────────
+
+class TestExtractFrameTimes:
+    """v0.11.2 renamed the road camera events (same ordinals):
+    roadCameraState -> narrowRoadCameraState, roadEncodeIdx -> narrowRoadEncodeIdx."""
+
+    def _patch(self, monkeypatch, events):
+        monkeypatch.setattr(log_parser, "_iter_log_full", lambda path: iter(events))
+
+    @staticmethod
+    def _cam(frame_id, sof_s):
+        return _FakeEvent("narrowRoadCameraState", 0,
+                          frameId=frame_id, timestampSof=int(sof_s * 1e9))
+
+    @staticmethod
+    def _enc(frame_id):
+        return _FakeEvent("narrowRoadEncodeIdx", 0, frameId=frame_id)
+
+    def test_maps_encoded_frames_to_capture_time(self, monkeypatch):
+        self._patch(monkeypatch, [
+            _gps(100_000_000_000, OFFSET + 100.0),
+            self._cam(2, 100.00), self._enc(2),
+            self._cam(3, 100.05), self._enc(3),
+        ])
+        assert log_parser.extract_frame_times("r.zst") == [
+            round(OFFSET + 100.00, 3), round(OFFSET + 100.05, 3)]
+
+    def test_no_camera_events_returns_none(self, monkeypatch):
+        self._patch(monkeypatch, [_gps(100_000_000_000, OFFSET + 100.0)])
+        assert log_parser.extract_frame_times("r.zst") is None

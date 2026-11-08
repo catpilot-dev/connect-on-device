@@ -22,7 +22,7 @@ async def handle_lateral_delay(request: web.Request) -> web.Response:
         sys.path.insert(0, _OPENPILOT_DIR) if _OPENPILOT_DIR not in sys.path else None
         from openpilot.cereal import log
         with log.Event.from_bytes(raw) as msg:
-            ld = msg.liveDelay
+            ld = msg.lateralDelay
             return web.json_response({
                 "lateralDelay": round(ld.lateralDelay, 4),
                 "lateralDelayEstimate": round(ld.lateralDelayEstimate, 4),
