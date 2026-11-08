@@ -29,7 +29,7 @@ OPENPILOT_DIR = Path(_OPENPILOT_DIR_STR)
 REPLAY_BIN = Path(_REPLAY_BIN_STR)
 
 MANAGER_CMD = [PYTHON_BIN, "./manager.py"]
-MANAGER_CWD = os.path.join(_OPENPILOT_DIR_STR, "system/manager")
+MANAGER_CWD = os.path.join(_OPENPILOT_DIR_STR, "openpilot/system/manager")
 
 
 def _is_manager_running() -> bool:
@@ -111,7 +111,7 @@ async def _rebuild_replay_binary():
     """
     logger.info("Rebuilding replay binary from scons cache...")
     proc = await asyncio.create_subprocess_exec(
-        "scons", "tools/replay/replay", "-j2",
+        "scons", "openpilot/tools/replay/replay", "-j2",
         cwd=str(OPENPILOT_DIR),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
@@ -187,7 +187,7 @@ def _get_render_script() -> Path | None:
         import raylib
     except ImportError:
         return None
-    if not (OPENPILOT_DIR / "selfdrive/ui/ui.py").is_file():
+    if not (OPENPILOT_DIR / "openpilot/selfdrive/ui/ui.py").is_file():
         return None
     if RENDER_SCRIPT_HEADLESS.exists():
         return RENDER_SCRIPT_HEADLESS

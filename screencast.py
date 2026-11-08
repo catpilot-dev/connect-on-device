@@ -59,7 +59,7 @@ def _stop_manager():
 def _start_manager():
     """Restart openpilot manager after screencast."""
     import subprocess
-    MANAGER_CWD = os.path.join(OPENPILOT_DIR, "system/manager")
+    MANAGER_CWD = os.path.join(OPENPILOT_DIR, "openpilot/system/manager")
     subprocess.run(["pkill", "-f", "selfdrive.ui.ui"], capture_output=True)
     time.sleep(0.5)
     env = os.environ.copy()

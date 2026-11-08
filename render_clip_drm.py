@@ -42,8 +42,8 @@ from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.tools.lib.logreader import LogReader
 from openpilot.tools.clip.run import populate_car_params, wait_for_frames, check_for_failure
 
-REPLAY_BIN = str(Path(OPENPILOT_DIR, "tools/replay/replay").resolve())
-UI_SCRIPT = "selfdrive/ui/ui.py"
+REPLAY_BIN = str(Path(OPENPILOT_DIR, "openpilot/tools/replay/replay").resolve())
+UI_SCRIPT = "openpilot/selfdrive/ui/ui.py"
 
 # C3 GPU readback bottleneck: load_image_from_texture() + 9.3MB stdin write per frame
 # limits actual capture to ~2-3fps at 2160x1080. At 0.2x replay speed, each route-second
@@ -146,7 +146,7 @@ def find_log(data_dir: str, local_id: str) -> str | None:
     return None
 
 
-MANAGER_CWD = os.path.join(OPENPILOT_DIR, "system/manager")
+MANAGER_CWD = os.path.join(OPENPILOT_DIR, "openpilot/system/manager")
 
 
 def stop_manager():
@@ -207,7 +207,7 @@ def cleanup_procs(*procs):
         except Exception:
             pass
     # Name-based fallback for orphans
-    for pattern in ["tools/replay/replay"]:
+    for pattern in ["openpilot/tools/replay/replay"]:
         subprocess.run(["pkill", "-KILL", "-f", pattern], capture_output=True)
 
 
@@ -349,7 +349,7 @@ def main():
             ui_cmd = [
                 PYTHON_BIN, "-c",
                 "import os; os.sched_setscheduler = lambda *a, **kw: None; "
-                "exec(open('selfdrive/ui/ui.py').read())",
+                "exec(open('openpilot/selfdrive/ui/ui.py').read())",
             ]
 
             ui_proc = Popen(ui_cmd,

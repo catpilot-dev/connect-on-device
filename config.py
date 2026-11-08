@@ -41,7 +41,7 @@ COD_CLIPS_DIR = os.getenv("COD_CLIPS_DIR", "/data/media/0/cod_clips")
 # Binaries
 PYTHON_BIN = os.getenv("PYTHON_BIN", "/usr/local/venv/bin/python")
 FFMPEG_BIN = os.getenv("FFMPEG_BIN", "/usr/local/bin/ffmpeg")
-REPLAY_BIN = os.path.join(OPENPILOT_DIR, "tools/replay/replay")
+REPLAY_BIN = os.path.join(OPENPILOT_DIR, "openpilot/tools/replay/replay")
 ENCODERD_BIN = os.getenv("ENCODERD_BIN", os.path.join(OPENPILOT_DIR, "openpilot/system/loggerd/encoderd"))
 
 # Staging paths for branch upgrades
