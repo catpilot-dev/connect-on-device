@@ -865,24 +865,24 @@ git commit -m "feat(clips): Clips page, navigation, docs"
 
 Prerequisite: the device runs catpilot `rebase/v0.11.2` (Phase 10a–10c) and COD is deployed with `./deploy_dev.sh`.
 
-- [ ] **Step 1: Confirm the probe**
+- [x] **Step 1: Confirm the probe** — 2026-11-09 on the C3 (catpilot `rebase/v0.11.2` `94b8f674`): usage line, `exit 2`, `supported: true`.
 
 Run on the device: `/data/openpilot/openpilot/system/loggerd/encoderd --clip; echo "exit $?"`
 Expected: `usage: encoderd --clip OUTPUT START DURATION …` on stderr, `exit 2`. `GET /v1/clips` returns `"supported": true`.
 
-- [ ] **Step 2: Measure the encode rate**
+- [x] **Step 2: Measure the encode rate** — 2026-11-09: 120 s road, 8 Mbps, `encode_sec` 14.74 → `ENCODE_RATE_SEC_PER_SEC = 8.1`. Output 2400 frames / 120.0 s H.264 1928×1208, moov before mdat, decodes clean.
 
 Queue a 120 s road clip at 8 Mbps from the Clips dialog; read `encode_sec` from `GET /v1/clips`. Set `ENCODE_RATE_SEC_PER_SEC = round(120 / encode_sec, 1)` in `clips.py`.
 
-- [ ] **Step 3: Kill paths**
+- [ ] **Step 3: Kill paths** — (a) PASSED 2026-11-09: DELETE mid-encode removed `.t9-kill.mp4`, `.mp4.err`, `.mp4.lock` and the sidecar; no `encoderd --clip` left running. (b) ignition flip: needs the car, not yet run.
 
 (a) Queue a 120 s clip, then `DELETE /v1/clips/<name>` while `encoding`: `ls -la /data/media/0/cod_clips/` shows no `.<name>.mp4`, no `.lock`, no sidecar. (b) Queue a clip, turn ignition on mid-encode: sidecar returns to `queued`, no temp/lock; turn ignition off: it encodes and becomes `ready`.
 
-- [ ] **Step 4: Playback and coexistence**
+- [ ] **Step 4: Playback and coexistence** — coexistence PASSED 2026-11-09: with `IsLiveStreaming=1`, `encoderd --stream` and `encoderd --clip` ran together and a 60 s 12 Mbps clip reached `ready` (1200 frames, decodes clean). Phone playback: not yet run (`t9-live2.mp4` left on the C3 for it).
 
 Download a 12 Mbps clip to an iPhone and an Android phone from the Clips page; both play. Set `IsLiveStreaming` (start a connect livestream or `echo -n 1 > /data/params/d/IsLiveStreaming`) and queue a clip: it reaches `ready`.
 
-- [ ] **Step 5: Short final segment**
+- [x] **Step 5: Short final segment** — 2026-11-09: last segment holds 780 frames (39 s); 1300–1380 request → `clamped: true`, `end_sec` 1359.0, clip 1180 frames / 59.0 s. (`GET /v1/route/{r}/clips` still reports the footage range as `[0, 1380]`; only the request is clamped.)
 
 On the drive that just ended, request a window reaching into the last segment: the response has `"clamped": true` and the clip's `end_sec` matches the footage.
 

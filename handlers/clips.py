@@ -26,7 +26,7 @@ def _public(clip: dict) -> dict:
     duration = clip.get("duration_sec") or 0
     if isinstance(duration, bool) or not isinstance(duration, (int, float)) or not math.isfinite(duration):
         duration = 0  # a damaged sidecar must not turn every listing into a 500
-    out["eta_sec"] = duration / clips.ENCODE_RATE_PLACEHOLDER
+    out["eta_sec"] = duration / clips.ENCODE_RATE_SEC_PER_SEC
     return out
 
 

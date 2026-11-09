@@ -440,7 +440,7 @@ def build_requests(route: dict, store, body: dict, clip_store: ClipStore, now: f
 # is complete and in place.
 
 CLIP_WORKER_TICK_SEC = 2
-ENCODE_RATE_PLACEHOLDER = 4.0  # seconds of footage per wall second; measured on device later
+ENCODE_RATE_SEC_PER_SEC = 8.1  # footage seconds per wall second: 120 s road, 8 Mbps, C3 2026-11-09
 PROBE_TIMEOUT_SEC = 10
 STDERR_TAIL_BYTES = 300  # how much of a failed encoder's stderr the sidecar error keeps
 
