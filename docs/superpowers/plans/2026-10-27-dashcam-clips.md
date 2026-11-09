@@ -857,6 +857,8 @@ git commit -m "feat(clips): Clips page, navigation, docs"
 
 ### Task 9: On-device checklist (blocking before the first v0.11.2 release)
 
+> **2026-11-09:** `v0.11.2` was released with Step 3(b) (ignition flip) and Step 4 phone playback still open, by the user's decision. Both stay open here until they run.
+
 **Files:**
 - Modify: `clips.py` (`ENCODE_RATE_PLACEHOLDER` → measured value, renamed `ENCODE_RATE_SEC_PER_SEC`)
 - Modify: `docs/superpowers/specs/2026-10-27-dashcam-clips-design.md` (tick the Done criteria with dates)
